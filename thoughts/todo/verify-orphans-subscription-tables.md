@@ -18,6 +18,15 @@ last wipe. The `subs-list-cache-lifetime` plan narrows that window (a final
 subscription wipe, an actor-wide diff delete, the suspension rows cleared)
 but does not close it. A row left that way is reported by nothing.
 
+The same rows can also end up under a *live* actor: `create(actor_id=X)`
+for a deleted X clears its tombstone (and the client ids it recorded) and
+clears X's suspensions, but not subscription rows, diffs or client index
+rows the old deletion left. `actingweb-deletions resume` then reports X as
+`id in use again` and removes nothing (verification
+`thoughts/verifications/2026-11-13-subs-list-cache-lifetime-2.md`, Issue 2).
+Such a subscription row has no trust behind it under the new actor, which
+is the "actor exists, trust does not" case below.
+
 **What doing it buys:** an operator can find, and remove, subscription,
 diff and suspension rows that belong to no actor, on both backends; today
 they are invisible. A leftover suspension is the one with an effect (an id

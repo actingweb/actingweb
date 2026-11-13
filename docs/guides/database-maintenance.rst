@@ -125,7 +125,13 @@ peers were chosen by the squatter) before resuming one. The resume records
 the deletion on the tombstone, so if it stalls again it reports as
 ``stalled``, not ``legacy, review``. A tombstone whose actor row is gone
 while a finisher holds its lease reports as ``in progress``: that finisher
-marks it finished. On PostgreSQL ``resume --apply``
+marks it finished. An ``unfinished`` one is classified again just before
+``resume`` cleans it up: if its id was created again since the scan,
+``resume`` leaves it alone and prints ``id in use again``; whatever the old
+deletion left under the id (client index rows, a subscription a peer created
+after its last wipe) is not removed, and ``actingweb-verify-orphans`` does not
+find it yet. On
+PostgreSQL ``resume --apply``
 also purges expired tombstone and email-verification index rows; DynamoDB
 expires them with its TTL. Pass ``--no-unique-creator`` when the application
 runs without ``with_unique_creator()``, so a finished actor's creator record
@@ -135,7 +141,8 @@ is handled as the application would. Exit codes: 0 nothing left, 1 work left
 Cost: one read of the tombstone bucket (every tombstone in the retention
 window, and on PostgreSQL expired ones until purged) and, per unfinished
 tombstone, one point read of the tombstone (an expired one is skipped) and
-one actor-row read; ``resume`` adds one full wipe per stalled actor.
+one actor-row read; ``resume`` adds one full wipe per stalled actor, and the
+same two reads again per unfinished one.
 
 Peer State Written Before 3.16
 ------------------------------

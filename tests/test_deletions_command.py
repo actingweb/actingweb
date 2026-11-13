@@ -5,6 +5,7 @@ Plan: thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md, Phase 1.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from typing import Any
 from unittest.mock import patch
@@ -149,6 +150,110 @@ class TestTheUnfinishedPath:
         assert not Subscriptions(actor_id=actor_id, config=config).fetch()
         assert not sub.get_diffs()
         assert get_subscription_suspension(config, actor_id).get_all_suspended() == []
+
+    def test_an_id_created_again_since_the_scan_is_left_alone(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Verification 2026-11-13 of subs-list-cache-lifetime, Issue 1: a
+        create under the id between the scan and the clean-up clears the
+        tombstone; the clean-up must not wipe the live actor."""
+        from actingweb.subscription import Subscription, Subscriptions
+
+        actor_id = _stalled(config)
+        handle = Actor(actor_id=actor_id, config=config).handle
+        assert handle is not None and handle.delete()
+        (finding,) = command.scan(config, actor_id)
+        assert finding.state == command.UNFINISHED
+
+        again = Actor(config=config)
+        assert again.create(
+            url="https://test.example.com/",
+            creator=uuid_email(),
+            passphrase="pw",
+            actor_id=actor_id,
+        )
+        try:
+            sub = Subscription(
+                actor_id=actor_id,
+                peerid="live-peer",
+                subid="live-sub",
+                callback=False,
+                config=config,
+            )
+            assert sub.create(target="properties", granularity="high")
+            with pytest.raises(command.ChangedSinceScan) as raised:
+                command._finish_one(config, finding, notify_peers=False)
+            assert raised.value.state == command.IN_USE_AGAIN
+            assert Subscriptions(actor_id=actor_id, config=config).fetch()
+
+            # Through the command, whose own scan ran before the create:
+            # reported as skipped, not as finished.
+            real_scan = command.scan
+            calls: list[str | None] = []
+
+            def stale_first(cfg: Any, only: str | None = None) -> Any:
+                calls.append(only)
+                return [finding] if len(calls) == 1 else real_scan(cfg, only)
+
+            with patch.object(command, "scan", side_effect=stale_first):
+                code, out = _run(capsys, "resume", actor_id, "--apply")
+            assert code == 0, out
+            assert "id in use again" in out and ": finished" not in out
+            assert Subscriptions(actor_id=actor_id, config=config).fetch()
+        finally:
+            Actor(actor_id=actor_id, config=config).delete(notify_peers=False)
+
+    def test_the_clean_up_uses_the_tombstone_read_now(self, config: Any) -> None:
+        """Verification 2026-11-13 (second run), Issue 1: the client ids
+        come from the re-read tombstone, not from the scan's copy."""
+        actor_id = aid(create_core_actor(config, uuid_email()))
+        deletion.create_leased_tombstone(
+            actor_id,
+            config,
+            reason="deleted",
+            notify_peers=False,
+            hook_kwargs={},
+            client_ids=["fresh-client"],
+            now=_PAST,
+        )
+        handle = Actor(actor_id=actor_id, config=config).handle
+        assert handle is not None and handle.delete()
+        (fresh,) = command.scan(config, actor_id)
+        stale = dataclasses.replace(
+            fresh, data={**fresh.data, "client_ids": ["stale-client"]}
+        )
+        with patch("actingweb.oauth2._delete_actor_clients") as deleted:
+            command._finish_one(config, stale, notify_peers=False)
+        assert deleted.call_args.args[2] == ["fresh-client"]
+
+    def test_a_deletion_stalled_again_since_the_scan_exits_1(
+        self, config: Any, capsys: Any
+    ) -> None:
+        """Verification 2026-11-13 (second run), Issue 6: the branch that
+        counts as work left, and its message names the report to run."""
+        actor_id = _stalled(config)
+        try:
+            (now,) = command.scan(config, actor_id)
+            assert now.state == command.STALLED
+            stale = dataclasses.replace(now, state=command.UNFINISHED)
+            real_scan = command.scan
+            calls: list[str | None] = []
+
+            def stale_first(cfg: Any, only: str | None = None) -> Any:
+                calls.append(only)
+                return [stale] if len(calls) == 1 else real_scan(cfg, only)
+
+            with patch.object(command, "scan", side_effect=stale_first):
+                code, out = _run(capsys, "resume", actor_id, "--apply")
+            assert code == 1, out
+            assert (
+                f"now stalled, skipped (run: actingweb-deletions report {actor_id})"
+                in out
+            )
+            assert Actor(actor_id=actor_id, config=config).id == actor_id
+        finally:
+            deletion.clear_actor_tombstone(actor_id, config)
+            Actor(actor_id=actor_id, config=config).delete(notify_peers=False)
 
 
 class TestClear:

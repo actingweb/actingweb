@@ -1603,7 +1603,8 @@ class Actor:
                 actor_id=self.id, config=self.config
             )
         self.property_list.delete()
-        subs.delete()
+        # The diffs go with the leftovers wipe below, after the trusts.
+        subs.delete(wipe_diffs=False)
         self.subs_list = None
         if relationships:
             for rel in relationships:
@@ -3483,7 +3484,7 @@ class Actor:
                 )
         trusts.delete()
 
-        subs.delete()
+        subs.delete(wipe_diffs=False)  # the diffs go with the wipe below
         self.subs_list = None
         try:
             self._wipe_diffs_and_suspensions()

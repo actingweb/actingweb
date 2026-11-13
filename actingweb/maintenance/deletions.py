@@ -40,7 +40,9 @@ is always off here, so loading an actor to wipe it never renames its creator.
 Cost: one read of the tombstone bucket (every tombstone of the retention
 window; on PostgreSQL also expired ones until purged) and, per unfinished
 tombstone, one point read of the tombstone (which skips an expired one) and
-one actor-row read; ``resume`` adds a full wipe per stalled actor.
+one actor-row read; ``resume`` adds a full wipe per stalled actor, and per
+unfinished one the same two reads again just before its clean-up (an id
+created again since the scan is left alone).
 """
 
 from __future__ import annotations
@@ -62,10 +64,24 @@ STALLED = "stalled"
 IN_PROGRESS = "in progress"
 LEGACY = "legacy, review"
 UNFINISHED = "unfinished"
+# Not a scan state: what resume found when an unfinished deletion's id was
+# created again before its clean-up.
+IN_USE_AGAIN = "in use again"
 
 
 class StoreUnavailable(Exception):
     """The tombstone store or the actor table could not be read."""
+
+
+class ChangedSinceScan(Exception):
+    """An unfinished deletion was no longer unfinished when ``resume`` came
+    to it (its id created again, another finisher at work): left alone.
+    ``state`` is what it is now, ``None`` when nothing is left to finish."""
+
+    def __init__(self, actor_id: str, state: str | None) -> None:
+        super().__init__(actor_id, state)
+        self.actor_id = actor_id
+        self.state = state
 
 
 @dataclass
@@ -188,6 +204,25 @@ def _finish_one(config: Any, finding: Finding, notify_peers: bool) -> None:
         # tombstone recorded, and what a peer's subscription created after
         # the last wipe left (rows, diffs) or a faulted wipe left
         # (suspensions). Remove them by actor id and record the end.
+        #
+        # Classified afresh first: a create under this id since the scan
+        # clears the tombstone and brings the row back, and wiping by actor
+        # id would then remove a live actor's subscriptions and clients.
+        # The clean-up then works from what it read now (the client ids of
+        # the tombstone that stands now, not of one a create and a second
+        # delete replaced since the scan).
+        try:
+            now = scan(config, finding.actor_id)
+            if not now:
+                from actingweb.db import get_actor
+
+                live = get_actor(config).get(actor_id=finding.actor_id)
+                raise ChangedSinceScan(finding.actor_id, IN_USE_AGAIN if live else None)
+        except StoreUnavailable as e:
+            raise DbError("deletion re-read", finding.actor_id) from e
+        if now[0].state != UNFINISHED:
+            raise ChangedSinceScan(finding.actor_id, now[0].state)
+        finding = now[0]
         from actingweb.oauth2 import _delete_actor_clients
         from actingweb.subscription import (
             delete_actor_diffs_and_suspensions,
@@ -272,6 +307,24 @@ def cmd_resume(args: argparse.Namespace) -> int:
         except DeletionInProgress as e:
             print(f"{f.actor_id}: in progress, skipped (retry in {e.retry_after} s)")
             failed += 1
+            continue
+        except ChangedSinceScan as e:
+            if e.state is None:
+                print(f"{f.actor_id}: nothing left to finish, skipped")
+            elif e.state == IN_USE_AGAIN:
+                # Nothing for this command to do: the tombstone (and the
+                # client ids it recorded) went with the create.
+                print(
+                    f"{f.actor_id}: id in use again, skipped; what the old "
+                    "deletion left (client index rows, subscriptions a peer "
+                    "created after its last wipe) was not removed"
+                )
+            else:
+                print(
+                    f"{f.actor_id}: now {e.state}, skipped "
+                    f"(run: {PROG} report {f.actor_id})"
+                )
+                failed += 1
             continue
         except DbError as e:  # folds DbError: reported per actor, exit 1
             print(f"{f.actor_id}: failed: {e}")

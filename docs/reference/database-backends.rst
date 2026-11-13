@@ -446,6 +446,8 @@ Notes:
   creating one under an explicit id treat a missing table as holding no
   suspensions. Create it (leave auto-creation on, or create it with the
   others).
+- ``<prefix>_subscriptiondiffs`` is read and written by every actor
+  deletion and purge since 3.16; a missing table holds no diffs.
 - ``<prefix>_property_lookup`` (v1, no ``_v2``) and the ``property-index``
   GSI on ``<prefix>_properties`` are no longer read (the legacy reverse
   lookup was removed in 3.16). Neither is created or required; drop them once

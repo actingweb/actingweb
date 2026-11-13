@@ -1,6 +1,7 @@
 import datetime
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from actingweb.db import (
     get_subscription,
@@ -13,6 +14,8 @@ from actingweb.db import (
 from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 class Subscription:
@@ -278,17 +281,24 @@ class Subscriptions:
                 return []
         return self.subscriptions
 
-    def delete(self):
+    def delete(self, *, wipe_diffs: bool = True):
+        """Delete every subscription row of the actor and, unless
+        ``wipe_diffs`` is False (a caller that wipes them by actor id itself
+        afterwards: ``Actor.delete()``, ``purge_relationships()``), every
+        diff of the actor. A fault raises ``DbError``."""
         if not self.list:
             logger.debug("Already deleted list in subscriptions")
             return False
         if self.subscriptions is None:
             self.fetch()  # strict: a fault raises before anything is removed
-        if self.subscriptions and self.config:
+        config = self.config
+        if wipe_diffs and self.subscriptions and config:
             # Every caller wipes the whole actor (deletion, purge, adoption):
-            # its diffs go by actor id, unread (3.16; before, one diff read
-            # per subscription).
-            get_subscription_diff_list(self.config).delete_all_of_actor(self.actor_id)
+            # its diffs go by actor id (3.16; before, one diff read per
+            # subscription).
+            _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(
+                self.actor_id
+            )
         self.list.delete()
         self.list = None
         self.subscriptions = None
@@ -317,11 +327,24 @@ class Subscriptions:
             pass
 
 
+def _store(build: Callable[[], _T]) -> _T:
+    """A store built by ``build``; any error building it (the DynamoDB table
+    check runs in the constructor) is a ``DbError``, so a resumable delete,
+    a create's rollback and ``actingweb-deletions`` see the fault they
+    handle (3.16)."""
+    try:
+        return build()
+    except DbError:
+        raise
+    except Exception as e:  # the store's table check
+        raise DbError("subscription store") from e
+
+
 def delete_actor_subscription_rows(actor_id: str, config: Any) -> None:
     """Every subscription row of ``actor_id``, by actor id (3.16): the rows
     only, their diffs go with :func:`delete_actor_diffs_and_suspensions`. A
     fault raises ``DbError``."""
-    rows = get_subscription_list(config)
+    rows = _store(lambda: get_subscription_list(config))
     if rows.fetch(actor_id=actor_id):
         rows.delete()
 
@@ -342,7 +365,8 @@ def clear_actor_suspensions(actor_id: str, config: Any) -> None:
 
 
 def delete_actor_diffs_and_suspensions(actor_id: str, config: Any) -> None:
-    """Every subscription diff of ``actor_id`` (by actor id, without reading
-    the diffs) and every suspension (3.16). A fault raises ``DbError``."""
-    get_subscription_diff_list(config).delete_all_of_actor(actor_id)
+    """Every subscription diff of ``actor_id`` (by actor id, one diff at a
+    time is never fetched) and every suspension (3.16). A missing diff or
+    suspension table holds none. A fault raises ``DbError``."""
+    _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(actor_id)
     clear_actor_suspensions(actor_id, config)

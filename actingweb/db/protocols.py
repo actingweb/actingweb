@@ -1264,7 +1264,8 @@ class DbSubscriptionDiffListProtocol(Protocol):
         reading the diffs first (actor deletion and purge, 3.16).
 
         Returns:
-            True when none is left. A fault raises ``DbError``.
+            True when none is left; a missing table holds none (True). Any
+            other fault raises ``DbError``.
         """
         ...
 
@@ -1644,7 +1645,8 @@ class SubscriptionSuspensionProtocol(Protocol):
 
         Raises:
             DbError: on a read fault (3.16). Do not answer False for
-                "could not tell".
+                "could not tell", a missing table included: a suspend() that
+                failed against it would otherwise go unnoticed.
         """
         ...
 

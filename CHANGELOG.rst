@@ -952,14 +952,22 @@ CHANGED
 
 - **Deleting an actor, purging its relationships and creating one under an
   explicit id touch the subscription stores.** **Behavior change:**
-  ``Actor.delete()`` also removes every subscription diff of the actor (one
-  delete by actor id, unread; the per-subscription diff reads are gone), a
+  ``Actor.delete()`` also removes every subscription diff of the actor (by
+  actor id: one statement on PostgreSQL, a key-only query (paged) and a
+  delete per diff on DynamoDB; the per-subscription diff reads are gone), a
   subscription a peer created during the wipe, and the actor's subscription
-  suspensions (one delete), and raises ``DbError`` when the suspensions
-  cannot be confirmed removed (the row stays and a repeated call finishes,
-  as with any fault in the resumable delete); a missing suspensions table
-  counts as holding none, on both backends. ``actingweb-deletions resume``
-  removes the same for a deletion whose row is already gone. ``purge_relationships()`` removes the same diffs and suspensions
+  suspensions (one delete), and raises ``DbError`` when the diffs or the
+  suspensions cannot be confirmed removed (the row stays and a repeated call
+  finishes, as with any fault in the resumable delete). For these clean-ups
+  a missing diffs or suspensions table counts as holding none (on DynamoDB
+  when the store can be built: table auto-creation off, or the table
+  creatable; an error building it is a ``DbError``); a suspension check
+  against a missing suspensions table still raises ``DbError`` (on DynamoDB
+  when auto-creation is off; with it on, the store creates the table).
+  ``actingweb-deletions resume`` removes the same for a deletion whose row
+  is already gone, after reading its tombstone and row again: an id created
+  again since the scan is left alone and reported as ``id in use again``
+  (what the old deletion left under it is not removed). ``purge_relationships()`` removes the same diffs and suspensions
   and answers ``confirmed: False`` when it cannot. ``Actor.create(actor_id=
   ...)`` clears that id's suspensions once the row is written and raises
   ``DbError`` (the new row removed) when it cannot. **Check:** code that

@@ -1141,3 +1141,206 @@ class TestPhase2ReviewFixes:
         ):
             bare.a.delete_subscription(peerid="p", subid=subid)
         assert bare.a.subs_list is None
+
+
+def _resource_not_found(code: str = "ResourceNotFoundException") -> Exception:
+    """The error a PynamoDB query raises against a missing table (``code``
+    set otherwise: another error whose text still says "ResourceNotFound")."""
+    from botocore.exceptions import ClientError
+    from pynamodb.exceptions import QueryError
+
+    return QueryError(
+        "Failed to query items: ResourceNotFound",
+        cause=ClientError(
+            {"Error": {"Code": code, "Message": "Requested resource not found"}},
+            "Query",
+        ),
+    )
+
+
+def _missing_table_patch(config: Config, model: Any, table: str) -> Any:
+    """A patch that makes ``table`` answer "does not exist" the way the
+    backend does: the PynamoDB query raises ``QueryError`` with the response
+    code (DynamoDB); a statement naming the table raises ``UndefinedTable``
+    (PostgreSQL), every other statement runs."""
+    if backend_of(config) == "dynamodb":
+        return mock.patch.object(model, "query", side_effect=_resource_not_found())
+    import psycopg
+
+    original = psycopg.Cursor.execute
+
+    def execute(self: Any, query: Any, *args: Any, **kwargs: Any) -> Any:
+        if table in str(query):
+            raise psycopg.errors.UndefinedTable(f'relation "{table}" does not exist')
+        return original(self, query, *args, **kwargs)
+
+    return mock.patch.object(psycopg.Cursor, "execute", execute)
+
+
+def _diff_model(config: Config) -> Any:
+    if backend_of(config) == "dynamodb":
+        from actingweb.db.dynamodb.subscription_diff import SubscriptionDiff
+
+        return SubscriptionDiff
+    return None
+
+
+def _suspension_model(config: Config) -> Any:
+    if backend_of(config) == "dynamodb":
+        from actingweb.db.dynamodb.subscription_suspension import (
+            SubscriptionSuspension,
+        )
+
+        return SubscriptionSuspension
+    return None
+
+
+class TestReverificationFixes:
+    """Verification 2026-11-13 of this plan (Issues 2, 3, 5, 6, 7)."""
+
+    def test_a_raw_error_building_the_row_store_is_a_dberror(self, bare: World) -> None:
+        """Issue 2: the table check in a store's constructor raises raw."""
+        with (
+            mock.patch.object(
+                subscription_module,
+                "get_subscription_list",
+                side_effect=RuntimeError("table"),
+            ),
+            pytest.raises(DbError) as raised,
+        ):
+            subscription_module.delete_actor_subscription_rows(bare.id, bare.config)
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    def test_a_raw_error_building_the_diff_store_is_a_dberror(
+        self, bare: World
+    ) -> None:
+        """Issue 2."""
+        with (
+            mock.patch.object(
+                subscription_module,
+                "get_subscription_diff_list",
+                side_effect=RuntimeError("table"),
+            ),
+            pytest.raises(DbError) as raised,
+        ):
+            subscription_module.delete_actor_diffs_and_suspensions(bare.id, bare.config)
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    def test_a_raw_error_building_the_diff_store_stops_a_delete(
+        self, bare: World
+    ) -> None:
+        """Issue 2: a resumable delete stops with ``DbError``, the row kept."""
+        with (
+            mock.patch.object(
+                subscription_module,
+                "get_subscription_diff_list",
+                side_effect=RuntimeError("table"),
+            ),
+            pytest.raises(DbError),
+        ):
+            bare.a.delete(notify_peers=False)
+        assert bare.fresh().id == bare.id
+
+    def test_a_missing_diff_table_holds_none(self, bare: World) -> None:
+        """Issue 3."""
+        model = _diff_model(bare.config)
+        with _missing_table_patch(bare.config, model, "subscription_diffs"):
+            assert subscription_module.get_subscription_diff_list(
+                bare.config
+            ).delete_all_of_actor(bare.id)
+            assert bare.a.delete(notify_peers=False)
+        assert bare.fresh().id is None
+
+    def test_a_missing_suspension_table_still_fails_the_check(
+        self, bare: World
+    ) -> None:
+        """Issue 5, kept as it is: clean-up treats a missing suspensions
+        table as empty, a suspension check does not (3.16: a suspend() that
+        failed against it must not go unnoticed). Both backends."""
+        model = _suspension_model(bare.config)
+        store = get_subscription_suspension(bare.config, bare.id)
+        with _missing_table_patch(bare.config, model, "subscription_suspensions"):
+            assert store.delete_all()
+            with pytest.raises(DbError):
+                store.is_suspended("properties", "x")
+
+    def test_a_delete_wipes_the_diffs_once(self, bare: World) -> None:
+        """Issue 6: one diff wipe per delete, after the trusts."""
+        bare.trust("p")
+        bare.subscribe("p")
+        order: list[str] = []
+        real = type(subscription_module.get_subscription_diff_list(bare.config))
+        real_trusts_delete = trust_module.Trusts.delete
+
+        def trusts_delete(self: Any) -> Any:
+            order.append("trusts")
+            return real_trusts_delete(self)
+
+        def wipe(_self: Any, _actor_id: str) -> bool:
+            order.append("diffs")
+            return True
+
+        with (
+            mock.patch.object(trust_module.Trusts, "delete", trusts_delete),
+            mock.patch.object(real, "delete_all_of_actor", wipe),
+        ):
+            assert bare.a.delete(notify_peers=False)
+        assert order == ["trusts", "diffs"]
+
+    def test_a_dynamodb_error_that_only_reads_like_a_missing_table_fails(
+        self, bare: World
+    ) -> None:
+        """Verification 2026-11-13 (second run), Issue 7: the clean-up's
+        "holds none" goes by the response code, not the message text."""
+        if backend_of(bare.config) != "dynamodb":
+            pytest.skip("DynamoDB error codes")
+        from actingweb.db.dynamodb.subscription_diff import SubscriptionDiff
+
+        with (
+            mock.patch.object(
+                SubscriptionDiff,
+                "query",
+                side_effect=_resource_not_found("ThrottlingException"),
+            ),
+            pytest.raises(DbError),
+        ):
+            subscription_module.get_subscription_diff_list(
+                bare.config
+            ).delete_all_of_actor(bare.id)
+
+    def test_the_dynamodb_wipe_reads_keys_only(self, bare: World) -> None:
+        """Issue 6: the query projects the keys."""
+        if backend_of(bare.config) != "dynamodb":
+            pytest.skip("PostgreSQL deletes in one statement")
+        from actingweb.db.dynamodb.subscription_diff import SubscriptionDiff
+
+        with mock.patch.object(
+            SubscriptionDiff, "query", wraps=SubscriptionDiff.query
+        ) as query:
+            subscription_module.get_subscription_diff_list(
+                bare.config
+            ).delete_all_of_actor(bare.id)
+        assert query.call_args.kwargs["attributes_to_get"] == ["id", "subid_seqnr"]
+
+    def test_another_actors_diffs_stay(self, bare: World) -> None:
+        """Issue 7: the wipe is by actor id, and only that actor's."""
+        other = World(peers=0)
+        try:
+            subs: dict[str, str] = {}
+            for w in (bare, other):
+                w.trust("p")
+                subs[w.id] = w.subscribe("p")
+                assert Subscription(
+                    actor_id=w.id,
+                    peerid="p",
+                    subid=subs[w.id],
+                    callback=False,
+                    config=w.config,
+                ).add_diff(blob="{}")
+            subscription_module.get_subscription_diff_list(
+                bare.config
+            ).delete_all_of_actor(bare.id)
+            assert bare.diffs("p", subs[bare.id]) == []
+            assert len(other.diffs("p", subs[other.id])) == 1
+        finally:
+            other.cleanup()

@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-12-subs-list-cache-lifetime.md
+verified: thoughts/verifications/2026-11-13-subs-list-cache-lifetime-3.md
 ---
 
 # Implementation Plan: per-request actors on the MCP path, and a subscription list that caches empty
@@ -1437,6 +1437,10 @@ Phase 3's.
 - Phase 2 review: a missing DynamoDB suspensions table counts as holding
   none; `create_subscription` and `delete_subscription` reset in a
   `finally`.
+- Verifications 2026-11-12 and 2026-11-13: Iterations 1-13 (store faults
+  as `DbError`, clear order, wipes by actor id, `actingweb-deletions`
+  re-reads before its clean-up, missing diff and suspension tables empty
+  for clean-up only, `Subscriptions.delete(wipe_diffs=...)`).
 
 ### Learnings
 - The memo rule bit this plan's own test: a view built on an instance that
@@ -1447,6 +1451,12 @@ Phase 3's.
   it read the docs' promises against the new failure.
 - A wire step that adds a peer leaves the peer's trust secret unnamed in
   the transcript; peers are set up outside the recorded steps.
+- An operator command that acts on a scan must classify each item again
+  just before it changes anything: the clean-up added for a stale state
+  is what turned the stale scan into data loss.
+- "A missing table holds none" is right for clean-up and wrong for a read
+  that gates side effects; check the changelog's older entries before
+  relaxing a read (Iteration 11).
 
 
 ## Iterations
@@ -1582,3 +1592,217 @@ and `test_wm4_subscriber_during_suspension` annotated.
 
 **Rationale**: `CLAUDE.md`, Checks: type hints on all functions. No
 recording changes.
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-subs-list-cache-lifetime.md
+
+Owner: fix all seven issues (none peer-reachable).
+
+#### 8. `actingweb-deletions resume` classifies an unfinished deletion again before wiping it (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: the UNFINISHED branch of `_finish_one` runs `scan()` for
+that one id first. If the id was created again since the run's scan (the
+create cleared the tombstone), or the deletion is no longer unfinished, it
+raises `ChangedSinceScan` and wipes nothing. `cmd_resume` prints `nothing
+left to finish, skipped` (not a failure) or `now <state>, skipped (run
+report again)` (exit 1). A store fault in the re-read is a `DbError`.
+
+**Files affected**:
+- `actingweb/maintenance/deletions.py`: `ChangedSinceScan`, the re-read,
+  the loop's handling, the cost note.
+- `docs/guides/database-maintenance.rst`: the re-read and its cost.
+- `tests/test_deletions_command.py`:
+  `test_an_id_created_again_since_the_scan_is_left_alone`.
+
+**Rationale**: the wipes added in Iteration 3 ran on the scan's stale
+"row gone". A create between the scan and the clean-up would lose the live
+actor's subscriptions, diffs, suspensions and client rows (the client-row
+delete had this shape before 3.16), and the actor would be listed for
+`actor_deleted_complete`. A create that lands between the re-read and the
+wipe is still possible; the window is now one actor's clean-up, not the
+whole run.
+
+#### 9. The subscription and diff stores are built inside the `DbError` wrapper (Issue 2)
+
+**Category**: Verification fix (bug)
+
+**What changed**: `subscription._store()` builds a store and turns any
+non-`DbError` exception (the DynamoDB table check in the constructor) into
+`DbError("subscription store")`. `delete_actor_subscription_rows`,
+`delete_actor_diffs_and_suspensions` and `Subscriptions.delete()` build
+through it.
+
+**Files affected**: `actingweb/subscription.py`;
+`tests/test_subscription_list_memo.py` (`TestReverificationFixes`:
+`test_a_raw_error_building_a_store_is_a_dberror`,
+`test_a_raw_error_building_the_diff_store_stops_a_delete`).
+
+**Rationale**: Iteration 1's fault class, on the two stores it did not
+wrap. A raw error would stop `actingweb-deletions resume` mid-run (it
+catches `DbError`) and lose its list of finished ids, and would get past
+purge's `except DbError`.
+
+#### 10. A missing diffs table holds none (Issue 3)
+
+**Category**: Verification fix
+
+**What changed**: `delete_all_of_actor` answers True on a missing table
+(DynamoDB `is_resource_not_found`, PostgreSQL `UndefinedTable`), as the
+suspension clean-up does.
+
+**Files affected**: `actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/db/postgresql/subscription_diff.py`, `actingweb/db/protocols.py`,
+`docs/reference/database-backends.rst` (a note on the diffs table);
+`test_a_missing_diff_table_holds_none`.
+
+**Rationale**: since this plan every delete and purge reaches the diffs
+table, where master reached it only for an actor with subscriptions.
+
+#### 11. The changelog's missing-table sentence says what each backend does (Issues 4 and 5)
+
+**Category**: Verification fix (wording); one option declined
+
+**What changed**: the changelog now says the clean-ups treat a missing
+diffs or suspensions table as empty, on DynamoDB when the store can be
+built (an error building it is a `DbError`), and that a suspension check
+against a missing suspensions table still raises `DbError`. A test pins
+both answers on both backends
+(`test_a_missing_suspension_table_still_fails_the_check`); the protocol
+docstring of `is_suspended` names the missing table.
+
+**Files affected**: `CHANGELOG.rst`, `actingweb/db/protocols.py`,
+`tests/test_subscription_list_memo.py`.
+
+**Rationale**: the owner chose "PostgreSQL `is_suspended` answers False on
+a missing table". Implementing it showed that 3.16 made that case loud on
+purpose (`CHANGELOG.rst`, "`SubscriptionManager.is_suspended()` raises
+`DbError` on a fault", and the older entry "A failed
+subscription-suspension check was indistinguishable from 'not
+suspended'", which names the missing table: a bulk import's `suspend()`
+silently did nothing and every callback fired). Answering False would undo
+that on the per-write path, so the read keeps raising and the wording
+carries the difference (the finding's other remedy). Reported to the owner.
+
+#### 12. The DynamoDB diff wipe reads keys only, and runs once per delete (Issue 6)
+
+**Category**: Verification fix (cost)
+
+**What changed**: the query projects `id` and `subid_seqnr`.
+`Subscriptions.delete()` takes a keyword-only `wipe_diffs=True`;
+`Actor.delete()` and `purge_relationships()` pass False, since their
+leftovers wipe deletes the diffs by actor id right after. The changelog no
+longer says "unread"; it says what each backend does.
+
+**Files affected**: `actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/subscription.py`, `actingweb/actor.py`, `CHANGELOG.rst`;
+`test_a_delete_wipes_the_diffs_once`,
+`test_the_dynamodb_wipe_reads_keys_only`.
+
+**Rationale**: the bodies were still read as query capacity, and a delete
+of an actor with subscriptions queried the diffs twice.
+
+#### 13. The diff wipe leaves another actor's diffs (Issue 7)
+
+**Category**: Verification fix (test coverage)
+
+**What changed**: `test_another_actors_diffs_stay`, real storage, both
+backends.
+
+**Files affected**: `tests/test_subscription_list_memo.py`.
+
+**Rationale**: the wipe deletes by actor id with no subscription filter; a
+wrong key or WHERE clause would remove neighbours.
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-subs-list-cache-lifetime-2.md
+
+Owner: fix Issues 1, 2, 3, 5, 6 and 7; Issue 4 accepted (below).
+
+#### 14. The unfinished clean-up works from the tombstone it re-read (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: after the re-scan, `_finish_one` replaces the scan's
+finding with the one it just read, so the client ids it deletes are the
+standing tombstone's.
+
+**Files affected**: `actingweb/maintenance/deletions.py`;
+`tests/test_deletions_command.py` (`test_the_clean_up_uses_the_tombstone_read_now`).
+
+**Rationale**: an id created and deleted again between the scans left the
+new tombstone's client index rows behind and marked it finished.
+
+#### 15. "id in use again" instead of "nothing left to finish" (Issue 2)
+
+**Category**: Verification fix (wording, operator output)
+
+**What changed**: when the re-scan finds no unfinished tombstone, resume
+reads the actor row; a live row is reported as `id in use again, skipped;
+what the old deletion left … was not removed` (exit 0: nothing for this
+command to do). The changelog and the maintenance guide say so; the
+verify-orphans todo records the create-side case.
+
+**Files affected**: `actingweb/maintenance/deletions.py` (`IN_USE_AGAIN`),
+`CHANGELOG.rst`, `docs/guides/database-maintenance.rst`,
+`thoughts/todo/verify-orphans-subscription-tables.md`;
+`test_an_id_created_again_since_the_scan_is_left_alone` asserts the message.
+
+**Rationale**: "nothing left" was not true: a create clears the tombstone
+and its client ids, not what the old deletion left under the id.
+
+#### 16. The "now <state>" message names the report to run (Issue 3)
+
+**Category**: Verification fix (wording)
+
+**What changed**: `now <state>, skipped (run: actingweb-deletions report <id>)`.
+
+**Files affected**: `actingweb/maintenance/deletions.py`;
+`test_a_deletion_stalled_again_since_the_scan_exits_1`.
+
+**Rationale**: a plain `report` skips a finished tombstone whose row is
+live; the named form classifies it.
+
+#### 17. Two changelog phrases made exact (Issue 5)
+
+**Category**: Verification fix (wording)
+
+**What changed**: "a key-only query (paged)"; a suspension check against a
+missing table raises "on DynamoDB when auto-creation is off".
+
+**Files affected**: `CHANGELOG.rst`.
+
+#### 18. Tests say and check one thing each (Issue 6)
+
+**Category**: Verification fix (tests)
+
+**What changed**: the raw-store-error test split in two, each asserting the
+`RuntimeError` cause; the once-per-delete test records the order (trusts,
+then diffs); the missing-table patch raises what the backend raises
+(`QueryError` with `ResourceNotFoundException` on DynamoDB; `UndefinedTable`
+from the statement on PostgreSQL, other statements run); a test for
+resume's exit-1 branch.
+
+**Files affected**: `tests/test_subscription_list_memo.py`,
+`tests/test_deletions_command.py`.
+
+#### 19. The clean-ups' "missing table" goes by the response code (Issue 7)
+
+**Category**: Verification fix
+
+**What changed**: `property_lookup.is_table_missing()` matches the
+`ResourceNotFoundException` code or the `TableDoesNotExist` type, no text;
+the diff and suspension clean-ups use it. `is_resource_not_found` (text
+fallback) stays for its existing callers.
+
+**Files affected**: `actingweb/db/dynamodb/property_lookup.py`,
+`actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/db/dynamodb/subscription_suspension.py`;
+`test_a_dynamodb_error_that_only_reads_like_a_missing_table_fails`.
+
+**Rationale**: on these paths "missing" turns a fault into success.
+
+#### Accepted: Issue 4 (diffs outlive a delete or purge that fails after the rows)
+
+Owner: accepted without code. `delete()` is resumable and its next call
+runs the diff wipe; `purge_relationships()` raises the `DbError` before its
+`try`, and a repeated purge wipes them.

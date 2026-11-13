@@ -156,9 +156,9 @@ class DbSubscriptionSuspension:
                 item.delete()
             return True
         except Exception as e:
-            from .property_lookup import is_resource_not_found
+            from .property_lookup import is_table_missing
 
-            if is_resource_not_found(e):
+            if is_table_missing(e):
                 return True
             logger.error(f"Error deleting suspensions for {self._actor_id}: {e}")
             return False

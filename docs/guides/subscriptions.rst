@@ -440,18 +440,19 @@ to the replica:
      - Inserts at ``index``
    * - ``update``
      - ``item``, and ``index``, ``old_item`` or both
-     - With ``old_item``, replaces the one row holding that value. When no
-       row holds it, the diff is a no-op if ``item`` is already there
-       (applied before) or there is no ``index``; otherwise, and when
-       several rows hold it, it falls back to ``index`` (several matches
-       without ``index`` are dropped). Without ``old_item``, replaces the
-       row at ``index``
+     - With ``old_item``: replaces the one row holding that value, or, when
+       several do, the one at ``index``. No row holding it with ``item``
+       already there is a no-op (applied before); any other miss (no row,
+       or several none of which is at ``index``) is out of step. Without
+       ``old_item``, replaces the row at ``index``
    * - ``delete``
      - ``index``, and ``old_item`` when the item was read
      - With ``old_item``: removes the one row holding that value, or, when
-       several do, the one at ``index`` (none at ``index`` is out of step);
-       no row holding it is a no-op (applied before). Without ``old_item``:
-       removes the row at ``index``. REST, bulk and web-UI deletes send this
+       several do, the one at ``index``. ``length`` (the publisher's list
+       after the delete) tells a second delivery from drift: the replica
+       one longer applies it; equal with the item gone is a no-op (applied
+       before); anything else is out of step. Without ``old_item``: removes
+       the row at ``index``. REST, bulk and web-UI deletes send this
    * - ``pop``
      - ``index`` (default ``-1``, negative counts from the end)
      - Removes the row at ``index``

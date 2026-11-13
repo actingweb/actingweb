@@ -2370,6 +2370,7 @@ class SubscriptionManager:
         """
         from ..callback_processor import CallbackProcessor
         from ..remote_storage import RemotePeerStore
+        from ..replica_revocation import stores_another_target
         from ..subscription import Subscription
         from ..subscription_config import SubscriptionProcessingConfig
         from .actor_interface import ActorInterface
@@ -2428,6 +2429,9 @@ class SubscriptionManager:
                 return None
             return sequence
 
+        # The lists owed before the baseline is read: one marked while it is
+        # read leaves the rebuild owed.
+        owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
         settled = True
         baseline: Any = None
         sequence: int | None = None
@@ -2464,7 +2468,6 @@ class SubscriptionManager:
         # A resource-level baseline may be any value (merged at its path).
         baseline_data: dict[str, Any] = cast(dict[str, Any], baseline)
 
-        owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
         if config.auto_storage:
             store = RemotePeerStore(
                 actor=actor_interface, peer_id=peer_id, validate_peer_id=False
@@ -2486,12 +2489,16 @@ class SubscriptionManager:
                 sub.target == "properties"
                 and not sub.subtarget
                 and isinstance(baseline, dict)
+                and not stores_another_target(
+                    self._core_actor.config, self._core_actor.id or "", peer_id
+                )
             ):
                 # A whole-target baseline carries every name the peer may
                 # read: a replica name it lacks was deleted at the publisher
                 # (perhaps in the batch this rebuild dropped). Properties
-                # only: the replica bucket is shared by every auto-stored
-                # subscription to the peer, whatever its target.
+                # only, and only when no subscription to another target of
+                # the peer stores into the same bucket (its names are not in
+                # this baseline).
                 stale |= {
                     name
                     for name in [*store.list_all_lists(), *store.list_scalar_names()]
@@ -2518,9 +2525,23 @@ class SubscriptionManager:
                 # Never backwards: a callback processed while this ran may
                 # have recorded a later sequence.
                 sub_obj.handle.modify(seqnr=sequence)
+            elif recorded > sequence:
+                # A callback was processed while this ran: its change may
+                # have been overwritten by this older baseline. Owed again.
+                logger.warning(
+                    f"Rebuild of {peer_id}:{subscription_id}: a callback "
+                    f"(sequence {recorded}) was processed during it; the "
+                    "rebuild stays owed"
+                )
+                settled = False
         processor._prune_pending(peer_id, subscription_id, sequence)  # noqa: SLF001
         if sequence > 0:
             proxy.change_resource(path=path, params={"sequence": sequence})
+        if settled and set(
+            processor.rebuild_state(peer_id, subscription_id)["lists"]
+        ) - set(owed):
+            # A list was marked out of step after the baseline was read.
+            settled = False
         if not processor.settle_rebuild(peer_id, subscription_id, rebuilt=settled):
             logger.error(
                 f"Rebuild of {peer_id}:{subscription_id}: settling its state lost "

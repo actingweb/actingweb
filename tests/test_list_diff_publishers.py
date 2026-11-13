@@ -614,3 +614,51 @@ class TestVerificationFindings:
             ):
                 handler.post(myself.id, "")
         assert not myself.property_lists.exists("refused")
+
+
+class TestVerification2:
+    """Verification re-run 2 (findings 12 and 13)."""
+
+    def test_a_large_batch_that_changed_nothing_sends_no_resync(
+        self, myself, config
+    ) -> None:
+        from actingweb.property_list import ListProperty
+
+        count = BULK_LIST_DIFF_LIMIT + 1
+        myself.property_lists.notes.extend([{"n": i} for i in range(count)])
+        items = [{"index": i, "n": "u"} for i in range(count)]
+        with (
+            _Diffs(myself) as d,
+            mock.patch.object(ListProperty, "update_by_handle", return_value=False),
+        ):
+            _run(
+                PropertiesHandler,
+                myself,
+                config,
+                "post",
+                "",
+                body=json.dumps({"notes": {"items": items}}),
+            )
+        assert d.resyncs == []
+
+    def test_a_rank_addressed_delete_of_a_spanned_item_is_a_reference(
+        self, myself, config
+    ) -> None:
+        lst = myself.property_lists.notes
+        lst.extend(["a", "b"])
+        rank = lst.items_with_handles(resolve=False)[1][0].rank
+        with (
+            _Diffs(myself) as d,
+            mock.patch(
+                "actingweb.handlers.www.handle_old_item_fields",
+                return_value={"spanned_bytes": 900},
+            ),
+        ):
+            _www(
+                myself,
+                config,
+                "properties/notes/items",
+                {"action": "delete", "item_rank": rank},
+            )
+        (diff,) = d.list_diffs("notes")
+        assert diff["spanned"] is True and diff["operation"] == "delete"

@@ -1812,3 +1812,99 @@ re-recorded (owned by `:4`).
 
 **Not changed**: CR9 (the old-layout probe's extra read) is the accepted cost
 filed in `attribute-list-old-layout-removal.md`.
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-attribute-list-v2-port-2.md
+
+#### 8. The widened resync is `request_resync`'s only (finding 1)
+
+**Category**: Verification fix
+
+**What changed**: `request_resync` pushes a peer subscribed to the whole
+target a resync of the whole target (`widen`, inside
+`_callback_subscription_resync`, after the OAuth2 client's marker, which
+stays for the list); `resume_subscriptions` keeps its behaviour (its rows
+belong to other plans: `WD10`, `WD11`, `WM4`, `WL17` showed the change when
+it was applied there). A whole-target subscription's miss is not recorded
+under the subtarget's key, so a resume never re-sends it a subtarget-only
+resync.
+
+**Files affected**: `actingweb/actor.py`;
+`tests/test_list_diff_resync_and_filter.py`.
+
+#### 9. A value-addressed delete checks `length`; a value-addressed update never overwrites by index (findings 2, 3, 6)
+
+**Category**: Verification fix
+
+**What changed**: a `delete` with `old_item` and `length` applies only when
+the replica is one longer than `length`; equal with the item gone is an
+applied delete; anything else is out of step. An `update` with `old_item`
+updates the one equal row, or the one at `index` among equal rows, is a
+no-op when the new item is there and the old one is not, and is out of
+step otherwise. The web UI sends an exact `length` (the item count it read).
+
+**Files affected**: `actingweb/remote_storage.py`, `actingweb/handlers/www.py`;
+`tests/test_replica_receiver.py`, `tests/test_remote_storage.py` (three tests
+that pinned the index fallback and the dropped ambiguous update now expect
+out of step).
+
+#### 10. Other targets' data in the shared replica bucket (findings 4, 5)
+
+**Category**: Verification fix
+
+**What changed**: `replica_revocation.stores_another_target()`; a
+`properties` rebuild deletes no stale name, and the revocation cleanup is
+`NotEvaluated`, when the actor has a callback subscription to the peer for
+another target.
+
+**Files affected**: `actingweb/replica_revocation.py`,
+`actingweb/interface/subscription_manager.py`; `tests/test_replica_rebuild.py`.
+
+#### 11. The rebuild and the claim (findings 7, 9, 11)
+
+**Category**: Verification fix
+
+**What changed**: the owed lists are read before the baseline; a rebuild
+stays owed when a callback recorded a later sequence during it or a new list
+was marked; the lost-mark fallback ends the claim at the stop sequence. The
+iteration-4 change that kept a stopped batch's rest pending is reverted
+(it waited for the gap timeout as pruned entries do, and counted against
+`max_pending`).
+
+**Files affected**: `actingweb/interface/subscription_manager.py`,
+`actingweb/callback_processor.py`; `tests/test_replica_rebuild.py`,
+`tests/test_callback_processor.py`.
+
+#### 12. Filter and receiver shapes (findings 8, 10, U1)
+
+**Category**: Verification fix
+
+**What changed**: a list-diff-shaped value with no item data passes the
+filter whole once its name may be read, list or not (a deleted list's
+`delete_all`); the callback path unwraps only a list diff keyed by its name
+(the `{"_list": true}` form is a baseline's); the full-state fallback is
+keyed by name again at every level (the bare form of iteration 4 broke the
+pre-3.16 receivers the fallback serves).
+
+**Files affected**: `actingweb/actor.py`, `actingweb/remote_storage.py`;
+`tests/test_list_diff_resync_and_filter.py`, `tests/test_replica_receiver.py`,
+`tests/test_property_list_spans.py`.
+
+#### 13. Publisher details (findings 12, 13)
+
+**Category**: Verification fix
+
+**What changed**: a bulk batch owes its resync only from a write that
+landed; a web-UI rank-addressed delete of a spanned item stays a reference.
+
+**Files affected**: `actingweb/handlers/properties.py`,
+`actingweb/handlers/www.py`; `tests/test_list_diff_publishers.py`.
+
+**Accepted with a record** (owner-only or Low, the stop rule): 14 (the
+converter's check-then-act, owner data); 15 (a folded resync fault with the
+store down leaves no miss record; logged); 16 (a pre-3.16 attribute list
+with a hole refuses writes; reads raised for the hole before, and the tool
+reports it); 17 (old-layout read cost, filed in
+`attribute-list-old-layout-removal.md`); a 3.16 subscriber reached by the
+fallback through a stale capability cache stores a scalar's keyed state as
+an object until the next change; a 3.15 receiver applies `delete` by index
+(it received REST deletes as scalars before).

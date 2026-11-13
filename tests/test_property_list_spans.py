@@ -1002,9 +1002,7 @@ class TestFullStateFallback:
                 }
             )
         assert stored, "the fallback never reached the diff store"
-        # A subscription to the list gets its state bare (verification
-        # 2026-11-13: as every diff it gets).
-        inner = stored[0]
+        inner = stored[0][NAME]
         assert inner["spanned"] is True
         assert "items" not in inner
 

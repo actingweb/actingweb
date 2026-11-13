@@ -433,7 +433,13 @@ class CallbackProcessor:
         if marked is not None:
             return self._rebuild_due(marked)
         try:
-            self.settle_rebuild(peer_id, subscription_id, rebuilt=False, lists=lists)
+            self.settle_rebuild(
+                peer_id,
+                subscription_id,
+                rebuilt=False,
+                lists=lists,
+                claimed_seq=through_seq,
+            )
             return self._rebuild_due(
                 self._read_state_row(peer_id, subscription_id) or {}
             )
@@ -487,16 +493,20 @@ class CallbackProcessor:
         rebuilt: bool,
         restart_interval: bool = True,
         lists: list[str] | None = None,
+        claimed_seq: int | None = None,
     ) -> bool:
         """After a rebuild (or a resync): ``rebuilt`` clears the owed rebuild
         and, with ``restart_interval``, sets ``rebuilt_at``; otherwise it is
-        marked owed (``lists`` join the owed ones). Retries a lost
+        marked owed (``lists`` join the owed ones). ``claimed_seq`` ends a
+        claim there (a batch stopped for the rebuild). Retries a lost
         compare-and-swap a few times. Raises ``DbError`` on a fault."""
         for _ in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
             state: dict[str, Any] = dict(row or {"version": 0, "resync_pending": False})
             state.pop("nonce", None)
             state["version"] = int(state.get("version", 0) or 0) + 1
+            if claimed_seq is not None:
+                state["claimed_seq"] = claimed_seq
             if rebuilt:
                 state["rebuild_owed"] = False
                 state["rebuild_lists"] = []
@@ -817,8 +827,8 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed. A batch
             # stopped for a rebuild advances through the callback that
-            # stopped it; the rest stays pending (a successful rebuild prunes
-            # it through the baseline's sequence).
+            # stopped it; the rest of it is pruned (the rebuild supersedes
+            # it).
             new_last_seq = (
                 stop_at if stop_at is not None else callbacks_to_process[-1].sequence
             )
@@ -842,13 +852,14 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
-                        # Through the last callback processed: a batch
-                        # stopped for a rebuild keeps the rest pending, so a
-                        # rebuild that fails leaves no gap they could fill.
+                        # Through the whole batch: a batch stopped for a
+                        # rebuild drops the rest (the rebuild supersedes it;
+                        # a rebuild that fails leaves a gap the gap timeout
+                        # resyncs, as kept entries would wait for it too).
                         self._prune_pending(
                             peer_id,
                             subscription_id,
-                            new_last_seq,
+                            callbacks_to_process[-1].sequence,
                         )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")
@@ -1239,8 +1250,8 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed. A batch
             # stopped for a rebuild advances through the callback that
-            # stopped it; the rest stays pending (a successful rebuild prunes
-            # it through the baseline's sequence).
+            # stopped it; the rest of it is pruned (the rebuild supersedes
+            # it).
             new_last_seq = (
                 stop_at if stop_at is not None else callbacks_to_process[-1].sequence
             )
@@ -1264,13 +1275,14 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
-                        # Through the last callback processed: a batch
-                        # stopped for a rebuild keeps the rest pending, so a
-                        # rebuild that fails leaves no gap they could fill.
+                        # Through the whole batch: a batch stopped for a
+                        # rebuild drops the rest (the rebuild supersedes it;
+                        # a rebuild that fails leaves a gap the gap timeout
+                        # resyncs, as kept entries would wait for it too).
                         self._prune_pending(
                             peer_id,
                             subscription_id,
-                            new_last_seq,
+                            callbacks_to_process[-1].sequence,
                         )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")

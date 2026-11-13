@@ -51,14 +51,14 @@ class ReplicaOutOfStep(Exception):
 _CREATING_OPERATIONS = frozenset({"append", "insert", "extend"})
 
 
-def _wraps_list(value: Any, name: str) -> bool:
+def _wraps_list(value: Any, name: str, *, baseline: bool = False) -> bool:
     """Whether ``value`` is a list's state keyed by the list's own name: a
-    list diff for ``name`` or the ``{"_list": true}`` baseline form."""
+    list diff for ``name``, or (``baseline``) the ``{"_list": true}`` form."""
     if not isinstance(value, dict) or set(value) != {name}:
         return False
     inner = value[name]
     return isinstance(inner, dict) and (
-        inner.get("_list") is True
+        (baseline and inner.get("_list") is True)
         or ("operation" in inner and inner.get("list") == name)
     )
 
@@ -672,10 +672,13 @@ class RemotePeerStore:
         scalar first. Raises ``ReplicaOutOfStep`` when the replica no longer
         holds what the publisher's list held before the change: a damaged or
         conflicting list, the rank cap, sustained metadata contention, a
-        spanned reference, an index out of range. A value-addressed miss
-        (a ``remove`` whose item is absent, an ``update`` whose ``old_item``
-        is absent) is not out of step: an overlapping subscription's second
-        delivery looks like that."""
+        spanned reference, an index out of range, a value-addressed
+        ``update`` or ``delete`` whose item the replica does not hold once (or
+        at ``index`` among equal ones), a ``delete`` whose ``length`` does not
+        fit. What an overlapping subscription's second delivery looks like is
+        a no-op: a ``remove`` whose item is absent, an ``update`` whose new
+        item is there and old one is not, a ``delete`` whose item is gone and
+        whose ``length`` the replica already has."""
         why = None if operation == "delete_all" else self._invalid_list_name(list_name)
         if why is not None and (
             operation in _CREATING_OPERATIONS or not self._list_exists(list_name)
@@ -738,29 +741,28 @@ class RemotePeerStore:
         ):
             idx = data.get("index")
             if "old_item" in data:
-                # Locate by value first when the sender said what the item
-                # was: the replica's positions may have drifted. Trusted only
-                # when unique; ambiguous falls through to the index.
+                # Located by value when the sender said what the item was:
+                # the one equal row, or the one at ``index`` among equal
+                # rows. No equal row with the new item present is an applied
+                # update (an overlapping subscription's second delivery);
+                # anything else means the replica drifted: out of step, never
+                # an overwrite of whatever sits at ``index``.
                 old_item = data["old_item"]
                 values = list_attr.to_list()
                 matches = [i for i, v in enumerate(values) if v == old_item]
                 if len(matches) == 1:
                     list_attr[matches[0]] = data["item"]
                     return {"operation": "update", "index": matches[0], "success": True}
+                if matches and isinstance(idx, int) and idx in matches:
+                    list_attr[idx] = data["item"]
+                    return {"operation": "update", "index": idx, "success": True}
                 if not matches and data["item"] in values:
-                    # Already applied (an overlapping subscription's second
-                    # delivery): the replica is in the state the diff asks for.
                     return {"operation": "update", "success": True, "noop": True}
-                if idx is None:
-                    if not matches:
-                        return {"operation": "update", "success": True, "noop": True}
-                    logger.warning(
-                        "Dropping value-addressed update for list %r: old_item "
-                        "matched %d rows and the diff carries no index",
-                        list_name,
-                        len(matches),
-                    )
-                    return {"operation": "update", "error": "ambiguous"}
+                raise ReplicaOutOfStep(
+                    list_name,
+                    "update of an item the replica does not hold once"
+                    + (f" at index {idx!r}" if idx is not None else ""),
+                )
             if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
                 raise ReplicaOutOfStep(list_name, f"update index {idx!r} out of range")
             list_attr[idx] = data["item"]
@@ -785,7 +787,26 @@ class RemotePeerStore:
                 old_item = data["old_item"]
                 values = list_attr.to_list()
                 matches = [i for i, v in enumerate(values) if v == old_item]
+                length = data.get("length")
+                if isinstance(length, int) and not isinstance(length, bool):
+                    # ``length`` is the publisher's list after the delete:
+                    # one more here means not applied yet; equal with the
+                    # item gone, applied (a second delivery); anything else,
+                    # including equal with an equal item still held (an
+                    # applied duplicate, or drift), out of step.
+                    if len(values) == length and not matches:
+                        return {"operation": "delete", "success": True, "noop": True}
+                    if len(values) != length + 1:
+                        raise ReplicaOutOfStep(
+                            list_name,
+                            f"delete with the replica at {len(values)} items, "
+                            f"the publisher at {length} after it",
+                        )
                 if not matches:
+                    if isinstance(length, int) and not isinstance(length, bool):
+                        raise ReplicaOutOfStep(
+                            list_name, "delete of an item the replica does not hold"
+                        )
                     return {"operation": "delete", "success": True, "noop": True}
                 if len(matches) == 1:
                     del list_attr[matches[0]]
@@ -872,7 +893,7 @@ class RemotePeerStore:
             return results
         entries: Any = data
         if subtarget:
-            own = _wraps_list(data, subtarget)
+            own = _wraps_list(data, subtarget, baseline=True)
             entries = data if own else {subtarget: data}
         for key, value in entries.items():
             try:

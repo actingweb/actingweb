@@ -1030,8 +1030,8 @@ CHANGED
   then deletes in descending index order); more send no per-item diff and,
   once anything was written, one resync after the batch
   (``Actor.request_resync``), without a suspension: a subscription to the
-  list gets the list's resync, a subscription to the whole target a resync
-  of the whole target. A resync that faults is logged, not answered as
+  list gets the list's resync, a peer subscribed to the whole target a
+  resync of the whole target (an OAuth2 client a marker for the list). A resync that faults is logged, not answered as
   503 (the batch is committed). **Check:** with
   synchronous callbacks the request waits for each reading subscriber's
   resync in turn.

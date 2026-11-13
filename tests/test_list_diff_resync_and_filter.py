@@ -126,13 +126,14 @@ class TestRequestResync:
             assert actor.subs_list is None, "the memo is reset first"
             return self._subs()
 
-        def send(target, subtarget, subs, suspension, *, missed, fold_faults):  # noqa: ANN001
+        def send(target, subtarget, subs, suspension, *, missed, fold_faults, widen):  # noqa: ANN001
             assert suspension is None, "no suspension row"
             assert fold_faults, "a store fault is a miss, not a 503"
+            assert widen, "a whole-target subscription gets the whole target's"
             for sub in subs:
                 sent.append(f"{sub['subscriptionid']}:{subtarget}")
                 if sub["subscriptionid"] in (missed_ids or set()):
-                    missed.append(sub["subscriptionid"])
+                    missed.append(f"{sub['peerid']}:{sub['subscriptionid']}")
             return len(subs)
 
         def grant(peer: str) -> GrantSnapshot:
@@ -159,15 +160,12 @@ class TestRequestResync:
         self, actor
     ) -> None:
         count, sent, written = self._run(actor)
-        # s1 subscribes to the whole target: a resync of the whole target
-        # (its receiver resets the subscription's sequence on a resync);
-        # s3 subscribes to the list: the list's.
-        assert sent == ["s3:notes", "s1:None"] and count == 2
+        assert sent == ["s1:notes", "s3:notes"] and count == 2
         assert written == []
 
     def test_a_missed_subscriber_is_recorded(self, actor) -> None:
         _, _, written = self._run(actor, missed_ids={"s3"})
-        assert written == [["s3"]]
+        assert written == [["p3:s3"]]
 
 
 class TestFullStateIsTwoDiffs:
@@ -284,14 +282,78 @@ class TestFullStateIsTwoDiffs:
         )
         assert replica.get_list("notes") == [1, 2]
 
-    def test_a_subscription_to_the_list_gets_bare_diffs(self, actor) -> None:
+    def test_a_subscription_to_the_list_gets_keyed_diffs(self, actor) -> None:
+        """Keyed, for the pre-3.16 receivers the fallback serves
+        (verification re-run 2, U1); a 3.16 receiver unwraps a keyed list."""
         extend = {"list": "notes", "operation": "extend", "items": [1], "length": 1}
         stored, _ = self._resync(actor, {"notes": extend}, {"notes"}, "notes")
         assert stored == [
-            (7, {"list": "notes", "operation": "clear", "length": 0}),
-            (8, extend),
+            (7, {"notes": {"list": "notes", "operation": "clear", "length": 0}}),
+            (8, {"notes": extend}),
         ]
 
-    def test_a_subscription_to_a_scalar_gets_the_bare_value(self, actor) -> None:
-        stored, _ = self._resync(actor, {"status": {"status": "ok"}}, set(), "status")
-        assert stored == [(7, {"status": "ok"})]
+
+class TestVerification2:
+    """Verification re-run 2 (findings 1 and 8)."""
+
+    @pytest.mark.parametrize(("own", "sent_subtarget"), [("", ""), ("notes", "notes")])
+    def test_a_pushed_resync_of_a_subtarget_widens_for_a_whole_target_subscription(
+        self, actor, own, sent_subtarget
+    ) -> None:
+        """A receiver resets the whole subscription's sequence on a resync:
+        a subscription to the whole target gets the whole target's."""
+        payloads: list[dict[str, Any]] = []
+        trust = mock.Mock()
+        trust.get.return_value = {"baseuri": "https://peer.example/p1", "secret": "s"}
+        caps = mock.Mock()
+        caps.supports_resync_callbacks_cached.return_value = True
+        actor.config.sync_subscription_callbacks = True
+        with (
+            mock.patch("actingweb.trust.Trust", return_value=trust),
+            mock.patch(
+                "actingweb.peer_capabilities.PeerCapabilities", return_value=caps
+            ),
+            mock.patch("actingweb.interface.actor_interface.ActorInterface"),
+            mock.patch.object(
+                actor, "_increment_subscription_sequence", return_value=7
+            ),
+            mock.patch(
+                "actingweb.actor._resync_url",
+                side_effect=lambda c, a, t, st: f"{t}/{st}" if st else t,
+            ),
+            mock.patch.object(
+                actor,
+                "_send_resync_callback_sync",
+                side_effect=lambda url, payload, secret, peer: (
+                    payloads.append(payload) or True
+                ),
+            ),
+        ):
+            actor._callback_subscription_resync(  # noqa: SLF001
+                {
+                    "peerid": "p1",
+                    "subscriptionid": "s1",
+                    "target": "properties",
+                    "subtarget": own,
+                },
+                "notes",
+                widen=True,
+            )
+        (payload,) = payloads
+        assert payload["subtarget"] == sent_subtarget
+
+    def test_a_deleted_lists_delete_all_passes_a_sub_path_exclusion(
+        self, actor
+    ) -> None:
+        actor.property_lists.exists.side_effect = lambda name: False
+        gone = {"list": "notes", "operation": "delete_all", "length": 0}
+        out = actor.filter_subscription_blob("p1", WHOLE, json.dumps({"notes": gone}))
+        assert json.loads(out) == {"notes": gone}
+        out = actor.filter_subscription_blob("p1", NOTES, json.dumps(gone))
+        assert json.loads(out) == gone
+
+    def test_a_whole_target_miss_is_not_recorded_under_the_subtarget(
+        self, actor
+    ) -> None:
+        _, _, written = TestRequestResync()._run(actor, missed_ids={"s1", "s3"})
+        assert written == [["p3:s3"]]

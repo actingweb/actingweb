@@ -345,3 +345,61 @@ class TestVerificationFindings:
         assert remote.get_value("status") == {"status": "ok"}
         remote.apply_resync_data({"status": "fine"}, subtarget="status")
         assert remote.get_value("status") == {"status": "fine"}
+
+
+class TestVerification2Findings:
+    """Verification re-run 2 (findings 2, 3, 6, 10)."""
+
+    def test_a_duplicate_delete_delivered_twice_is_applied_once(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["A", "A"])
+        diff = {"n": _diff("n", "delete", index=0, old_item="A", length=1)}
+        assert remote.apply_callback_data(diff).out_of_step is None
+        second = remote.apply_callback_data(diff)
+        # Equal length with an equal item still held: an applied duplicate or
+        # drift, which the replica cannot tell apart; out of step (a rebuild),
+        # never the surviving copy deleted.
+        assert second.out_of_step is not None
+        assert remote.get_list("n") == ["A"]
+
+    def test_a_unique_delete_delivered_twice_is_a_noop(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["A", "B"])
+        diff = {"n": _diff("n", "delete", index=0, old_item="A", length=1)}
+        remote.apply_callback_data(diff)
+        second = remote.apply_callback_data(diff)
+        assert second.out_of_step is None and second["n"].get("noop")
+        assert remote.get_list("n") == ["B"]
+
+    def test_a_delete_on_a_drifted_replica_is_out_of_step(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["A", "X", "C"])
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "delete", index=1, old_item="B", length=2)}
+        )
+        assert r.out_of_step is not None
+        assert remote.get_list("n") == ["A", "X", "C"]
+
+    @pytest.mark.parametrize(
+        ("held", "diff"),
+        [
+            (["a", "b", "c"], _diff("n", "update", old_item="x", item="y", index=1)),
+            (["x", "q", "x"], _diff("n", "update", old_item="x", item="y", index=1)),
+            (["x", "x"], _diff("n", "update", old_item="x", item="y")),
+        ],
+    )
+    def test_an_update_whose_item_is_not_held_once_is_out_of_step(
+        self, env, held, diff
+    ):
+        remote, _, _ = env
+        remote.set_list("n", held)
+        r = remote.apply_callback_data({"n": diff})
+        assert r.out_of_step is not None
+        assert remote.get_list("n") == held
+
+    def test_a_subtarget_callback_in_the_baseline_form_is_a_value(self, env):
+        remote, _, _ = env
+        remote.apply_callback_data(
+            {"notes": {"_list": True, "items": [1]}}, subtarget="notes"
+        )
+        assert remote.list_all_lists() == []

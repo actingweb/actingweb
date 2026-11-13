@@ -200,6 +200,8 @@ class WwwHandler(base_handler.BaseHandler):
         # The position the handle was found at, for the diff (a rank-addressed
         # action names no index).
         self._target_position: int | None = None
+        # The item count the handle was read with: the diff's exact length.
+        self._target_length = len(pairs)
         if rank is not None:
             for position, (handle, _) in enumerate(pairs):
                 if handle.rank == rank:
@@ -1291,6 +1293,7 @@ class WwwHandler(base_handler.BaseHandler):
                                     update_fields: dict[str, Any] = {
                                         **old_fields,
                                         "index": self._target_position,
+                                        "length": self._target_length,
                                     }
                                 elif index is None:
                                     self._list_action_error(
@@ -1306,14 +1309,16 @@ class WwwHandler(base_handler.BaseHandler):
                                         )
                                         return
                                     list_prop[index] = parsed_value
-                                    update_fields = {"index": index}
+                                    update_fields = {
+                                        "index": index,
+                                        "length": list_length_hint(list_prop),
+                                    }
                                 register_list_diff(
                                     myself,
                                     self.config,
                                     prop_name,
                                     "update",
                                     item=parsed_value,
-                                    length=list_length_hint(list_prop),
                                     **update_fields,
                                 )
                             except ListItemSpanError:
@@ -1379,11 +1384,20 @@ class WwwHandler(base_handler.BaseHandler):
                                     # tells duplicates apart by index).
                                     delete_op = "delete"
                                     delete_fields: dict[str, Any] = {
-                                        "index": self._target_position
+                                        "index": self._target_position,
+                                        "length": self._target_length - 1,
                                     }
                                     if "old_item" in old_fields:
                                         delete_fields["old_item"] = old_fields[
                                             "old_item"
+                                        ]
+                                    elif self.request.get("item_rank"):
+                                        # A spanned item addressed by rank: its
+                                        # value was not read and its position
+                                        # may have moved; a reference (the
+                                        # replica rebuilds).
+                                        delete_fields["spanned_bytes"] = old_fields[
+                                            "spanned_bytes"
                                         ]
                                 elif index is None:
                                     self._list_action_error(
@@ -1400,13 +1414,15 @@ class WwwHandler(base_handler.BaseHandler):
                                         return
                                     del list_prop[index]
                                     delete_op = "delete"
-                                    delete_fields = {"index": index}
+                                    delete_fields = {
+                                        "index": index,
+                                        "length": list_length_hint(list_prop),
+                                    }
                                 register_list_diff(
                                     myself,
                                     self.config,
                                     prop_name,
                                     delete_op,
-                                    length=list_length_hint(list_prop),
                                     **delete_fields,
                                 )
                             except ListItemSpanError:

@@ -50,7 +50,7 @@ class _Env:
 
     def rebuild(self, **kwargs: Any) -> Any:
         sub_obj = MagicMock()
-        sub_obj.get.return_value = dict(self.recorded)
+        sub_obj.get.side_effect = lambda: dict(self.recorded)
         sub_obj.handle.modify.side_effect = lambda seqnr: self.recorded.update(
             sequence=seqnr
         )
@@ -212,3 +212,76 @@ class TestAnotherTarget:
         env.rebuild()
         assert env.replica.get_value("kept") == {"v": 1}
         assert env.replica.list_all_lists() == ["notes"]
+
+
+class TestVerification2:
+    """Verification re-run 2 (findings 4, 5, 7, 9)."""
+
+    def test_a_properties_rebuild_spares_a_bucket_another_target_stores_into(self, env):
+        env.replica.set_value("from_resources", {"v": 1})
+        env.owe()
+        env.baselines = [{}]
+        with patch(
+            "actingweb.replica_revocation.stores_another_target", return_value=True
+        ):
+            env.rebuild()
+        assert env.replica.get_value("from_resources") == {"v": 1}
+
+    def test_revocation_is_not_evaluated_for_a_shared_bucket(self, env):
+        from actingweb.peer_permissions import PeerPermissions
+        from actingweb.replica_revocation import NotEvaluated, plan_cleanup
+
+        env.config.auto_delete_on_revocation = True
+        grant = PeerPermissions(
+            actor_id=ACTOR,
+            peer_id=PEER,
+            properties={"patterns": ["memory_*"], "operations": ["read"]},
+        )
+        with (
+            patch(
+                "actingweb.replica_revocation.subscribes_to_whole_properties",
+                return_value=True,
+            ),
+            patch(
+                "actingweb.replica_revocation.stores_another_target", return_value=True
+            ),
+        ):
+            plan = plan_cleanup(env.config, ACTOR, env.replica, None, grant)
+        assert isinstance(plan, NotEvaluated)
+
+    def test_a_callback_processed_during_the_rebuild_leaves_it_owed(self, env):
+        env.owe()
+
+        def bump(**_: Any) -> Any:
+            env.recorded["sequence"] = 9  # a callback recorded 9 meanwhile
+            return {}
+
+        env.baselines = [{}]
+        with patch.object(env, "_baseline", side_effect=bump):
+            result = env.rebuild()
+        assert result.success is False
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+
+    def test_a_list_marked_during_the_rebuild_leaves_it_owed(self, env):
+        env.owe(["a"])
+
+        def mark(**_: Any) -> Any:
+            env.processor.settle_rebuild(PEER, SUB, rebuilt=False, lists=["b"])
+            return {}
+
+        with patch.object(env, "_baseline", side_effect=mark):
+            env.rebuild()
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+
+    def test_a_lost_mark_releases_the_claim(self):
+        config, _store = make_config()
+        core = MagicMock()
+        core.id = ACTOR
+        core.config = config
+        processor = CallbackProcessor(actor=ActorInterface(core))
+        with patch.object(processor, "_mark_out_of_step", return_value=None):
+            processor._mark_or_owe(  # noqa: SLF001
+                PEER, SUB, {"version": 0, "claimed_seq": 10}, 7, ["n"]
+            )
+        row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
+        assert row is not None and row["claimed_seq"] == 7

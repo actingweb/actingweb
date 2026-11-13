@@ -162,6 +162,23 @@ def subscribes_to_whole_properties(config: Any, actor_id: str, peer_id: str) -> 
     )
 
 
+def stores_another_target(config: Any, actor_id: str, peer_id: str) -> bool:
+    """Whether ``actor_id`` holds a callback subscription to ``peer_id`` for
+    a target other than ``properties``: its data is auto-stored in the same
+    replica bucket, so no property grant or baseline decides what that
+    bucket may hold. One read; a fault raises ``DbError``."""
+    from .db import get_subscription_list
+
+    subscriptions = get_subscription_list(config).fetch(actor_id, strict=True) or []
+    return any(
+        s.get("peerid") == peer_id
+        and s.get("callback")
+        and s.get("target") not in (None, "", "properties")
+        for s in subscriptions
+        if isinstance(s, dict)
+    )
+
+
 def plan_cleanup(
     config: Any,
     actor_id: str,
@@ -172,13 +189,19 @@ def plan_cleanup(
     """What a grant change takes from the replica, or None when there is
     nothing to evaluate. In order, each ending the work: the flag off (no
     read); no subscription to the peer's whole ``properties`` target; the
-    grant's property rules unchanged (no replica read)."""
+    grant's property rules unchanged (no replica read). A replica that also
+    holds another target's data (``stores_another_target``) is not evaluated:
+    the property grant does not decide those names."""
     if not getattr(config, "auto_delete_on_revocation", False):
         return None
     if not subscribes_to_whole_properties(config, actor_id, store._peer_id):  # noqa: SLF001
         return None
     if old_grant is not None and old_grant.properties == new_grant.properties:
         return None
+    if stores_another_target(config, actor_id, store._peer_id):  # noqa: SLF001
+        return NotEvaluated(
+            "the replica also holds data of a subscription to another target"
+        )
     return revoked_replica_names(store, new_grant)
 
 

@@ -354,14 +354,17 @@ class TestRemotePeerStoreCallbackData:
         )
         assert remote.get_list("items") == ["dup", "new", "z"]
 
-    def test_apply_list_update_with_ambiguous_old_item_and_no_index_errors(self):
+    def test_apply_list_update_with_ambiguous_old_item_and_no_index_is_out_of_step(
+        self,
+    ):
+        """3.16 verification re-run 2: dropped silently before; the replica
+        cannot tell which row, so it is rebuilt."""
         remote, _ = _replica()
         remote.set_list("items", ["dup", "dup"])
         result = remote.apply_callback_data(
             _diff("items", "update", old_item="dup", item="new")
         )
-        assert result["items"]["error"] == "ambiguous"
-        assert result.out_of_step is None
+        assert result.out_of_step is not None
         assert remote.get_list("items") == ["dup", "dup"]
 
     def test_apply_list_update_with_ambiguous_old_item_and_no_index_logs_a_warning(
@@ -373,7 +376,7 @@ class TestRemotePeerStoreCallbackData:
             remote.apply_callback_data(
                 _diff("items", "update", old_item="dup", item="n")
             )
-        assert "matched 2 rows" in caplog.text
+        assert "out of step" in caplog.text
 
     def test_apply_list_update_with_null_old_item_applies_by_value(self):
         remote, _ = _replica()
@@ -397,15 +400,16 @@ class TestRemotePeerStoreCallbackData:
         )
         assert remote.get_list("items") == ["x", "T", "y"]
 
-    def test_apply_list_update_with_old_item_falls_back_to_index_if_value_not_found(
-        self,
-    ):
+    def test_apply_list_update_with_old_item_not_found_is_out_of_step(self):
+        """3.16 verification re-run 2: it overwrote whatever sat at the index;
+        the replica drifted, so it is rebuilt instead."""
         remote, _ = _replica()
         remote.set_list("items", ["a", "b"])
-        remote.apply_callback_data(
+        result = remote.apply_callback_data(
             _diff("items", "update", old_item="gone", item="B", index=1)
         )
-        assert remote.get_list("items") == ["a", "B"]
+        assert result.out_of_step is not None
+        assert remote.get_list("items") == ["a", "b"]
 
     def test_apply_list_delete(self):
         remote, _ = _replica()

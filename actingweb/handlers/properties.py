@@ -2110,7 +2110,6 @@ class PropertiesHandler(_PropertyHandlerBase):
                                     )
                                     # Don't fail the entire operation, just log warning
 
-                            recorder.applied = True
                             if not self._finish_bulk_list_update(
                                 myself,
                                 key,
@@ -2254,7 +2253,6 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 )
                                 # Don't fail the entire operation for delete errors
 
-                        recorder.applied = True
                         if not self._finish_bulk_list_update(
                             myself,
                             key,

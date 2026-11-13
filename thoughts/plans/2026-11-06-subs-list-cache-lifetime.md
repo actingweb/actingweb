@@ -1174,7 +1174,7 @@ Notes (2026-11-12):
       return nothing outside released migration guides
 - [x] `grep -rn "rewrite_email" CHANGELOG.rst docs` returns nothing
 - [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
-- [ ] Emm's suite on this branch, before the PR opens, run as
+- [x] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, and the result recorded in this plan's
       verification document
@@ -1415,8 +1415,8 @@ not re-run; nothing they judged changed.
 ## Implementation Summary
 
 **Completed:** 2026-11-12
-**All phases:** Complete (Emm's suite still to run before the PR, Phase 3's
-last box)
+**All phases:** Complete (Emm's suite, Phase 3's last box, ran on `c738f21`
+after the PR opened; see the last Iterations batch)
 **Test status:** All passing: the Full tier on DynamoDB and PostgreSQL after
 every phase and review fix, the wire step on Python 3.11 on both backends.
 
@@ -1806,3 +1806,35 @@ fallback) stays for its existing callers.
 Owner: accepted without code. `delete()` is resumable and its next call
 runs the diff wipe; `purge_relationships()` raises the `DbError` before its
 `try`, and a repeated purge wipes them.
+
+### 2026-11-13, Emm's suite on `c738f21` and the PR review
+
+Emm's suite on `c738f21` (environment 9, its adoption worktree unchanged;
+run after PR #175 opened, not before as Phase 3 asked): PostgreSQL 2 failed
+/ 7406 passed / 14 skipped / 179 deselected, DynamoDB lane 3 failed / 54
+passed, the `master` baseline's failures by name
+(`thoughts/research/2026-11-07-emm-suite-against-master.md`). The IAM
+coverage test names the same two actions as the baseline
+(`TransactWriteItems`, `BatchGetItem`): the key-only diff query and the
+wipes need no new IAM action. The environment 9 server was stopped
+afterwards.
+
+The PR's automated review (one comment, no inline findings) asked five
+things; none needs code:
+
+1. A `DbError` from the per-request `_load_actor` answers 503, not 401:
+   `authenticate_and_get_actor_cached` re-raises it as
+   `TokenStoreUnavailable` before its `except Exception`
+   (`actingweb/handlers/mcp.py`), pinned by
+   `test_an_actor_read_fault_on_a_cached_token_answers_503`.
+2. The FastAPI event-loop read and 3. the changed debug-line totals are
+   already in the changelog entry.
+4. The 300-second trust TTL is tested
+   (`test_a_positive_entry_past_its_ttl_is_resolved_again`,
+   `test_the_sweep_removes_entries_by_their_own_ttl`).
+5. Emm reads `actor.creator` in its MCP hooks as the account email
+   (`hooks/mcp/resources.py`, `hooks/mcp/tools/guide.py`) and runs
+   `with_email_as_creator(enable=True)`. The rewrite an MCP load now skips
+   is persisted by any other load of the actor, so only an actor reached
+   solely over MCP after its stored email changed shows its old creator.
+   Documented in the changelog; accepted.

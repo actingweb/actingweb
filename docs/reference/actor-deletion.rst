@@ -65,7 +65,9 @@ or client cleanup:
    rows), swept until empty, at most three passes.
 #. Delete subscriptions.
 #. Delete trust relationships, including reciprocal ones on peers.
-#. Delete all attribute buckets.
+#. Delete all attribute buckets: every attribute row under the actor's id,
+   so peers' replicas (``remote:<peer_id>``) and attribute lists with their
+   ``<bucket>$aux`` side buckets go with them.
 #. **Delete the actor row** — last.
 #. Run the ``actor_deleted_complete`` lifecycle hook (HTTP path, and a sign-in that
    replaces an unvouched actor; see :doc:`hooks-reference`).
@@ -302,7 +304,8 @@ locked-down serving-path role deliberately lacks. It is a long-running,
 checkpointed CLI for a persistent shell — do not invoke it from a
 lambda-like runtime. It classifies orphans only; it does not replace
 :doc:`../guides/database-maintenance` (TTL cleanup) or
-``actingweb-verify-property-lists`` (per-actor list index integrity).
+``actingweb-verify-property-lists`` (per-actor list index integrity; with
+``--attributes``, the attribute lists too).
 
 A property row whose actor id ends in ``$aux`` belongs to that actor's
 property-list side partition. It is reported only when the actor itself is
@@ -311,7 +314,10 @@ to delete it by. Such rows are left by a pre-3.16 process deleting an actor
 during a rolling deploy, by a spanned write landing after an actor delete's
 last sweep pass, or by a crash between the two partitions' deletes; actor
 deletion assumes the actor is quiescent, as before. Remove them as any
-orphan property row.
+orphan property row. An attribute list's side rows (3.16) are not in a
+separate partition: they sit in the bucket ``<bucket>$aux`` under the
+actor's own id, are removed with the actor's attribute buckets, and are
+reported, when orphaned, under that actor id like any attribute row.
 
 Four edge cases drove its design, and each is a way to delete live data if
 gotten wrong:

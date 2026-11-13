@@ -934,17 +934,17 @@ network requests.
         fqdn="myapp.example.com"
     ).with_peer_permissions(
         enable=True,
-        auto_delete_on_revocation=True,  # Delete cached data when permissions revoked
+        auto_delete_on_revocation=True,  # Delete replica data the new grant hides
         notify_peer_on_change=True       # Auto-notify peers when their permissions change
     )
 
 **Parameters:**
 
 - ``enable``: Boolean to enable/disable permissions caching. Default: ``True`` when called.
-- ``auto_delete_on_revocation``: When ``True``, automatically delete cached peer data
-  from ``RemotePeerStore`` when the peer revokes property access. This ensures that
-  when a peer revokes access to certain data (e.g., ``memory_*`` properties), the
-  locally cached copies are deleted. Default: ``False``.
+- ``auto_delete_on_revocation``: When ``True``, a permission callback deletes from the
+  peer's replica in ``RemotePeerStore`` what the peer's new grant no longer lets this
+  actor read (scalars and lists), for a peer whose whole ``properties`` target this
+  actor subscribes to. See `Auto-Delete on Permission Revocation`_. Default: ``False``.
 - ``notify_peer_on_change``: When ``True``, automatically notify peers when their
   permissions change by sending a callback to their ``/callbacks/permissions/{actor_id}``
   endpoint. This is fire-and-forget (failures are logged but don't block the store
@@ -975,8 +975,8 @@ When enabled, permissions are automatically updated:
      - Refresh cached permissions
    * - Permission callback received
      - Update cached permissions (with change detection)
-   * - Permission revoked (with ``auto_delete_on_revocation=True``)
-     - Delete cached peer data matching revoked property patterns
+   * - Permission changed (with ``auto_delete_on_revocation=True``)
+     - Delete the replica's data the new grant no longer lets this actor read
    * - Permissions stored (with ``notify_peer_on_change=True``)
      - Send callback to peer's ``/callbacks/permissions/{actor_id}``
    * - Trust deleted
@@ -985,29 +985,43 @@ When enabled, permissions are automatically updated:
 Auto-Delete on Permission Revocation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When ``auto_delete_on_revocation=True`` is set and a peer revokes access to certain
-properties, the library automatically deletes the corresponding cached data from
-``RemotePeerStore``. This is useful when you're caching remote peer data via
-subscription callbacks and want to ensure that revoked data is cleaned up.
+When ``auto_delete_on_revocation=True`` is set, a permission callback that changes
+the peer's property rules removes from the peer's replica what this actor may no
+longer read. This is useful when you're caching remote peer data via subscription
+callbacks and want to ensure that revoked data is cleaned up.
 
-**How it works:**
+**How it works (3.16):**
 
-1. When a permission callback arrives, the library compares old and new permissions
-2. Property patterns that were in the old permissions but not in the new are identified as "revoked"
-3. All stored lists in ``RemotePeerStore`` matching the revoked patterns are deleted
-4. The ``permission_changes`` dict is passed to the callback hook with details
+1. When a permission callback arrives whose property rules differ from the stored
+   copy, the library evaluates the **new grant as stored**, with the publisher's own
+   matcher and path rules, against every name in the replica. It does not look at
+   which patterns changed.
+2. Every replica name (scalar or list) the new grant's patterns do not grant ``read``
+   for, or that an exclusion covers, is deleted. An object the grant still admits is
+   rewritten without its excluded parts. So a pattern removed, a pattern added to
+   ``excluded_patterns`` and ``read`` dropped from a pattern that stays all delete
+   data.
+3. The ``permission_changes`` dict passed to the callback hook says what was deleted
+   (``deleted_names``) and, when nothing was evaluated, why (``not_evaluated``).
 
-**Example:** If the old permissions had patterns ``["memory_*", "profile_*"]`` and the
-new permissions only have ``["memory_*"]``, then ``profile_*`` is considered revoked.
-Any cached lists matching ``profile_*`` (like ``profile_info``) will be deleted.
+**Example:** If the old grant read ``["memory_*", "profile_*"]`` and the new one
+reads ``["memory_*", "profile_*"]`` with ``excluded_patterns: ["profile_private"]``,
+the replica's ``profile_private`` (a list or a scalar) is deleted, and
+``deleted_names`` is ``["profile_private"]`` while ``revoked_patterns`` stays empty.
 
-**What it does not yet act on (3.16):** only a pattern that disappears from
-the grant counts as revoked. A pattern added to ``excluded_patterns``, an
-operation dropped from a pattern that stays (``read`` removed), a scalar
-property cached outside a list, and copies an application fetched by query are
-not deleted. A deleted grant override now sends a permission callback (the
-peer is back on its trust type's default), so a narrower default triggers the
-comparison above.
+**Limits:**
+
+- Only a peer this actor subscribes to on the whole ``properties`` target is covered.
+  A subscription to a subtarget or a resource is not: the replica does not record
+  which subscription stored a key.
+- A grant the library cannot evaluate deletes nothing (``not_evaluated`` names the
+  reason, and a WARNING is logged): one with no property rules, rules in the
+  ``allowed``/``denied`` shape, rules without ``patterns`` or ``operations``, or
+  patterns or operations that are not lists.
+- The same evaluation runs when a permission query or ``sync_peer()`` stores a new
+  copy, and only when the copy it evaluated is still the stored one.
+- A deleted grant override sends a permission callback (the peer is back on its trust
+  type's default), so a narrower default is evaluated the same way.
 
 **Callback Hook Data:**
 
@@ -1022,13 +1036,28 @@ When handling permission callbacks, the hook data includes a ``permission_change
         if changes.get("is_initial"):
             print("First permission callback from this peer")
 
-        if changes.get("has_revocations"):
-            print(f"Revoked patterns: {changes['revoked_patterns']}")
+        if changes.get("deleted_names"):
+            # What auto_delete_on_revocation removed from the replica
+            print(f"Deleted from the replica: {changes['deleted_names']}")
+
+        if changes.get("not_evaluated"):
+            print(f"Replica not cleaned: {changes['not_evaluated']}")
 
         if changes.get("granted_patterns"):
             print(f"Newly granted: {changes['granted_patterns']}")
 
         return True
+
+``permission_changes`` carries ``is_initial``, ``granted_patterns``,
+``revoked_patterns`` (patterns that disappeared from the grant) and
+``has_revocations``. Since 3.16 it also carries ``deleted_names`` (the replica names
+deleted or rewritten, empty unless ``auto_delete_on_revocation`` is on; a deletion
+caused by an exclusion or a dropped ``read`` is listed here, never in
+``revoked_patterns``) and ``not_evaluated`` (why the grant could not be evaluated,
+else ``None``).
+``has_revocations`` stays the grant comparison, and is also true when something was
+deleted. A hook that derives what to delete from ``revoked_patterns`` should read
+``deleted_names`` instead: the library has already deleted those names.
 
 Accessing Peer Permissions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

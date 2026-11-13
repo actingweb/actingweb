@@ -474,6 +474,13 @@ class TrustReplaced(Exception):
 _EMPTIED = object()
 
 
+def _list_diff_shaped(value: Any) -> bool:
+    """Whether ``value`` has a list diff's shape (``list`` and
+    ``operation``). Only a gate before asking whether the name is a list:
+    the shape alone decides nothing."""
+    return isinstance(value, dict) and "list" in value and "operation" in value
+
+
 def _prune_emptied(original: Any, kept: Any) -> Any:
     """``kept`` (``original`` after a filter) without the objects the filter
     emptied, at any depth; ``_EMPTIED`` when ``original`` was a non-empty
@@ -4247,6 +4254,16 @@ class Actor:
             path = f"{subtarget}/{resource}" if resource else subtarget
             if not self._may_read(snapshot, path):
                 return None
+            if (
+                not resource
+                and isinstance(parsed, dict)
+                and (_list_diff_shaped(parsed) or set(parsed) == {subtarget})
+                and self._names_a_list(subtarget)
+            ):
+                # A list's diff (or its full state) passes whole once the
+                # list may be read (3.16): decided by what the name is, its
+                # keys are not property paths an exclusion could name.
+                return as_text
             rules = snapshot.rules(PermissionType.PROPERTIES)
             if isinstance(parsed, str):
                 # The property's value as JSON text: filtered as the object
@@ -4327,6 +4344,13 @@ class Actor:
             logger.error(f"Subscription re-check for {snapshot.peer_id} failed: {e}")
             return False
 
+    def _names_a_list(self, name: str) -> bool:
+        """Whether ``name`` is one of this actor's property lists."""
+        lists = getattr(self, "property_lists", None)
+        if lists is None:
+            return False
+        return bool(lists.exists(name))
+
     def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
         """Whether the peer may read ``path``: the one access decision, as a
         direct read asks it (3.16): a stated rule answers, a grant that does
@@ -4370,10 +4394,14 @@ class Actor:
             if not self._may_read(snapshot, path):
                 logger.debug(f"Filtered {path!r} from a diff to {snapshot.peer_id}")
                 continue
-            if key.startswith("list:"):
+            if key.startswith("list:") or (
+                not parent and _list_diff_shaped(value) and self._names_a_list(key)
+            ):
                 # A list's diff object (list, operation, items): a list's
                 # unit is its name, decided above; its keys are not property
-                # paths an exclusion could name (3.16).
+                # paths an exclusion could name (3.16). A list is recognised
+                # by what its name is, not by the value's shape: a scalar
+                # shaped like a list diff is filtered as any object.
                 kept[key] = value
                 continue
             part = self._diff_part(rules, path, value)
@@ -4600,6 +4628,54 @@ class Actor:
         except Exception as e:
             logger.error(f"Error resuming subscriptions: {e}")
             return 0
+
+    def request_resync(self, target: str, subtarget: str | None = None) -> int:
+        """Send a resync of ``target``/``subtarget`` to its subscribers now,
+        without a suspension (3.16). For a change too large to announce as
+        diffs, such as a bulk list update over 25 items.
+
+        The subscribers are read afresh (the memo is reset). Only those whose
+        grant lets them read ``subtarget`` are sent anything: a subscriber
+        that may not read it is not told its name. A subscriber the send
+        misses (an HTTP failure or timeout, which does not fail this call)
+        is recorded, and the next ``request_resync()`` or
+        ``resume_subscriptions()`` for the same target re-sends to it. A peer
+        without resync support receives the full state as a ``clear`` and
+        then an ``extend`` for each list.
+
+        Returns:
+            The number of resync callbacks sent
+        """
+        if not self.config or not self.id:
+            return 0
+        self.subs_list = None
+        subs = (
+            self.get_subscriptions(
+                target=target, subtarget=None, callback=False, strict=True
+            )
+            or []
+        )
+        readable: list[dict[str, Any]] = []
+        for sub in subs:
+            if not sub or sub.get("target") != target:
+                continue
+            snapshot = self.grant_for(str(sub.get("peerid") or ""))
+            if snapshot is None:
+                continue
+            if target == "properties" and subtarget:
+                if not self._may_read(snapshot, subtarget):
+                    continue
+            elif not self._may_still_subscribe(sub, snapshot):
+                continue
+            readable.append(sub)
+        pending = self._resync_pending(target, subtarget)
+        missed: list[str] = []
+        count = self._send_resync_callbacks(
+            target, subtarget, readable, None, missed=missed
+        )
+        if pending is not None or missed:
+            self._write_resync_pending(target, subtarget, missed)
+        return count
 
     def _send_resync_callbacks(
         self,
@@ -4998,6 +5074,7 @@ class Actor:
         resource_url = _resync_url(self.config, self.id, target, sub_subtarget)
 
         # Build callback payload - use resync type only if peer supports it
+        clear_payload: dict[str, Any] | None = None
         if supports_resync:
             # Resync callback per protocol spec v1.4
             payload = {
@@ -5031,6 +5108,40 @@ class Actor:
             )
             full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
 
+            # 3.16: a peer that already holds a list would append the
+            # extend to its copy. Every list still carrying its items is
+            # cleared first, under its own sequence number, and the full
+            # state follows under the next; two callbacks, in order. A list
+            # that became a reference is re-read by the receiver: no clear.
+            clears = {
+                name: {"list": name, "operation": "clear", "length": 0}
+                for name in sorted(list_keys)
+                if isinstance(full_state.get(name), dict)
+                and "items" in full_state[name]
+            }
+            if clears:
+                clear_url = self._store_subscription_diff(
+                    peer_id, sub_id, new_seq, clears
+                )
+                if not clear_url:
+                    return False
+                clear_payload = {
+                    "id": self.id,
+                    "subscriptionid": sub_id,
+                    "target": target,
+                    "subtarget": sub_subtarget,
+                    "sequence": new_seq,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "granularity": "low",
+                    "url": clear_url,
+                }
+                new_seq = self._increment_subscription_sequence(peer_id, sub_id)
+                if not new_seq:
+                    logger.warning(
+                        f"Subscription {sub_id} for {peer_id} is gone; no resync sent"
+                    )
+                    return False
+
             # Store as a subscription diff
             diff_url = self._store_subscription_diff(
                 peer_id, sub_id, new_seq, full_state
@@ -5059,6 +5170,18 @@ class Actor:
 
         # Check sync configuration (like diff callbacks do)
         use_sync = getattr(self.config, "sync_subscription_callbacks", False)
+
+        if clear_payload is not None:
+            # The clear goes first; the receiver orders by sequence anyway.
+            if use_sync:
+                if not self._send_resync_callback_sync(
+                    callback_url, clear_payload, secret, peer_id
+                ):
+                    return False
+            else:
+                self._send_resync_callback_async(
+                    callback_url, clear_payload, secret, peer_id
+                )
 
         if use_sync:
             # Lambda mode: blocking call
@@ -5125,6 +5248,7 @@ class Actor:
                                 "list": subtarget,
                                 "operation": "extend",
                                 "items": items,
+                                "length": len(items),
                             }
                         }
 
@@ -5177,6 +5301,7 @@ class Actor:
                             "list": list_name,
                             "operation": "extend",
                             "items": items,
+                            "length": len(items),
                         }
                 logger.debug(
                     f"Getting full state for all properties: {len(result)} keys"

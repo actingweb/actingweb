@@ -871,7 +871,10 @@ does and the edge cases it exists to get right.
 A leaked property-list side partition (spanned items' body rows under
 ``{actor_id}$aux``, left by a pre-3.16 actor delete during a rolling
 deploy or by a write that landed after an actor delete) is reported under
-that raw key once its actor is gone.
+that raw key once its actor is gone. An attribute list's side rows are
+different: they live in the bucket ``<bucket>$aux`` under the actor's own
+id (3.16), so they are attribute rows like any other, deleted with the
+actor's buckets and reported under the actor id when orphaned.
 
 Its operational envelope is different enough from the rest of this guide to
 call out explicitly:
@@ -894,7 +897,10 @@ call out explicitly:
   for manual review — there is no delete flag. It answers a different
   question than the TTL cleanup in this guide (expired-but-still-referenced
   rows) and than ``actingweb-verify-property-lists`` (per-actor list index
-  corruption): "does this row's actor still exist at all."
+  corruption; with ``--attributes`` also the attribute lists in each
+  actor's ``remote:<peer_id>`` replica buckets and the buckets named with
+  ``--bucket``, see :doc:`property-lists`): "does this row's actor still
+  exist at all."
 
 Data Lifecycle Reference
 ------------------------

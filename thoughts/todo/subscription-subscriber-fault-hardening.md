@@ -16,6 +16,18 @@ periodic backup poll are listed only as guidance "for stronger delivery
 guarantees". Everything below goes beyond the minimum; none of it is a spec
 violation today.
 
+## What 3.16 changed (attribute-list-v2-port)
+
+The replica is on the list core: a list diff the replica cannot apply is out
+of step and the replica is rebuilt from a baseline (at most one attempt a
+minute, reserved by compare-and-swap, never moving the sequence backwards,
+deleting what the baseline no longer carries); an owed rebuild runs on the
+next callback or `sync_subscription()`. A re-applied value-addressed diff
+(`remove`, `update` with `old_item`) is a no-op; a re-applied `append` or
+index diff still applies twice. A bulk resync that misses a subscriber is
+recorded and re-sent by the next `request_resync()`; a quiet subscription
+still waits for it.
+
 ## What is still weak
 
 - **A handler that faulted part-way is applied twice.** The 503 on a storage

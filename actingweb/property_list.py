@@ -86,7 +86,9 @@ _lazy_migration_nudge_logged = False
 _V1_INDEX_RE = re.compile(r"^\d+\Z")
 
 __all__ = [
+    "LIST_DIFF_OPERATIONS",
     "UNRESOLVED",
+    "UNSET",
     "AppendOnceResult",
     "ListCorruptionError",
     "ListItemHandle",
@@ -98,6 +100,7 @@ __all__ = [
     "ListPropertyIterator",
     "ListRankExhaustedError",
     "PropertyListStorage",
+    "build_list_diff",
     "diff_reference",
     "fit_full_state",
     "spanned_reference",
@@ -173,6 +176,83 @@ def _nudge_lazy_migration_disabled() -> None:
 
 
 _DIFF_VALUE_FIELDS = ("item", "old_item", "value", "items")
+
+# "Not passed" for build_list_diff's value fields: None is a legal list item,
+# and a diff for a None-valued item must still carry its item/old_item field
+# (as JSON null), or the receiver reads a different operation.
+UNSET: Any = object()
+
+LIST_DIFF_OPERATIONS = frozenset(
+    {
+        "append",
+        "extend",
+        "insert",
+        "update",
+        "delete",
+        "pop",
+        "remove",
+        "clear",
+        "delete_all",
+        "metadata",
+    }
+)
+
+
+def build_list_diff(
+    list_name: str,
+    operation: str,
+    *,
+    length: int,
+    config: Any,
+    item: Any = UNSET,
+    index: int | None = None,
+    items: list[Any] | None = None,
+    old_item: Any = UNSET,
+    spanned_bytes: int | None = None,
+) -> dict[str, Any]:
+    """The list diff a publisher registers for one change to ``list_name``.
+
+    Every diff carries ``list``, ``operation`` and ``length``; ``item`` and
+    ``old_item`` are present whenever passed (``None`` included), ``index``
+    and ``items`` when not ``None``. A diff whose encoded blob would exceed
+    the span threshold becomes a reference (:func:`diff_reference`); with
+    ``spanned_bytes`` it is a reference regardless of size, for a spanned
+    item whose value the caller did not read (:func:`spanned_reference`).
+
+    The operation is one of :data:`LIST_DIFF_OPERATIONS`, the receiver's
+    closed vocabulary; anything else raises ``ValueError``.
+    """
+    if operation not in LIST_DIFF_OPERATIONS:
+        raise ValueError(f"unknown list diff operation {operation!r}")
+    diff: dict[str, Any] = {
+        "list": list_name,
+        "operation": operation,
+        "length": length,
+    }
+    if item is not UNSET:
+        diff["item"] = item
+    if index is not None:
+        diff["index"] = index
+    if items is not None:
+        diff["items"] = items
+    if old_item is not UNSET:
+        diff["old_item"] = old_item
+    if spanned_bytes is not None:
+        return spanned_reference(diff, config, spanned_bytes)
+    return diff_reference(diff, config)
+
+
+def handle_old_item_fields(list_prop: Any, handle: Any) -> dict[str, Any]:
+    """The ``build_list_diff`` fields that name the item a handle held before
+    a change, read without its bodies: ``{"old_item": value}``, or
+    ``{"spanned_bytes": n}`` for a spanned or malformed item, whose value was
+    not read and is never serialised (the diff becomes a reference)."""
+    if handle.spanned:
+        return {"spanned_bytes": handle.bytes or 0}
+    old = list_prop._unresolved_or_item(handle.rank, handle.raw_value)
+    if old is UNRESOLVED:
+        return {"spanned_bytes": encoded_size(str(handle.raw_value))}
+    return {"old_item": old}
 
 
 def diff_reference(diff: dict[str, Any], config: Any) -> dict[str, Any]:

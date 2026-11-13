@@ -28,7 +28,9 @@ items, item 11 and item 18.
    once (which creates the tables and stops), runs
    ``actingweb-unique-creators enable --apply``, and starts again; with no
    actors yet the refusal says so in one line. To keep the old behaviour, call
-   ``with_unique_creator(False)``.
+   ``with_unique_creator(False)``. **On PostgreSQL it also does not start
+   until ``alembic upgrade head`` has applied revision ``a7b8c9d0e1f2``**
+   (``AttributeSchemaNotReady``; see `Attribute lists and list diffs`_).
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -164,6 +166,14 @@ items, item 11 and item 18.
     request reads the actor row (a throttle answers 503), an ``Actor`` reads
     its subscription list once, and an override of
     ``Actor.delete_reciprocal_trust`` must accept keyword arguments.
+24. **Attribute lists use the property list format, and list edits send list
+    diffs** (see `Attribute lists and list diffs`_): run ``alembic upgrade
+    head`` on PostgreSQL before the deploy, finish a rolling deploy before
+    attribute lists convert, and go through the section's "What to check in
+    your application": hooks that branch on a diff's shape, revocation code
+    that reads only ``revoked_patterns``, test doubles of the attribute
+    store, bucket sweeps that would delete ``$aux`` side buckets, and custom
+    backends (nine attribute methods).
 
 
 What changed and why
@@ -721,7 +731,8 @@ running without it means ``--apply``).
   v1 ``<prefix>_property_lookup`` table and the ``property-index`` GSI on
   ``<prefix>_properties`` once the backfill is verified; nothing reads them.
 - *PostgreSQL:* a new table ``property_lookup_backfill``. Run
-  ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) **before** the deploy,
+  ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``; the head is now
+  ``a7b8c9d0e1f2``, see `Attribute lists and list diffs`_) **before** the deploy,
   or the startup check is refused as "could not be checked". The backfill
   inserts in primary-key batches that commit alone; run it off-peak on a large
   ``properties`` table.
@@ -747,6 +758,18 @@ never read as an empty store.
 
 Custom database backends
 ------------------------
+
+Attribute lists (3.16) need nine more ``DbAttribute`` methods,
+``ATTRIBUTE_LIST_PRIMITIVES`` in ``actingweb.db.protocols``:
+``get_attr_range``, ``get_attr_prefix``, ``get_last_attr_in_range`` (byte
+order of the UTF-8 name), ``create_attr_if_not_exists`` and
+``create_attrs_if_not_exist`` (create only absent rows),
+``set_attr_if_data_equals`` and ``delete_attr_if_data_equals`` (compare the
+stored data exactly), ``delete_attrs`` and ``put_attr``. Every attribute
+write, ``set_attr`` included, is conditioned on its bucket: a write to a key
+another bucket holds raises ``AttributeKeyCollision``. The list format itself
+is ``actingweb.list_core.ListCore`` over a ``ListStorage``; a backend does not
+implement ``ListStorage``, the library adapts these methods to it.
 
 ``DbSubscriptionSuspension.is_suspended`` must raise ``DbError`` on a read
 fault (3.16), not answer ``False``.
@@ -1572,11 +1595,10 @@ denies (it allowed). The ``path`` a hook receives is unchanged.
 ``/properties/<name>/<a>/<b>`` registers the diff as resource ``<a>`` with
 the resource's whole stored value, as a two-segment write registers its
 body. It was the bare body at the second level (``{<name>: {<a>: <value>}}``),
-which put the value at the wrong depth. **Known limit, unchanged:** the
-library's subscriber stores a property as the diff carries it, so any
-resource-level diff (two segments or three) replaces its copy of
-``<name>`` with ``{<a>: ...}``; the other keys of ``<name>`` return with the
-next whole write or resync.
+which put the value at the wrong depth. The library's subscriber merges a
+resource-level diff (two segments or three) at the resource's path in its
+copy of ``<name>``, keeping the other keys (see `Attribute lists and list
+diffs`_; before this release it replaced the copy).
 
 **A diff the peer may read none of is not pushed** (unchanged), and an object
 the filter empties is dropped from a diff rather than sent as ``{}`` (which
@@ -1742,6 +1764,96 @@ overrides ``delete_reciprocal_trust`` must accept the new keyword-only
 ``expected_secret`` and ``before_local_delete``, or ``**kwargs``), and ``DELETE
 /trust/<rel>/<peer>/permissions`` tells the peer its grant is back to the
 default (404 when there was no override).
+
+Attribute lists and list diffs
+------------------------------
+
+**The layout.** An attribute list (``actor.attribute_lists(bucket)``, and
+each peer's replica in ``remote:<peer>``) is stored as a property list is:
+``list:<name>-meta`` and one ``list:<name>-#<rank>`` row per item, with an
+item over the span threshold in a ``<bucket>$aux`` side bucket. A list
+written before 3.16 (``list:<name>:meta`` and ``list:<name>:<i>``) is read in
+place and converted on its first change; reads never convert. On PostgreSQL
+revision ``a7b8c9d0e1f2`` makes the ``attributes`` key columns ``TEXT`` and
+adds a partial index for the list range reads; ``check_ready()`` raises
+``AttributeSchemaNotReady`` until it is applied. On a table with rows the
+index is built ``CONCURRENTLY`` (``alembic upgrade head`` outside a busy
+period); an empty table builds it in the migration's transaction.
+
+**During a rolling deploy.** A pre-3.16 process reads a converted list as
+empty, and a write it makes lands in the old layout beside the new one. Finish
+the deploy, then run ``actingweb-verify-property-lists --attributes`` (it
+reports both layouts and conflicts; ``--repair`` converts a list still in the
+old layout). A conflict in a replica rebuilds itself from the publisher on its
+next change, or ``--repair --delete-damaged-replicas`` deletes it for the next
+baseline; a conflict in any other bucket is reported for you to resolve (the
+tool deletes nothing there).
+
+**Rolling back.** A 3.15 process reads converted lists as empty until
+``SubscriptionManager.sync_peer()`` runs for the peer (a replica) or the list
+is written again; plan a rollback before lists have converted.
+
+**The diffs.** REST, web-UI and SDK list edits register list diffs on the
+list's own subtarget: ``{"list", "operation", "length"}`` plus ``item``,
+``index``, ``old_item`` or ``items`` as the operation needs, from
+``append``, ``extend``, ``insert``, ``update``, ``delete``, ``pop``,
+``remove``, ``clear``, ``delete_all`` and ``metadata``
+(``actingweb.property_list.build_list_diff``). A bulk ``POST /properties``
+with ``items`` sends up to 25 changes in order, a run of appends as one
+``extend``; more send one resync of the list after the batch
+(``Actor.request_resync``). A peer without resync support receives a list's
+full state as a ``clear`` and then an ``extend``, under consecutive sequence
+numbers. A list diff is filtered as a unit: it reaches a subscriber that may
+read the list's name, whole.
+
+**The receiver.** A list diff applies only to the key it arrived under. A
+diff the replica cannot apply (an index out of range, a damaged list, a
+spanned reference) marks it out of step, and the replica is rebuilt from a
+baseline: the subscription's sequence, the baseline, then the publisher's
+diffs cleared up to that sequence; what the baseline no longer carries is
+deleted. At most one attempt a minute per subscription; an owed rebuild runs
+on the next callback or ``sync_subscription()`` after that. A diff in the
+middle of a list reads the replica's list (O(n)); appends do not. A
+resource-level diff is merged at its path. Two subscriptions of one peer
+that overlap (a whole-target and a subtarget subscription) both deliver an
+append, and the replica holds it twice until the specification change that
+binds them.
+
+**What to check in your application.**
+
+- *Subscription hooks that branch on a diff's shape.* A test such as
+  ``isinstance(value, dict) and "list" in value and "operation" in value`` now
+  also matches list edits made over REST and the web UI, which arrived as
+  scalars (``{"index", "value"}``, ``{"action": ...}``, text) before. The
+  shapes a hook receives are in :doc:`../reference/hooks-reference`.
+- *Permission hooks that act on revocations.* With
+  ``auto_delete_on_revocation`` on, ``permission_changes`` carries
+  ``deleted_names`` (the replica names deleted) and ``not_evaluated``. A
+  deletion caused by an added exclusion or a dropped ``read`` is in
+  ``deleted_names`` only, not in ``revoked_patterns``: code that derives what
+  it lost (a cache, an index, its own copies) from ``revoked_patterns`` must
+  read ``deleted_names`` as well.
+- *Test doubles of the attribute store.* A fake ``Attributes`` or
+  ``DbAttribute`` that a test routes attribute lists through needs the nine
+  methods listed under `Custom database backends`_, or the test fails on
+  3.16. A test that patches ``AttributeListStore`` or ``get_metadata`` no
+  longer exercises the stored rows; and ``get_metadata()["length"]`` is
+  advisory (use ``len()`` or the items for an exact count).
+- *Code that enumerates or sweeps an actor's attribute buckets.* A bucket
+  that holds attribute lists with large items has a ``<bucket>$aux`` side
+  bucket (each replica: ``remote:<peer>$aux``). It belongs to its bucket and
+  is deleted with it (``Attributes.delete_bucket``); a sweep that deletes
+  buckets it does not recognise must leave it alone.
+- *Code that reads list rows directly.* The row names changed (see "The
+  layout" above), and ``ListAttributeIterator`` is gone; go through
+  ``actor.attribute_lists(bucket)`` or ``RemotePeerStore``.
+- *Callers of the replica API.* ``RemotePeerStore.apply_callback_data`` and
+  ``apply_resync_data`` take keyword-only ``subtarget`` and ``resource`` (the
+  subscription's level) and return a ``ReplicaApplyResult``; read
+  ``.out_of_step`` and ``.failed``, not a ``"out_of_step"`` key.
+- *Mixed versions.* Until every process runs 3.16, a 3.15 process reads a
+  converted list, a replica's included, as empty (see "During a rolling
+  deploy" and "Rolling back" above).
 
 What stays the same
 ===================

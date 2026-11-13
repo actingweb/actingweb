@@ -222,6 +222,7 @@ class TestFullStateSubscriptionCost:
             "list": "notes",
             "operation": "extend",
             "items": ["a", "b", "c"],
+            "length": 3,
         }
         assert result["todos"]["items"] == ["x", "y"]
         assert result["tags"]["items"] == ["p"]

@@ -28,7 +28,23 @@
      },
      "queue": [
       {
-       "diffs": [],
+       "diffs": [
+        {
+         "data": "{\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}, \"index\": 0}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"list\": \"notes\", \"operation\": \"remove\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}}",
+         "sequence": 3,
+         "timestamp": "<ts:stored>"
+        }
+       ],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -72,7 +88,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 5
+        "version": 3
        }
       ],
       "peer_permissions": {
@@ -191,107 +207,19 @@
         {
          "actor": "<B>",
          "data": {
-          "action": "delete",
-          "index": 0
+          "item": {
+           "id": "a",
+           "text": "one"
+          },
+          "length": 1,
+          "list": "notes",
+          "operation": "remove"
          },
          "event": "subscription_data",
          "peer": "<A>",
          "sequence": 3,
          "target": "properties",
          "type": "diff"
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {
-          "content-type": "application/json"
-         },
-         "host": "wire_app",
-         "method": "GET",
-         "path": "/<A>/subscriptions/<B>/<sub1>",
-         "query": "",
-         "request": null,
-         "response": {
-          "data": [
-           {
-            "data": {
-             "index": 0,
-             "item": {
-              "id": "a",
-              "text": "one"
-             },
-             "length": 1,
-             "list": "notes",
-             "operation": "append"
-            },
-            "sequence": 1,
-            "timestamp": "<ts:iso-z>"
-           },
-           {
-            "data": {
-             "index": 1,
-             "item": {
-              "id": "b",
-              "text": "two"
-             },
-             "length": 2,
-             "list": "notes",
-             "operation": "append"
-            },
-            "sequence": 2,
-            "timestamp": "<ts:iso-z>"
-           },
-           {
-            "data": {
-             "action": "delete",
-             "index": 0
-            },
-            "sequence": 3,
-            "timestamp": "<ts:iso-z>"
-           }
-          ],
-          "id": "<A>",
-          "peerid": "<B>",
-          "resource": "",
-          "sequence": 3,
-          "subscriptionid": "<sub1>",
-          "subtarget": "notes",
-          "target": "properties"
-         },
-         "status": 200
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {
-          "content-type": "application/json"
-         },
-         "host": "wire_app",
-         "method": "GET",
-         "path": "/<A>/properties/notes",
-         "query": "",
-         "request": null,
-         "response": [
-          {
-           "id": "b",
-           "text": "two"
-          }
-         ],
-         "status": 200
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {},
-         "host": "wire_app",
-         "method": "PUT",
-         "path": "/<A>/subscriptions/<B>/<sub1>",
-         "query": "",
-         "request": {
-          "sequence": 3
-         },
-         "response": null,
-         "status": 204
         }
        ],
        "headers": {},
@@ -301,8 +229,13 @@
        "query": "",
        "request": {
         "data": {
-         "action": "delete",
-         "index": 0
+         "item": {
+          "id": "a",
+          "text": "one"
+         },
+         "length": 1,
+         "list": "notes",
+         "operation": "remove"
         },
         "granularity": "high",
         "id": "<A>",

@@ -882,6 +882,32 @@ SECURITY
   as a change to the default (see the revocation entry under FIXED for what
   that comparison acts on).
 
+- **One peer's replica write could replace another peer's stored data.** An
+  attribute row is keyed on ``<bucket>:<name>``, and every attribute write
+  (``set_attr`` included) replaced the row under that key whatever bucket
+  owned it, so a name that joins with a bucket into another bucket's key
+  (``remote:<peer>`` plus a name with a ``:``) let a subscription callback
+  from one peer overwrite a row of another peer's replica, or any other
+  bucket of the actor. Released in v3.15.1 and earlier. **Behavior
+  change:** every attribute write is conditioned on its bucket, on both
+  backends: a write to a key another bucket holds raises
+  ``AttributeKeyCollision`` (a ``DbError``), and the replica refuses that
+  key (logged) instead of answering 503. **Check:** search the logs for
+  ``another bucket holds the key``; a custom backend implements the
+  condition (see the attribute methods under CHANGED).
+- **A property value shaped like a list diff edited a different list in
+  the subscribers' replicas.** The receiver read any value carrying ``list``
+  and ``operation`` as a list operation on the list its ``list`` field
+  named, so a peer that writes a property (or a publisher's scalar such as
+  ``{"list": "contacts", "operation": "clear"}``) could clear, rewrite or
+  delete another list in every subscriber's replica of that publisher.
+  Released in v3.15.1 and earlier. **Behavior change:** a list diff is
+  bound to the key it arrives under (the subscription's subtarget, or the
+  top-level key equal to its ``list``); any other value is the scalar's
+  value. **Check:** a replica written by an older subscriber may hold a
+  list altered this way; ``SubscriptionManager.sync_peer()`` (or
+  ``rebuild_subscription(force=True)``) re-reads it from the publisher.
+
 REMOVED
 ~~~~~~~
 
@@ -913,6 +939,129 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **Breaking: list edits over REST and the web UI send list diffs.** ``PUT
+  /properties/<list>?index=N``, ``POST /properties/<list>/items``, ``PUT
+  /properties/<list>/metadata``, ``DELETE /properties/<list>``, a bulk
+  ``POST /properties`` with ``items``, an empty list created by ``POST`` and
+  every web-UI list form sent subscribers shapes of their own (``{"index",
+  "value"}``, ``{"action": "add", ...}``, a text summary, ``""``), which a
+  subscriber stored as scalars. Each now registers a list diff
+  (``list``, ``operation``, ``length``, and ``item``, ``index``,
+  ``old_item`` or ``items`` as the operation needs) on the list's own
+  subtarget: ``append``, ``update`` (with ``old_item`` when the item was
+  read), ``remove`` (by value; ``delete`` by index for a v1 list or a
+  spanned item), ``metadata``, ``delete_all`` and an empty ``extend`` for a
+  new list. HTTP responses do not change. **Check:** subscription data
+  hooks and callback hooks that branch on a diff's shape (``"list" in
+  value`` now also matches REST edits); ``build_list_diff()`` builds the
+  same diffs for application code.
+
+- **Breaking: a custom database backend implements nine attribute methods,
+  and a write to a colliding key raises.** ``get_attr_range``,
+  ``get_attr_prefix``, ``get_last_attr_in_range``,
+  ``create_attr_if_not_exists``, ``create_attrs_if_not_exist``,
+  ``set_attr_if_data_equals``, ``delete_attr_if_data_equals``,
+  ``delete_attrs`` and ``put_attr`` (``ATTRIBUTE_LIST_PRIMITIVES`` in
+  ``actingweb.db.protocols``) carry attribute lists, and every attribute
+  write is conditioned on its bucket (``AttributeKeyCollision``). **Check:**
+  a backend of your own; ``docs/migration/v3.16.rst``, "Custom database
+  backends".
+
+- **Breaking: attribute lists use the property list format.** Rows are
+  ``list:<name>-meta`` and ``list:<name>-#<rank>`` (an item over the span
+  threshold in a ``<bucket>$aux`` side bucket), as property lists are.
+  ``get_metadata()["length"]`` is advisory and ``updated_at`` best effort,
+  ``ListAttributeIterator`` is removed, and code that enumerates an actor's
+  buckets sees the ``$aux`` side buckets. **Check:** code that reads list
+  rows directly, or iterates buckets.
+
+- **Breaking: ``RemotePeerStore.apply_callback_data`` and
+  ``apply_resync_data`` take the subscription's level and report what they
+  could not apply.** Both take keyword-only ``subtarget`` and ``resource``
+  and return a ``ReplicaApplyResult`` (a dict of per-key results) whose
+  ``out_of_step`` attribute names a list diff the replica could not apply
+  and ``failed`` the baseline entries it could not store. **Check:** code
+  that calls them for a subtarget- or resource-level subscription, or
+  reads a ``"out_of_step"`` key.
+
+- **Behavior change: an attribute list in the old layout converts on its
+  first change.** A list written before 3.16 (``list:<name>:meta``,
+  ``list:<name>:<i>``) is read in place, and the first write converts it to
+  the new layout, metadata included. A pre-3.16 process reads a converted
+  list as empty. **Check:** finish the rolling deploy before lists convert;
+  ``actingweb-verify-property-lists --attributes`` reports both layouts
+  (``docs/migration/v3.16.rst``, "Attribute lists and list diffs").
+
+- **Behavior change: PostgreSQL needs revision ``a7b8c9d0e1f2`` before
+  start.** The ``attributes`` key columns become ``TEXT`` and a partial
+  index serves the list range reads. ``check_ready()`` raises
+  ``AttributeSchemaNotReady`` until it is applied. **Check:** run
+  ``alembic upgrade head`` before deploying; on a table with rows the index
+  is built ``CONCURRENTLY``.
+
+- **Behavior change: a list diff a replica cannot apply has the replica
+  rebuilt.** An index out of range, a damaged or conflicting list, a spanned
+  reference or a scalar arriving for a list's name marks the replica out of
+  step; the subscriber reads the subscription's sequence and a baseline,
+  replaces the replica (deleting what the baseline no longer carries) and
+  clears the publisher's diffs up to that sequence. At most one attempt a
+  minute per subscription, successful or not; an owed rebuild runs on the
+  next callback or ``sync_subscription()`` after that. **Check:** repeated
+  rebuild warnings for one subscription
+  (``docs/guides/troubleshooting.rst``).
+
+- **Behavior change: a write below a property merges at a resource-level
+  subscriber, and a subtarget-level diff is stored under the subtarget.**
+  A resource-level value was stored as top-level scalars; it is now merged
+  at the resource's path in the stored property. A subtarget-level value
+  or baseline is stored under the subtarget's name. **Check:** code that
+  read the old top-level keys from a replica.
+
+- **Behavior change: web-UI edits notify subscribers.** Adding, editing or
+  deleting a list item, editing list metadata, creating a list and creating
+  or updating a property in the web UI registered no diff; each now
+  registers the one its REST route does.
+
+- **Behavior change: a bulk list update over 25 changes is announced as one
+  resync, and appends in one request arrive as one ``extend``.** Up to 25
+  changes are sent in order (a run of appends as one ``extend``); more send
+  no per-item diff and one resync of the list after the batch
+  (``Actor.request_resync``), without a suspension. **Check:** with
+  synchronous callbacks the request waits for each reading subscriber's
+  resync in turn.
+
+- **Behavior change: a peer without resync support receives ``clear`` then
+  ``extend``.** The full-state fallback sent each list as an ``extend``,
+  which a subscriber already holding the list appended to its copy. Each
+  list still carrying its items is now cleared under one sequence number and
+  the full state follows under the next. **Check:** a subscriber that loses
+  the second callback holds an empty list until the next change.
+
+- **Behavior change: the receiver refuses some list names and ``list:``
+  scalars.** A list a diff would create whose name has a control
+  character, ``#`` or ``$``, starts with ``_`` or is too long for a key is
+  refused (logged with ``%r``); a stored list of any name can still be
+  changed and deleted. A scalar key starting ``list:`` is refused.
+
+- **Behavior change: a list diff is filtered as a unit.** A list's diff (and
+  its full state) passes whole when the subscriber may read the list's name,
+  or not at all; an exclusion never removes ``operation`` or a key inside an
+  item. A list is recognised by what its name is, so a scalar shaped like a
+  list diff is filtered as any object.
+
+- **Behavior change: with ``auto_delete_on_revocation`` on, the cleanup is
+  computed from the stored grant.** It deletes what the new grant no longer
+  lets the subscriber read, by the publisher's own matcher: scalars and
+  lists, an added exclusion and a dropped ``read`` included, for a peer
+  subscribed to the whole target, and rewrites an object without its
+  excluded parts. A grant it cannot evaluate deletes nothing.
+  ``permission_changes`` gains ``deleted_names`` (what was deleted; an
+  exclusion-based deletion is there, not in ``revoked_patterns``) and
+  ``not_evaluated`` (why nothing was evaluated, else ``None``);
+  ``has_revocations`` is also true when something was deleted. **Check:**
+  permission hooks that derive what to delete from ``revoked_patterns``
+  should read ``deleted_names``.
 
 - **An MCP hook is handed an actor built for that request.** The MCP
   handler kept one ``ActorInterface`` per actor for five minutes and handed
@@ -1882,6 +2031,28 @@ CHANGED
 ADDED
 ~~~~~
 
+- **Attribute lists with the property list interface.**
+  ``actor.attribute_lists(bucket)`` returns an ``AttributeListStore`` whose
+  lists (``.get(name)`` or attribute access) are ``ListAttribute``
+  instances with ``ListProperty``'s interface: handles, ``append_once``,
+  spanned items, ``verify``, ``compact``. ``actingweb.list_core`` holds the
+  format (``ListCore`` over a ``ListStorage``).
+- **``ListRankExhaustedError``, ``ListLayoutConflictError``,
+  ``AttributeKeyCollision`` and ``AttributeSchemaNotReady``.**
+- **``actingweb-verify-property-lists --attributes``** (with ``--bucket``,
+  ``--delete-damaged-replicas`` for replica buckets, and a checkpoint mode)
+  verifies, converts and repairs attribute lists.
+- **The nine attribute list methods** on the DynamoDB and PostgreSQL
+  backends (see CHANGED).
+- **``Actor.request_resync(target, subtarget)``** sends a resync to the
+  subscribers that may read ``subtarget``, without a suspension, and
+  records the ones it misses for the next call.
+- **``SubscriptionManager.rebuild_subscription()``** (and its async form)
+  rebuilds a subscription's replica from a baseline; ``force=True`` skips
+  the one-a-minute interval.
+- **``build_list_diff()``** (``actingweb.property_list``) builds the list
+  diff a publisher registers.
+
 - **``SubscriptionManager.get_subscriptions_by_peer()``** returns every
   subscription of the actor grouped by peer id, as ``PeerSubscriptions``
   (``peer_id``, ``outbound``, ``inbound``), from one subscription read; a
@@ -2231,6 +2402,36 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **An interrupted ``insert`` or ``delete`` diff could damage a replica's
+  list.** The replica's list shifted every later item, row by row; a crash
+  part way left a list neither before nor after. A replica list is now the
+  property list format, where each change is one item row.
+
+- **A falsy list item made a replica list unreadable.** ``0``, ``""``,
+  ``false`` or ``null`` as an item stopped the replica's reader; any value
+  is now an item.
+
+- **A resync with an item over the DynamoDB row limit failed.** A replica
+  list spans large items as property lists do; an item it still cannot
+  store deletes that list, is reported, and leaves the rebuild owed.
+
+- **``pop`` with a negative index was not applied by the replica.**
+
+- **A full state doubled a replica's list.** See the ``clear`` then
+  ``extend`` entry under CHANGED.
+
+- **List edits over REST reached a replica as scalars,** and a diff for a
+  subtarget-level subscription was stored as top-level scalars. See the
+  entries under CHANGED.
+
+- **Revoked data was kept for a peer id that is not 32 hex characters.**
+  The cleanup on revocation now reaches every replica bucket of the peer.
+
+- **A list created through a form without a description did not exist.**
+  The web UI's list form and ``POST /properties`` with ``property_type=list``
+  stored no metadata when no description or explanation was given, so the
+  new list was not there; the metadata is now stored.
 
 - **One actor instance read its subscription list again on every write
   when the actor had no subscribers.** Each property written, each list

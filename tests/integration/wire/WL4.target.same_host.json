@@ -28,7 +28,23 @@
      },
      "queue": [
       {
-       "diffs": [],
+       "diffs": [
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
+         "sequence": 3,
+         "timestamp": "<ts:stored>"
+        }
+       ],
        "granularity": "high",
        "peer": "<B>",
        "sequence": 3,
@@ -72,7 +88,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 5
+        "version": 3
        }
       ],
       "peer_permissions": {
@@ -197,10 +213,17 @@
          "data": {
           "notes": {
            "index": 0,
-           "value": {
+           "item": {
             "id": "a",
             "v": 3
-           }
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "id": "a",
+            "text": "one"
+           },
+           "operation": "update"
           }
          },
          "event": "subscription_data",
@@ -208,131 +231,6 @@
          "sequence": 3,
          "target": "properties",
          "type": "diff"
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {
-          "content-type": "application/json"
-         },
-         "host": "wire_app",
-         "method": "GET",
-         "path": "/<A>/subscriptions/<B>/<sub1>",
-         "query": "",
-         "request": null,
-         "response": {
-          "data": [
-           {
-            "data": {
-             "notes": {
-              "index": 0,
-              "item": {
-               "id": "a",
-               "text": "one"
-              },
-              "length": 1,
-              "list": "notes",
-              "operation": "append"
-             }
-            },
-            "sequence": 1,
-            "timestamp": "<ts:iso-z>"
-           },
-           {
-            "data": {
-             "notes": {
-              "index": 1,
-              "item": {
-               "id": "b",
-               "text": "two"
-              },
-              "length": 2,
-              "list": "notes",
-              "operation": "append"
-             }
-            },
-            "sequence": 2,
-            "timestamp": "<ts:iso-z>"
-           },
-           {
-            "data": {
-             "notes": {
-              "index": 0,
-              "value": {
-               "id": "a",
-               "v": 3
-              }
-             }
-            },
-            "sequence": 3,
-            "timestamp": "<ts:iso-z>"
-           }
-          ],
-          "id": "<A>",
-          "peerid": "<B>",
-          "resource": "",
-          "sequence": 3,
-          "subscriptionid": "<sub1>",
-          "subtarget": "",
-          "target": "properties"
-         },
-         "status": 200
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {
-          "content-type": "application/json"
-         },
-         "host": "wire_app",
-         "method": "GET",
-         "path": "/<A>/properties",
-         "query": "",
-         "request": null,
-         "response": {
-          "notes": {
-           "_list": true,
-           "count": 2
-          }
-         },
-         "status": 200
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {
-          "content-type": "application/json"
-         },
-         "host": "wire_app",
-         "method": "GET",
-         "path": "/<A>/properties/notes",
-         "query": "",
-         "request": null,
-         "response": [
-          {
-           "id": "a",
-           "v": 3
-          },
-          {
-           "id": "b",
-           "text": "two"
-          }
-         ],
-         "status": 200
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {},
-         "host": "wire_app",
-         "method": "PUT",
-         "path": "/<A>/subscriptions/<B>/<sub1>",
-         "query": "",
-         "request": {
-          "sequence": 3
-         },
-         "response": null,
-         "status": 204
         }
        ],
        "headers": {},
@@ -344,10 +242,17 @@
         "data": {
          "notes": {
           "index": 0,
-          "value": {
+          "item": {
            "id": "a",
            "v": 3
-          }
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
          }
         },
         "granularity": "high",
@@ -405,7 +310,22 @@
       {
        "diffs": [
         {
-         "data": "{\"notes\": {\"index\": 2, \"value\": {\"id\": \"c\", \"v\": 4}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
+         "sequence": 3,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"id\": \"c\", \"v\": 4}, \"index\": 2}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -453,7 +373,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 7
+        "version": 4
        }
       ],
       "peer_permissions": {
@@ -531,6 +451,10 @@
          {
           "id": "b",
           "text": "two"
+         },
+         {
+          "id": "c",
+          "v": 4
          }
         ]
        },
@@ -578,10 +502,13 @@
          "data": {
           "notes": {
            "index": 2,
-           "value": {
+           "item": {
             "id": "c",
             "v": 4
-           }
+           },
+           "length": 3,
+           "list": "notes",
+           "operation": "append"
           }
          },
          "event": "subscription_data",
@@ -600,10 +527,13 @@
         "data": {
          "notes": {
           "index": 2,
-          "value": {
+          "item": {
            "id": "c",
            "v": 4
-          }
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
          }
         },
         "granularity": "high",

@@ -10,10 +10,12 @@ from actingweb.property_list import (
     ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,
+    handle_old_item_fields,
 )
 
 from ..db.exceptions import DbError
 from ..trust import is_valid_peer_baseuri
+from .properties import list_length_hint, register_list_diff
 
 logger = logging.getLogger(__name__)
 
@@ -475,9 +477,8 @@ class WwwHandler(base_handler.BaseHandler):
                         list_prop = getattr(myself.property_lists, prop_name)
                         list_prop.delete()  # Delete entire list including metadata
 
-                        # Register diff for subscription callbacks
-                        myself.register_diffs(
-                            target="properties", subtarget=prop_name, blob=""
+                        register_list_diff(
+                            myself, self.config, prop_name, "delete_all", length=0
                         )
                         deleted = True
                     except DbError:
@@ -1072,6 +1073,14 @@ class WwwHandler(base_handler.BaseHandler):
                                 list_prop.set_description(description)
                             if explanation is not None:
                                 list_prop.set_explanation(explanation)
+                            # 3.16: subscribers are told (nothing was sent).
+                            register_list_diff(
+                                myself,
+                                self.config,
+                                prop_name,
+                                "metadata",
+                                length=list_length_hint(list_prop),
+                            )
 
                             # Redirect back to the property page
                             self.response.set_status(302, "Found")
@@ -1164,6 +1173,17 @@ class WwwHandler(base_handler.BaseHandler):
                             logger.debug(f"Getting list property: {prop_name}")
                             list_prop = getattr(myself.property_lists, prop_name)
                             list_prop.append(parsed_value)
+                            # 3.16: web-UI edits notify subscribers.
+                            length = list_length_hint(list_prop)
+                            register_list_diff(
+                                myself,
+                                self.config,
+                                prop_name,
+                                "append",
+                                item=parsed_value,
+                                index=max(length - 1, 0),
+                                length=length,
+                            )
                         else:
                             logger.error("List properties not supported")
                             self._list_action_error(
@@ -1250,6 +1270,9 @@ class WwwHandler(base_handler.BaseHandler):
                                             400, f"Index {index} out of range"
                                         )
                                         return
+                                    old_fields = handle_old_item_fields(
+                                        list_prop, handle
+                                    )
                                     if not list_prop.update_by_handle(
                                         handle, parsed_value
                                     ):
@@ -1258,6 +1281,9 @@ class WwwHandler(base_handler.BaseHandler):
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
+                                    update_fields: dict[str, Any] = {**old_fields}
+                                    if index is not None:
+                                        update_fields["index"] = index
                                 elif index is None:
                                     self._list_action_error(
                                         400, "Missing item_index parameter"
@@ -1272,6 +1298,16 @@ class WwwHandler(base_handler.BaseHandler):
                                         )
                                         return
                                     list_prop[index] = parsed_value
+                                    update_fields = {"index": index}
+                                register_list_diff(
+                                    myself,
+                                    self.config,
+                                    prop_name,
+                                    "update",
+                                    item=parsed_value,
+                                    length=list_length_hint(list_prop),
+                                    **update_fields,
+                                )
                             except ListItemSpanError:
                                 raise
                             except IndexError:
@@ -1321,12 +1357,31 @@ class WwwHandler(base_handler.BaseHandler):
                                             400, f"Index {index} out of range"
                                         )
                                         return
+                                    old_fields = handle_old_item_fields(
+                                        list_prop, handle
+                                    )
                                     if not list_prop.delete_by_handle(handle):
                                         self._list_action_error(
                                             503, "List item concurrently modified"
                                         )
                                         self.response.headers["Retry-After"] = "1"
                                         return
+                                    if "old_item" in old_fields:
+                                        delete_op = "remove"
+                                        delete_fields: dict[str, Any] = {
+                                            "item": old_fields["old_item"]
+                                        }
+                                    elif index is not None:
+                                        # A spanned item, not read: by index.
+                                        delete_op = "delete"
+                                        delete_fields = {"index": index}
+                                    else:
+                                        # Spanned and addressed by rank: a
+                                        # reference (the replica rebuilds).
+                                        delete_op = "remove"
+                                        delete_fields = {
+                                            "spanned_bytes": old_fields["spanned_bytes"]
+                                        }
                                 elif index is None:
                                     self._list_action_error(
                                         400, "Missing item_index parameter"
@@ -1341,6 +1396,16 @@ class WwwHandler(base_handler.BaseHandler):
                                         )
                                         return
                                     del list_prop[index]
+                                    delete_op = "delete"
+                                    delete_fields = {"index": index}
+                                register_list_diff(
+                                    myself,
+                                    self.config,
+                                    prop_name,
+                                    delete_op,
+                                    length=list_length_hint(list_prop),
+                                    **delete_fields,
+                                )
                             except ListItemSpanError:
                                 raise
                             except IndexError:
@@ -1447,6 +1512,10 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop.set_description(description)
                         if explanation:
                             list_prop.set_explanation(explanation)
+                        if not description and not explanation:
+                            # Persist the metadata, or the list does not exist (3.16:
+                            # a form without a description created nothing).
+                            list_prop.set_description("")
 
                         # Execute property post hook if available for list creation
                         if self.hooks:
@@ -1465,6 +1534,15 @@ class WwwHandler(base_handler.BaseHandler):
                                         "List property creation not allowed by hooks",
                                     )
                                     return
+                        # 3.16: subscribers learn of the new list.
+                        register_list_diff(
+                            myself,
+                            self.config,
+                            property_name,
+                            "extend",
+                            items=[],
+                            length=0,
+                        )
                     else:
                         self.response.set_status(500, "List properties not supported")
                         return
@@ -1511,6 +1589,14 @@ class WwwHandler(base_handler.BaseHandler):
                         )
                         return
                     myself.property[property_name] = final_value
+                    # 3.16: as the REST PUT registers it (nothing was sent).
+                    myself.register_diffs(
+                        target="properties",
+                        subtarget=property_name,
+                        blob=final_value
+                        if isinstance(final_value, str)
+                        else json.dumps(final_value),
+                    )
 
                 else:
                     # Unknown property type

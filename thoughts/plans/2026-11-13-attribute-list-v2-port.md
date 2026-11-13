@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
@@ -1431,23 +1431,84 @@ row.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time (docs build included)
-- [ ] `grep -n '"action":' actingweb/handlers/properties.py` shows no
+- [x] `grep -n '"action":' actingweb/handlers/properties.py` shows no
       `register_diffs` blob
-- [ ] `grep -rn "auto_delete_on_revocation\|apply_callback_data(" docs/`
+- [x] `grep -rn "auto_delete_on_revocation\|apply_callback_data(" docs/`
       shows no sample against the old behaviour
-- [ ] `git show --stat HEAD -- tests/integration/wire` lists only rows
+- [x] `git show --stat HEAD -- tests/integration/wire` lists only rows
       `rows.toml` assigns to `attribute-list-v2-port:4`, with
       the `Wire-Phase` trailer
-- [ ] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
+- [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
 - [ ] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, recorded in this plan's verification
       document
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-13):
+
+- **Shape.** `build_list_diff()`, `UNSET` and `LIST_DIFF_OPERATIONS` in
+  `property_list.py` (an unknown operation raises); `handle_old_item_fields()`
+  there too, which names the item a handle held without reading bodies
+  (`old_item`, or `spanned_bytes` for a spanned or malformed item, never
+  serialising `UNRESOLVED`; `NotifyingListProperty` uses it as well, which
+  fixes a malformed item's diff failing to serialise). The handlers share
+  `register_list_diff()` and `list_length_hint()` in `handlers/properties.py`
+  (`www.py` imports them). The bulk path records each change as it lands in a
+  per-list `_PostListDiffs`, kept apart from `pair` (the response body), so a
+  request stopped part way announces what was written; the threshold counts
+  the planned changes after validation (v2: updates not cancelled by a delete
+  plus in-range deletes; v1: updates plus deletes), and a batch over it
+  requests the resync only once the whole batch was applied (a 403 from the
+  post hook included, a fault not).
+- **Deviations.**
+  - A web-UI delete addressed by rank (no index) of a spanned item is a
+    `remove` reference (the replica rebuilds); by index it is `delete`.
+  - **Found and fixed:** a list created through the web UI's form or `POST
+    /properties` with `property_type=list` and no description stored no
+    metadata, so it did not exist (WL10 recorded it as missing); the
+    metadata is now stored, and the announced empty `extend` is true.
+  - The web UI's simple property create and update registers the value
+    written (as text when it is text), as the REST `PUT` does.
+  - `request_resync()` decides readability per subscription with
+    `_may_read(subtarget)` for `properties` (the subscription's creation
+    check for other targets); it re-sends to a previously missed subscriber
+    only when that subscriber may still read the list, and the pending record
+    is rewritten with this call's misses.
+  - The filter recognises a list by name only behind a shape gate (a value
+    with `list` and `operation`, or a subtarget state keyed by its own name),
+    so ordinary objects cost no `exists()` read; the gate decides nothing.
+  - `tests/test_property_list_spans.py:985-997` needed no change (a spanned
+    list gets no `clear`, so its first stored diff is still the reference);
+    the two-diff shape is tested in `tests/test_list_diff_resync_and_filter.py`.
+  - No consumer note (owner, 2026-11-13): what it would have told Emm is
+    in `docs/migration/v3.16.rst`, "Attribute lists and list diffs", under
+    "What to check in your application" (hooks that branch on a diff's
+    shape, `deleted_names` beside `revoked_patterns`, test doubles of the
+    attribute store, bucket sweeps and `$aux`, direct row reads, the replica
+    API, mixed versions), where every consumer picks it up.
+- **Recordings.** Re-recorded, owned by `:4`: `WL1`-`WL6` (both levels),
+  `WL7.target`, `WL8` (both), `WL10.target`, `WL13.target`, `WD12` (list
+  diffs instead of scalars; the full state a `clear` then an `extend`, B holds
+  `notes` once). `WP4` (owned by `:3`) is re-recorded in the Phase 3 fixup:
+  an older-stamped callback whose `properties` differ now reconciles.
+  `tests/integration/test_subscription_sync_coverage.py::test_003` pinned the
+  empty replica as owned by `:4`; it now asserts the three items.
+- **Tests.** `tests/test_list_diff_publishers.py` (each table row, the bulk
+  threshold at 25/26, a run of appends, a mixed batch, a hook-rejected batch,
+  the web UI rows), `tests/test_list_diff_resync_and_filter.py`
+  (`request_resync`, the filter as a unit on push and pull, the two-diff full
+  state, a replica already holding the list), and
+  `tests/integration/test_list_diff_replica.py` (both levels: the replica
+  equals the publisher's list after every edit over HTTP, the web UI and the
+  SDK, bulk 10 and 30, list create and delete, and no stray scalar). Not
+  written as listed: per-row tests with a spanned item for every route (the
+  reference path is covered by `build_list_diff` and the `remove` reference
+  tests), and two overlapping bulk requests.
 
 ---
 
@@ -1593,3 +1654,39 @@ released v3.15.1: the two `SECURITY` fixes stay in this plan and ship with
   remove them.
 - Whether `ListProperty.clear()` keeps the meta row; `WL11.target` records an
   empty list after `clear` and is a canary for it.
+
+## Implementation Summary
+
+**Completed:** 2026-11-13
+**All phases:** Complete (records commit, Phases 1-4, one commit each; the
+branch is not pushed until the PR opens: Phases 2 and 3 close holes open in
+v3.15.1)
+**Test status:** All passing. Full tier before the Phase 4 commit, with the
+amended Phase 3 under it: DynamoDB 7,387 passed, PostgreSQL 7,167 passed,
+ruff, pyright and `verify_groups.py` clean, docs build clean (`-W`). The
+amended Phase 3 tree alone: unit suite 5,801 passed, `WP4` and the sync
+coverage tests passed.
+
+### Still owed before the PR opens
+- **Emm's suite on this branch** (`thoughts/todo/emm-suite-against-master.md`,
+  gate 2): not run. The Phase 4 verification box stays open.
+- **`/verify_implementation`** for each phase (the owner's per-phase routine):
+  not run. The outside voice ran on Phases 1, 2 and 3; not on Phase 4.
+
+### Deviations from Plan
+- Each phase's notes list them. In short: the format moved with two hooks
+  and split helpers (Phase 1); `pop(0)`/`insert(0, …)` keep a keys-only read
+  (Phase 3); a rebuild is reserved per attempt and deletes what the baseline
+  no longer carries, and the out-of-step mark is an attribute of
+  `ReplicaApplyResult` (Phase 3 outside voice); a form-created list without
+  a description now exists, and the consumer note became a checklist in
+  the migration guide (Phase 4).
+
+### Learnings
+- A wire row that pins a known-wrong outcome to a later phase (`WL10`'s
+  missing list, `test_003`'s empty replica) is where that phase finds bugs
+  its own tests would not: the web-UI list form had never created a list.
+- A flag that a peer's data can name (`out_of_step` as a result key) is a
+  peer-reachable switch; results that steer control flow belong outside the
+  per-key map.
+

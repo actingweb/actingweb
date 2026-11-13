@@ -271,7 +271,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete_all\", \"length\": 0}}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         }
@@ -431,7 +431,11 @@
         {
          "actor": "<B>",
          "data": {
-          "notes": ""
+          "notes": {
+           "length": 0,
+           "list": "notes",
+           "operation": "delete_all"
+          }
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -447,7 +451,11 @@
        "query": "",
        "request": {
         "data": {
-         "notes": ""
+         "notes": {
+          "length": 0,
+          "list": "notes",
+          "operation": "delete_all"
+         }
         },
         "granularity": "high",
         "id": "<A>",

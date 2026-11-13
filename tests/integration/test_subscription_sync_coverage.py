@@ -380,17 +380,13 @@ class TestSyncSubscriptionBaseline:
             actor=actor_interface, peer_id=self.actor_b["id"], validate_peer_id=False
         )
 
-        # Today: B's REST item adds were queued as diffs, so the sync applies
-        # them rather than the baseline, and a REST list diff is not applied
-        # as a list operation (wire row WL1): A's replica list stays empty.
-        # attribute-list-v2-port:4 owns the change.
-        # The four queued diffs (the list created, three items added) are
-        # what the sync applied, not a baseline: the counter says four, and
-        # A's subscription moved four sequences on (the counter alone counts
-        # a diff whatever its handler stored).
+        # B's REST item adds were queued as list diffs (3.16,
+        # attribute-list-v2-port Phase 4): the sync applies the four diffs
+        # (the empty list created, three appends), not a baseline, and A's
+        # replica holds the list. A's subscription moved four sequences on.
         assert result.diffs_processed == 4, result
         assert after["sequence"] == before["sequence"] + 4, (before, after)
-        assert remote_store.get_list("items") == []
+        assert remote_store.get_list("items") == ["Item 1", "Item 2", "Item 3"]
 
     def test_004_cleanup(self) -> None:
         """Clean up test actors (handled by fixture cleanup)."""

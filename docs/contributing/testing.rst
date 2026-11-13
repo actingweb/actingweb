@@ -572,12 +572,21 @@ Verify peer data storage:
        store.set_list("items", [{"id": 1}, {"id": 2}])
        assert len(store.get_list("items")) == 2
 
-       # Test list operations
-       store.apply_list_operation("items", {
-           "operation": "append",
-           "items": [{"id": 3}]
+       # Test a list diff, as a whole-target subscription delivers it
+       result = store.apply_callback_data({
+           "items": {"list": "items", "operation": "append", "length": 3,
+                     "index": 2, "item": {"id": 3}},
        })
+       assert result.out_of_step is None
        assert len(store.get_list("items")) == 3
+
+       # A subtarget-level subscription delivers the bare diff
+       result = store.apply_callback_data(
+           {"list": "items", "operation": "update", "length": 3,
+            "index": 9, "item": {"id": 9}},
+           subtarget="items",
+       )
+       assert result.out_of_step is not None  # index out of range: rebuild
 
        # Test cleanup
        store.delete_all()

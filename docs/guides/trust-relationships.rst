@@ -401,14 +401,21 @@ This enables efficient permission checking without network requests.
        fqdn="myapp.example.com"
    ).with_peer_permissions(
        enable=True,
-       auto_delete_on_revocation=True,   # Delete cached data when revoked
+       auto_delete_on_revocation=True,   # Delete replica data the new grant hides
        notify_peer_on_change=True        # Auto-notify peers (default)
    )
 
 **Configuration Options:**
 
 - ``enable``: Enable peer permissions caching. Default: ``True`` when called.
-- ``auto_delete_on_revocation``: Delete cached peer data when permissions revoked. Default: ``False``.
+- ``auto_delete_on_revocation``: When the peer's grant changes, delete from its replica
+  (``remote:<peer_id>``) what the new grant no longer lets this actor read, computed
+  from the stored grant with the publisher's matcher: scalars and lists, including
+  what an added exclusion or a dropped ``read`` takes away. Covers a peer subscribed
+  to on the whole ``properties`` target; a grant it cannot evaluate deletes nothing.
+  The permission callback hook's ``permission_changes`` lists the result in
+  ``deleted_names`` (see :doc:`../quickstart/configuration`, "Auto-Delete on
+  Permission Revocation"). Default: ``False``.
 - ``notify_peer_on_change``: Auto-notify peers when their permissions change. Default: ``True``.
 
 When enabled, permissions are:

@@ -72,7 +72,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 4
+        "version": 5
        }
       ],
       "peer_permissions": {
@@ -300,6 +300,59 @@
       {
        "auth": "bearer:trust:A-B",
        "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
+       "path": "/<A>/subscriptions/<B>/<sub1>",
+       "query": "",
+       "request": null,
+       "response": {
+        "data": [
+         {
+          "data": {
+           "notes": {
+            "index": 0,
+            "item": {
+             "id": "small"
+            },
+            "length": 1,
+            "list": "notes",
+            "operation": "append"
+           }
+          },
+          "sequence": 1,
+          "timestamp": "<ts:iso-z>"
+         },
+         {
+          "data": {
+           "notes": {
+            "bytes": 400025,
+            "index": 1,
+            "length": 2,
+            "list": "notes",
+            "operation": "append",
+            "spanned": true
+           }
+          },
+          "sequence": 2,
+          "timestamp": "<ts:iso-z>"
+         }
+        ],
+        "id": "<A>",
+        "peerid": "<B>",
+        "resource": "",
+        "sequence": 2,
+        "subscriptionid": "<sub1>",
+        "subtarget": "",
+        "target": "properties"
+       },
+       "status": 200
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [],
        "headers": {},
        "host": "wire_app",
        "method": "PUT",
@@ -418,7 +471,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 6
+        "version": 7
        }
       ],
       "peer_permissions": {

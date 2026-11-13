@@ -133,7 +133,9 @@ class TestReceiverBranches:
         assert "error" in r["n"]
         config.list_item_max_bytes = 100
         r = remote.apply_callback_data({"n": _diff("n", "append", item="x" * 500)})
-        assert "error" in r["n"]
+        # An item this replica cannot store is out of step (verification
+        # re-run 4): the rebuild settles it as a baseline would.
+        assert r.out_of_step is not None
         remote.set_list("big", ["ok"])
         with pytest.raises(Exception):  # noqa: B017 -- the item cannot be stored
             remote.set_list("big", ["x" * 500])
@@ -464,9 +466,43 @@ class TestVerification3Findings:
         assert r.out_of_step is None
         assert remote.get_list("n") == after
 
-    def test_a_subtarget_baseline_that_is_an_array_is_a_list(self, env):
+    def test_a_subtarget_baseline_that_is_a_bare_array_is_a_value(self, env):
+        """The fetch wraps a list's items (it asks the publisher); a bare
+        array is a scalar's value (verification re-run 4)."""
         remote, _, _ = env
-        r = remote.apply_resync_data([1, 2], subtarget="notes")
+        r = remote.apply_resync_data([1, 2], subtarget="tags")
         assert r.failed == []
-        assert remote.get_list("notes") == [1, 2]
-        assert remote.get_value("notes") is None
+        assert remote.get_value("tags") == {"value": [1, 2]}
+        assert remote.list_all_lists() == []
+
+
+class TestVerification4Findings:
+    """Verification re-run 4."""
+
+    def test_an_empty_subtarget_baseline_keeps_the_list_and_fails(self, env):
+        remote, _, _ = env
+        remote.set_list("notes", ["a"])
+        r = remote.apply_resync_data({}, subtarget="notes")
+        assert r.failed == ["notes"]
+        assert remote.get_list("notes") == ["a"]
+
+    def test_an_item_the_replica_cannot_store_is_out_of_step(self, env):
+        remote, _, config = env
+        remote.set_list("n", ["a"])
+        config.list_item_max_bytes = 100
+        r = remote.apply_callback_data({"n": _diff("n", "append", item="x" * 500)})
+        assert r.out_of_step is not None
+
+    def test_an_insert_on_a_short_replica_is_out_of_step(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["a", "b", "c"])
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "insert", index=10, item="i", length=12)}
+        )
+        assert r.out_of_step is not None
+        assert remote.get_list("n") == ["a", "b", "c"]
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "insert", index=-1, item="i", length=4)}
+        )
+        assert r.out_of_step is None
+        assert remote.get_list("n") == ["a", "b", "i", "c"]

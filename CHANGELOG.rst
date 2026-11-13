@@ -1069,8 +1069,8 @@ CHANGED
   lists, an added exclusion and a dropped ``read`` included, for a peer
   subscribed to its ``properties`` target at any level, and rewrites an
   object without its excluded parts; when another target of the same peer
-  is also subscribed (stored in the same replica), only names matching a
-  dropped pattern go. A grant it cannot evaluate deletes nothing.
+  is also subscribed (stored in the same replica), only lists matching a
+  dropped pattern go, as before. A grant it cannot evaluate deletes nothing.
   ``permission_changes`` gains ``deleted_names`` (what was deleted; an
   exclusion-based deletion is there, not in ``revoked_patterns``) and
   ``not_evaluated`` (why nothing was evaluated, else ``None``);

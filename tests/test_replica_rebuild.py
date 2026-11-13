@@ -49,11 +49,17 @@ class _Env:
         return self.baselines.pop(0) if len(self.baselines) > 1 else self.baselines[0]
 
     def rebuild(self, **kwargs: Any) -> Any:
-        sub_obj = MagicMock()
-        sub_obj.get.side_effect = lambda: dict(self.recorded)
-        sub_obj.handle.modify.side_effect = lambda seqnr: self.recorded.update(
-            sequence=seqnr
-        )
+        def subscription(**_: Any) -> Any:
+            # As the real class: the first read is served from a copy taken
+            # at construction.
+            sub_obj = MagicMock()
+            snapshot = dict(self.recorded)
+            sub_obj.get.side_effect = lambda: dict(snapshot)
+            sub_obj.handle.modify.side_effect = lambda seqnr: self.recorded.update(
+                sequence=seqnr
+            )
+            return sub_obj
+
         with (
             patch.object(
                 self.manager, "get_callback_subscription", return_value=self.sub
@@ -64,7 +70,7 @@ class _Env:
                 "_fetch_and_transform_baseline",
                 side_effect=self._baseline,
             ),
-            patch("actingweb.subscription.Subscription", return_value=sub_obj),
+            patch("actingweb.subscription.Subscription", side_effect=subscription),
         ):
             return self.manager.rebuild_subscription(PEER, SUB, **kwargs)
 
@@ -229,7 +235,7 @@ class TestVerification2:
 
     def test_revocation_of_a_shared_bucket_needs_a_dropped_pattern(self, env):
         from actingweb.peer_permissions import PeerPermissions
-        from actingweb.replica_revocation import RevokedNames, plan_cleanup
+        from actingweb.replica_revocation import NotEvaluated, plan_cleanup
 
         env.config.auto_delete_on_revocation = True
         grant = PeerPermissions(
@@ -247,9 +253,8 @@ class TestVerification2:
             ),
         ):
             plan = plan_cleanup(env.config, ACTOR, env.replica, None, grant)
-        # No old grant, so no dropped pattern: nothing of the shared bucket goes
-        # (the full evaluation would have deleted every unreadable name).
-        assert isinstance(plan, RevokedNames) and plan.names == []
+        # No old grant, so no dropped pattern: not evaluated, and it says so.
+        assert isinstance(plan, NotEvaluated)
 
     @pytest.mark.parametrize("meanwhile", [9, 5, 3])
     def test_a_callback_processed_during_the_rebuild_leaves_it_owed(
@@ -335,3 +340,152 @@ class TestVerification3:
             )
         row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
         assert row is not None and row["claimed_seq"] == 20
+
+
+class TestVerification4:
+    """Verification re-run 4 (findings 1 and 2)."""
+
+    def test_a_callback_recorded_during_the_rebuild_is_never_written_back(self, env):
+        env.owe()
+
+        def bump(**_: Any) -> Any:
+            env.recorded["sequence"] = 9
+            return {}
+
+        with patch.object(env, "_baseline", side_effect=bump):
+            result = env.rebuild()
+        assert env.recorded["sequence"] == 9
+        assert result.success is False
+
+    def test_a_skipped_subtarget_rebuild_deletes_nothing(self, env):
+        env.sub.subtarget = "notes"
+        env.replica.set_list("notes", ["kept"])
+        env.owe(["notes"])
+        env.baselines = [{}]
+        with patch(
+            "actingweb.replica_revocation.subscribes_to_whole_properties",
+            return_value=True,
+        ):
+            env.rebuild(force=True)
+        assert env.replica.get_list("notes") == ["kept"]
+
+
+class TestVerification4Covered:
+    """Verification re-run 4 (finding 3, the dropped batch's level, the
+    tool's owed rebuild)."""
+
+    def test_a_whole_target_subscription_never_pushed_to_covers_nothing(self):
+        from actingweb.replica_revocation import subscribes_to_whole_properties
+
+        listing = MagicMock()
+        listing.fetch.return_value = [
+            {
+                "peerid": PEER,
+                "callback": True,
+                "target": "properties",
+                "granularity": "none",
+            }
+        ]
+        with patch("actingweb.db.get_subscription_list", return_value=listing):
+            assert subscribes_to_whole_properties(MagicMock(), ACTOR, PEER) is False
+
+    def test_deleting_a_covering_subscription_owes_the_covered_a_rebuild(self):
+        from actingweb.actor import Actor
+
+        actor = object.__new__(Actor)
+        actor.id = ACTOR
+        actor.config = MagicMock()
+        actor.subs_list = None
+        rows = [
+            {"peerid": PEER, "subscriptionid": "whole", "target": "properties"},
+            {
+                "peerid": PEER,
+                "subscriptionid": "one",
+                "target": "properties",
+                "subtarget": "notes",
+            },
+        ]
+        sub = MagicMock()
+        sub.delete.return_value = True
+        with (
+            patch.object(actor, "get_subscriptions", return_value=rows),
+            patch("actingweb.subscription.Subscription", return_value=sub),
+            patch.object(actor, "_owe_covered_rebuilds") as owe,
+            patch("actingweb.remote_storage.RemotePeerStore"),
+            patch("actingweb.interface.actor_interface.ActorInterface"),
+        ):
+            assert actor.delete_subscription(PEER, "whole", callback=True)
+        owe.assert_called_once()
+        assert [s["subscriptionid"] for s in owe.call_args.args[1]] == ["one"]
+
+    def test_a_subtarget_subscriptions_dropped_batch_owes_no_names(self, env):
+        env.sub.subtarget = "profile"
+        with patch.object(
+            env.processor._actor.subscriptions,  # noqa: SLF001
+            "get_callback_subscription",
+            return_value=env.sub,
+        ):
+            assert env.processor._whole_target(PEER, SUB) is False  # noqa: SLF001
+        env.sub.subtarget = ""
+        env.sub.resource = ""
+        with patch.object(
+            env.processor._actor.subscriptions,  # noqa: SLF001
+            "get_callback_subscription",
+            return_value=env.sub,
+        ):
+            assert env.processor._whole_target(PEER, SUB) is True  # noqa: SLF001
+
+    def test_the_tool_owes_a_rebuild_after_deleting_a_damaged_replica(self, env):
+        from actingweb.maintenance.verify_property_lists import _owe_replica_rebuild
+
+        listing = MagicMock()
+        listing.fetch.return_value = [
+            {"peerid": PEER, "subscriptionid": SUB, "callback": True}
+        ]
+        lst = MagicMock(actor_id=ACTOR, config=env.config)
+        lst.name = "notes"
+        with patch("actingweb.db.get_subscription_list", return_value=listing):
+            assert _owe_replica_rebuild(lst, f"remote:{PEER}") == 1
+        state = env.processor.rebuild_state(PEER, SUB)
+        assert state["owed"] and state["lists"] == ["notes"]
+
+
+class TestVerification4Fetch:
+    """Verification re-run 4: an array baseline asks the publisher."""
+
+    @pytest.mark.parametrize(
+        ("meta", "code", "expected"),
+        [
+            ({"description": ""}, 200, {"notes": {"_list": True, "items": [1]}}),
+            ({"error": {"code": 404}}, 404, [1]),
+            ({"error": {"code": 500}}, 500, None),
+        ],
+    )
+    def test_list_scalar_or_failure(self, env, meta, code, expected):
+        proxy = MagicMock()
+
+        def get(path: str) -> Any:
+            if path.endswith("/metadata"):
+                proxy.last_response_code = code
+                return meta
+            proxy.last_response_code = 200
+            return [1]
+
+        proxy.get_resource.side_effect = get
+        with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+            got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+                PEER, "properties", subtarget="notes"
+            )
+        assert got == expected
+
+
+def test_a_known_list_needs_no_probe() -> None:
+    env = _Env()
+    proxy = MagicMock()
+    proxy.get_resource.return_value = [1]
+    with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+        got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+            PEER, "properties", subtarget="notes", known_list=True
+        )
+    assert got == {"notes": {"_list": True, "items": [1]}}
+    proxy.get_resource.assert_called_once()

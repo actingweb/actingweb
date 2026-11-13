@@ -1014,10 +1014,11 @@ the replica's ``profile_private`` (a list or a scalar) is deleted, and
 - A peer this actor subscribes to on its ``properties`` target, at any level, is
   covered.
 - When this actor also subscribes to another target of the same peer (its data is
-  stored in the same replica), only the names matching a pattern the grant dropped,
-  and that the new grant no longer lets this actor read, are deleted: the property
-  grant does not decide the other target's names, and the replica does not record
-  which subscription stored a key.
+  stored in the same replica), only the lists matching a pattern the grant dropped,
+  and that the new grant no longer lets this actor read, are deleted (as before
+  3.16), and a change that drops no pattern deletes nothing (``not_evaluated``
+  says why): the property grant does not decide the other target's names, and the
+  replica does not record which subscription stored a key.
 - A grant the library cannot evaluate deletes nothing (``not_evaluated`` names the
   reason, and a WARNING is logged): one with no property rules, rules in the
   ``allowed``/``denied`` shape, rules without ``patterns`` or ``operations``, or

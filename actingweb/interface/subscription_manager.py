@@ -2517,8 +2517,6 @@ class SubscriptionManager:
             )
             settled = False
         assert sequence is not None
-        if isinstance(baseline, list) and sub.subtarget:
-            baseline = {sub.subtarget: {"_list": True, "items": baseline}}
         # A resource-level baseline may be any value (merged at its path).
         baseline_data: dict[str, Any] = cast(dict[str, Any], baseline)
 
@@ -2539,14 +2537,17 @@ class SubscriptionManager:
                 )
                 settled = False
             carried = set(applied)
+            # A skipped apply (a whole-target subscription stores these
+            # names) sweeps nothing: what this baseline lacks is not stale.
             stale: set[str] = (
                 set()
                 if applied.skipped
                 else {name for name in owed if name not in carried}
             )
-            if (
-                not applied.skipped
-                and sub.target == "properties"
+            if applied.skipped:
+                pass
+            elif (
+                sub.target == "properties"
                 and not sub.subtarget
                 and isinstance(baseline, dict)
                 and not stores_another_target(
@@ -2571,14 +2572,18 @@ class SubscriptionManager:
                     store.delete_list(name)
                 else:
                     store.delete_value(name)
+        # Read afresh: a Subscription serves its first read from a cache, and
+        # the check below must see what a callback recorded meanwhile.
+        sub_obj = Subscription(
+            actor_id=self._core_actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._core_actor.config,
+        )
         if sub_obj.handle:
             current = sub_obj.get() or {}
             recorded = current.get("sequence", 0)
-            if recorded != recorded_before:
-                # A callback was processed while this ran: its change may
-                # be in the baseline and applied again, or overwritten by
-                # it. Owed again.
-                settled = False
             if not isinstance(recorded, int) or recorded < sequence:
                 # Never backwards: a callback processed while this ran may
                 # have recorded a later sequence.
@@ -2670,7 +2675,8 @@ class SubscriptionManager:
         target: str,
         subtarget: str | None = None,
         resource: str | None = None,
-    ) -> dict[str, Any] | None:
+        known_list: bool = False,
+    ) -> Any:
         """
         Fetch and transform baseline data from peer (synchronous).
 
@@ -2721,8 +2727,28 @@ class SubscriptionManager:
                 peer_id=peer_id,
                 target=target,
             )
-        else:
-            return baseline_response
+        if (
+            target == "properties"
+            and subtarget
+            and not resource
+            and isinstance(baseline_response, list)
+        ):
+            # An array is a list's items or a scalar's value: the metadata
+            # route answers 200 only for a list and 404 for a scalar; any
+            # other answer is a failed fetch (never a guess, 3.16).
+            # ``known_list``: the caller's replica holds it as a list.
+            if known_list:
+                return {subtarget: {"_list": True, "items": baseline_response}}
+            meta = proxy.get_resource(path=f"properties/{subtarget}/metadata")
+            if isinstance(meta, dict) and "error" not in meta:
+                return {subtarget: {"_list": True, "items": baseline_response}}
+            if proxy.last_response_code != 404:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                    f"list from a scalar ({proxy.last_response_code})"
+                )
+                return None
+        return baseline_response
 
     async def _fetch_and_transform_baseline_async(
         self,
@@ -2730,7 +2756,8 @@ class SubscriptionManager:
         target: str,
         subtarget: str | None = None,
         resource: str | None = None,
-    ) -> dict[str, Any] | None:
+        known_list: bool = False,
+    ) -> Any:
         """
         Fetch and transform baseline data from peer (asynchronous).
 
@@ -2775,9 +2802,30 @@ class SubscriptionManager:
             return None
 
         # For properties subscriptions, transform list metadata into actual items
+        if (
+            target == "properties"
+            and subtarget
+            and not resource
+            and isinstance(baseline_response, list)
+        ):
+            # As the synchronous fetch: the metadata route answers only for
+            # a list.
+            if known_list:
+                return {subtarget: {"_list": True, "items": baseline_response}}
+            meta = await proxy.get_resource_async(
+                path=f"properties/{subtarget}/metadata"
+            )
+            if isinstance(meta, dict) and "error" not in meta:
+                return {subtarget: {"_list": True, "items": baseline_response}}
+            if proxy.last_response_code != 404:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                    f"list from a scalar ({proxy.last_response_code})"
+                )
+                return None
         if target == "properties" and not subtarget and not resource:
             return await self._transform_baseline_list_properties_async(
-                baseline_data=baseline_response,
+                baseline_data=cast(dict[str, Any], baseline_response),
                 peer_id=peer_id,
                 target=target,
             )

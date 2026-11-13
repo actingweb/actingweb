@@ -718,3 +718,15 @@ class TestVerificationFindings:
         with pytest.raises(ListLayoutConflictError):
             lst.prime_from_rows(rows)
         assert lst._layout is None  # noqa: SLF001
+
+
+class TestVerification4:
+    """Verification re-run 4 (a sibling list's rows inside the range)."""
+
+    def test_a_sibling_named_with_a_hash_does_not_block_the_conversion(self, env):
+        config, store = env
+        _plant_old(store, "a", ["x"])
+        _plant_old(store, "a-#b", ["y"])
+        _lst(config, "a").append("z")
+        assert _lst(config, "a").to_list() == ["x", "z"]
+        assert _lst(config, "a-#b").to_list() == ["y"]

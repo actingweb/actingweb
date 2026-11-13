@@ -829,22 +829,29 @@ class CallbacksHandler(base_handler.BaseHandler):
                 try:
                     # Use SubscriptionManager's baseline fetch helper
                     # This handles metadata expansion, property list transformations, etc.
+                    # A replica already holding the subtarget as a list needs
+                    # no probe to read an array as that list's items (a list
+                    # turned scalar is caught by its next diff, out of step).
+                    known_list = bool(
+                        target == "properties"
+                        and subtarget
+                        and not resource
+                        and RemotePeerStore(
+                            actor_interface, peer_id, validate_peer_id=False
+                        )._list_exists(subtarget)  # noqa: SLF001
+                    )
                     callback_data = (
                         actor_interface.subscriptions._fetch_and_transform_baseline(
                             peer_id=peer_id,
                             target=target,
                             subtarget=subtarget,
                             resource=resource,
+                            known_list=known_list,
                         )
                     )
                     if callback_data:
-                        # Handle list responses when fetching a subtarget (e.g., properties/list_name)
-                        # _fetch_and_transform_baseline returns a raw list for list properties,
-                        # but apply_resync_data expects a dict. Wrap the list in the expected format.
-                        if isinstance(callback_data, list) and subtarget:
-                            callback_data = {
-                                subtarget: {"_list": True, "items": callback_data}
-                            }
+                        # A list's items arrive wrapped as a list by the fetch
+                        # (it asks the publisher); a bare array is a scalar's.
                         logger.debug(
                             f"Fetched resync baseline for {target}"
                             f"{f'/{subtarget}' if subtarget else ''}: "

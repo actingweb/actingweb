@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-3.md
+verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-4.md
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
@@ -1996,3 +1996,91 @@ each minute: throttled, cost and bounded staleness); OV10 (concurrent v2
 writers make a length wrong: a rebuild, no corruption); CR5 (a held
 `ListAttribute` instance keeps a settled old layout; owner-only, the store
 hands out an instance per access); CR7, CR8, CR9 (read cost).
+
+### 2026-11-14, after verification re-run 4 (outside voice and code review on `60c7ca7..7955475`; recorded in thoughts/verifications/2026-11-14-attribute-list-v2-port-4.md)
+
+#### 19. The rebuild's sequence check read a cached row (finding 1)
+
+**Category**: Bug fix (introduced in iteration 15)
+
+**What changed**: the rebuild reads the recorded sequence through a fresh
+`Subscription` after the apply (a `Subscription` serves its first read from
+a copy taken at construction, so the object built before the baseline never
+saw a callback recorded meanwhile, and "never backwards" wrote over it).
+`tests/test_replica_rebuild.py` now builds the double as the real class
+does, a snapshot per construction.
+
+#### 20. A skipped rebuild sweeps nothing; covering is narrower (findings 2, 3)
+
+**Category**: Verification fix
+
+**What changed**: a skipped apply returns before any stale work (the
+subtarget branch deleted the covering subscription's copy); only a
+whole-target subscription that is pushed to (granularity not `none`)
+covers; deleting a covering subscription owes each covered subtarget
+subscription a rebuild (`Actor._owe_covered_rebuilds`).
+
+**Files affected**: `actingweb/interface/subscription_manager.py`,
+`actingweb/replica_revocation.py`, `actingweb/actor.py`;
+`tests/test_replica_rebuild.py`.
+
+#### 21. An array baseline asks the publisher (finding 4, code review 3, 4)
+
+**Category**: Verification fix (replaces iteration 16's receiver guess)
+
+**What changed**: the baseline fetch for a subtarget that answers an array
+asks `GET properties/<name>/metadata`: 200 is a list (wrapped), 404 a scalar
+(the bare array, stored as the scalar's value), anything else a failed fetch;
+a resync callback whose replica already holds the list skips the probe (so
+`WD10.import`, a canary, is unchanged). The receiver no longer reads a bare
+array as a list, and the callback handler's and the rebuild's own array
+wrappers are gone.
+
+**Files affected**: `actingweb/interface/subscription_manager.py`,
+`actingweb/handlers/callbacks.py`, `actingweb/remote_storage.py`;
+`tests/test_replica_rebuild.py`, `tests/test_subscription_baseline_fetch.py`,
+`tests/test_replica_receiver.py`.
+
+#### 22. Revocation in a shared bucket (findings 5, 6)
+
+**Category**: Verification fix
+
+**What changed**: `revoked_by_patterns` deletes lists only (as 3.15), and
+answers `NotEvaluated` when the grant changed without dropping a pattern.
+
+#### 23. Receiver and processor details (finding 7, 8; code review 1, 5, 6, 8)
+
+**Category**: Verification fix
+
+**What changed**: an insert whose `length` says the replica is short is out
+of step (the clamp no longer hides it); a dropped batch's deleted names are
+owed only for a subscription to the whole target; an empty subtarget
+baseline (a failed fetch) keeps what the replica holds and does not settle;
+an item the replica cannot store is out of step; the converter reads only
+rank rows (a pre-3.16 sibling named `<name>-#...` blocked it);
+`--delete-damaged-replicas` owes a rebuild to every subscription to the
+peer.
+
+**Files affected**: `actingweb/remote_storage.py`,
+`actingweb/callback_processor.py`, `actingweb/attribute_list.py`,
+`actingweb/maintenance/verify_property_lists.py`;
+`tests/test_replica_receiver.py`, `tests/test_attribute_list.py`,
+`tests/test_replica_rebuild.py`.
+
+#### 24. `request_resync`'s kept record; docs (codex, code review 10)
+
+**Category**: Verification fix
+
+**What changed**: a whole-target record `resume_subscriptions` wrote stays
+only when this call missed that subscriber too; the revocation module
+docstring and the configuration guide describe the any-level coverage and
+the shared-bucket rule.
+
+**Plan wording**: iteration 14 said a skipped apply "neither owes nor
+settles"; a skipped resync does settle an owed rebuild (there is nothing for
+that subscription to rebuild: the covering one stores the names).
+
+**Accepted with a record**: the converter's check-then-act (owner-only, as
+before); per-key and per-apply read cost (`_list_exists`, `_covered`);
+`repair_keys`/`sweep_span_orphans` making every subscriber rebuild (cost of
+an owner's maintenance).

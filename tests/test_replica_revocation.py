@@ -259,6 +259,6 @@ class TestVerification3:
         ):
             plan = plan_cleanup(config, ACTOR, remote, old, new)
         assert isinstance(plan, RevokedNames)
-        # settings is not readable under the new grant either, but no dropped
-        # pattern names it: another target may have stored it.
-        assert sorted(plan.names) == ["private", "private_list"]
+        # Lists only, as 3.15 (verification re-run 4): the scalar "private"
+        # and "settings" may be another target's.
+        assert plan.names == ["private_list"]

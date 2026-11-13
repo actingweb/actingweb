@@ -380,12 +380,17 @@ class TestVerification3:
             )
         assert json.loads(out) == {"profile": {"list": "x", "operation": {"ok": 2}}}
 
-    def test_a_whole_target_record_stays(self, actor) -> None:
+    @pytest.mark.parametrize("missed_again", [True, False])
+    def test_a_whole_target_record_stays_only_when_missed_again(
+        self, actor, missed_again
+    ) -> None:
         test = TestRequestResync()
         written: list[list[str]] = []
         subs = test._subs()
 
         def send(target, subtarget, batch, suspension, *, missed, fold_faults, widen):  # noqa: ANN001
+            if missed_again:
+                missed.append("p1:s1")
             return len(batch)
 
         actor.subs_list = None
@@ -401,7 +406,7 @@ class TestVerification3:
             ),
         ):
             actor.request_resync("properties", "notes")
-        assert written == [["p1:s1"]]
+        assert written == ([["p1:s1"]] if missed_again else [[]])
 
     def test_repair_keys_announces_a_reference(self) -> None:
         from actingweb.interface.property_store import NotifyingListProperty

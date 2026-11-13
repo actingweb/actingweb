@@ -90,21 +90,24 @@ class TestFetchAndTransformBaseline:
 
         mock_proxy = MagicMock()
         mock_proxy.trust = {"verified": True}
-        mock_proxy.get_resource.return_value = [
+        items = [
             {"id": "1", "location": "Paris"},
             {"id": "2", "location": "Tokyo"},
         ]
+        # The list's items, then its metadata (3.16: an array is a list's
+        # only when the metadata route answers).
+        mock_proxy.get_resource.side_effect = [items, {"description": ""}]
 
         with patch.object(manager, "_get_peer_proxy", return_value=mock_proxy):
             result = manager._fetch_and_transform_baseline(
                 peer_id="peer_1", target="properties", subtarget="memory_travel"
             )
 
-        assert result is not None
-        assert isinstance(result, list)
-        assert len(result) == 2
+        assert result == {"memory_travel": {"_list": True, "items": items}}
         # Verify subtarget is appended to path
-        mock_proxy.get_resource.assert_called_once_with(path="properties/memory_travel")
+        assert mock_proxy.get_resource.call_args_list[0].kwargs == {
+            "path": "properties/memory_travel"
+        }
 
     def test_fetch_and_transform_with_property_lists(self):
         """Test baseline fetch transforms property list metadata."""

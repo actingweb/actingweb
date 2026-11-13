@@ -3825,6 +3825,9 @@ class Actor:
         # For outbound subscriptions (callback=True), check if we need to clean up RemotePeerStore
         # We need to check this BEFORE deletion to know how many subscriptions exist
         should_cleanup_remote_peer_store = False
+        # Subscriptions to one property this one covered (it stored their
+        # names; theirs were skipped): they are owed a rebuild once it goes.
+        covered: list[dict[str, Any]] = []
         if callback and peerid:
             try:
                 # CRITICAL: Clear the subscription cache to get fresh data from database
@@ -3839,6 +3842,20 @@ class Actor:
                 remaining_subs = [
                     s for s in (other_subs or []) if s.get("subscriptionid") != subid
                 ]
+                deleted = [
+                    s for s in (other_subs or []) if s.get("subscriptionid") == subid
+                ]
+                if (
+                    deleted
+                    and deleted[0].get("target") == "properties"
+                    and not deleted[0].get("subtarget")
+                    and not deleted[0].get("resource")
+                ):
+                    covered = [
+                        s
+                        for s in remaining_subs
+                        if s.get("target") == "properties" and s.get("subtarget")
+                    ]
 
                 if remaining_subs:
                     logger.debug(
@@ -3869,6 +3886,9 @@ class Actor:
             # landed (3.16).
             self.subs_list = None
 
+        if result and covered and peerid:
+            self._owe_covered_rebuilds(peerid, covered)
+
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
         # Note: should_cleanup_remote_peer_store is only True when peerid is not None
         if result and should_cleanup_remote_peer_store and peerid:
@@ -3891,6 +3911,30 @@ class Actor:
                 logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
 
         return result
+
+    def _owe_covered_rebuilds(self, peerid: str, covered: list[dict[str, Any]]) -> None:
+        """Mark a rebuild owed for each subscription to one property that a
+        deleted whole-target subscription covered: its diffs were not stored
+        (3.16, one subscription per name writes the replica), so its replica
+        names may be stale. Best effort, logged; the next callback or sync
+        runs the rebuild."""
+        from .callback_processor import CallbackProcessor
+        from .interface.actor_interface import ActorInterface
+
+        processor = CallbackProcessor(actor=ActorInterface(self))  # type: ignore[arg-type]
+        for sub in covered:
+            try:
+                processor.settle_rebuild(
+                    peerid,
+                    str(sub.get("subscriptionid") or ""),
+                    rebuilt=False,
+                    lists=[str(sub.get("subtarget") or "")],
+                )
+            except Exception as e:  # folds DbError: best effort, delete committed
+                logger.warning(
+                    f"Could not mark the replica of {peerid}:"
+                    f"{sub.get('subscriptionid')} for a rebuild: {e}"
+                )
 
     def callback_subscription(
         self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
@@ -4720,10 +4764,11 @@ class Actor:
         whole = {
             _resync_id(s) for s in readable if subtarget and not s.get("subtarget")
         }
-        # A record ``resume_subscriptions`` wrote for one stays: this call
-        # neither re-sends it a subtarget resync nor erases its record.
+        # A record ``resume_subscriptions`` wrote for one stays only when
+        # this call missed it too: a whole-target resync it received covers
+        # what the record would re-send (as a subtarget-only resync).
         missed = [m for m in missed if m not in whole] + [
-            p for p in (pending or []) if p in whole
+            p for p in (pending or []) if p in whole and p in missed
         ]
         if pending is not None or missed:
             self._write_resync_pending(target, subtarget, missed)

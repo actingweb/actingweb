@@ -429,6 +429,19 @@ class CallbackProcessor:
             )
         return written
 
+    def _whole_target(self, peer_id: str, subscription_id: str) -> bool:
+        """Whether the subscription is to the whole target (its diffs are
+        keyed by replica name). A read fault answers False: nothing is owed
+        from the dropped batch, the rebuild still runs."""
+        try:
+            sub = self._actor.subscriptions.get_callback_subscription(
+                peer_id, subscription_id
+            )
+        except Exception as e:  # folds DbError: only narrows what is owed
+            logger.warning(f"Reading subscription {subscription_id}: {e}")
+            return False
+        return bool(sub) and not sub.subtarget and not sub.resource
+
     def _mark_or_owe(
         self,
         peer_id: str,
@@ -894,10 +907,11 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
-            if stop_at is not None:
+            if stop_at is not None and self._whole_target(peer_id, subscription_id):
                 # The rest of the batch is dropped (the rebuild supersedes
                 # it): what it deleted is owed too, so the rebuild deletes it
-                # even where it cannot sweep the bucket.
+                # even where it cannot sweep the bucket. Target-level data
+                # only: below it, a diff's keys are not replica names.
                 for dropped in callbacks_to_process:
                     if dropped.sequence > stop_at:
                         out_of_step_lists.extend(_deleted_names(dropped.data))
@@ -1324,10 +1338,11 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
-            if stop_at is not None:
+            if stop_at is not None and self._whole_target(peer_id, subscription_id):
                 # The rest of the batch is dropped (the rebuild supersedes
                 # it): what it deleted is owed too, so the rebuild deletes it
-                # even where it cannot sweep the bucket.
+                # even where it cannot sweep the bucket. Target-level data
+                # only: below it, a diff's keys are not replica names.
                 for dropped in callbacks_to_process:
                     if dropped.sequence > stop_at:
                         out_of_step_lists.extend(_deleted_names(dropped.data))

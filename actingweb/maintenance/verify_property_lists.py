@@ -574,8 +574,54 @@ def _settle_attribute_layout(
     except Exception as e:  # folds DbError: counted as error, exit 1
         logger.error(f"{label}: delete failed: {e}")
         return "error"
-    logger.warning(f"{label}: {why} -- deleted; the next baseline rebuilds it")
+    owed = _owe_replica_rebuild(list_attr, bucket)
+    logger.warning(
+        f"{label}: {why} -- deleted; "
+        + (
+            f"a rebuild is owed for {owed} subscription(s) to the peer"
+            if owed
+            else "no subscription to the peer stores it now"
+        )
+    )
     return "done"
+
+
+def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
+    """Mark a rebuild owed for every callback subscription to the replica's
+    peer, so the next callback or sync replaces the deleted list from a
+    baseline (a next ``append`` alone would recreate a partial one). Returns
+    how many were marked; a fault is logged."""
+    from types import SimpleNamespace
+
+    from actingweb.callback_processor import CallbackProcessor
+    from actingweb.db import get_subscription_list
+
+    peer_id = bucket[len("remote:") :]
+    actor_id = list_attr.actor_id
+    config = list_attr.config
+    try:
+        rows = get_subscription_list(config).fetch(actor_id, strict=True) or []
+        processor = CallbackProcessor(
+            actor=SimpleNamespace(id=actor_id, config=config)  # type: ignore[arg-type]
+        )
+        marked = 0
+        for row in rows:
+            if (
+                isinstance(row, dict)
+                and row.get("peerid") == peer_id
+                and row.get("callback")
+            ):
+                processor.settle_rebuild(
+                    peer_id,
+                    str(row.get("subscriptionid") or ""),
+                    rebuilt=False,
+                    lists=[list_attr.name],
+                )
+                marked += 1
+        return marked
+    except Exception as e:  # folds DbError: the list is deleted; logged
+        logger.error(f"Marking the rebuild of {bucket} faulted: {e}")
+        return 0
 
 
 def main() -> int:

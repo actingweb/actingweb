@@ -46,6 +46,7 @@ from .list_core import (
     ListCore,
     ListCorruptionError,
     ListLayoutConflictError,
+    _v2_is_rank,
 )
 from .property_list_span import AUX_SUFFIX, encode_item, parse, value_digest, wrap
 
@@ -469,9 +470,12 @@ class ListAttribute(ListCore):
         # What a previous run (or another converter) already wrote is
         # compared with what this conversion would write; a row the
         # conversion would not have written is a conflict, never adopted.
+        # Ranks only: a sibling list named ``<name>-#...`` in the old layout
+        # has rows inside this range that are not this list's.
         existing = {
             name[len(prefix) :]: raw
             for name, raw in self._storage.get_range(lower, upper).items()
+            if _v2_is_rank(name[len(prefix) :])
         }
         if self._storage.get(self._get_meta_property_name()) is not None:
             # Another converter finished after this one read the old rows:

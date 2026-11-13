@@ -15,6 +15,7 @@ from .db.exceptions import AttributeKeyCollision, DbError
 from .identifiers import first_control_character
 from .list_core import (
     ListCorruptionError,
+    ListItemTooLargeError,
     ListMetadataContentionError,
     ListNameTakenError,
     ListRankExhaustedError,
@@ -232,7 +233,6 @@ class RemotePeerStore:
         deletes the list (and logs it), so the next diff does not find the
         stale one; a refused name raises ``ValueError``."""
         from .db.utils import sanitize_json_data
-        from .list_core import ListItemTooLargeError
 
         why = self._invalid_list_name(name)
         if why is not None:
@@ -736,7 +736,10 @@ class RemotePeerStore:
             ListCorruptionError,
             ListRankExhaustedError,
             ListMetadataContentionError,
+            ListItemTooLargeError,
         ) as e:
+            # An item this replica cannot store leaves it short: out of step,
+            # so the rebuild settles it as a baseline would (3.16).
             raise ReplicaOutOfStep(list_name, f"{type(e).__name__}: {e}") from e
 
     def _apply_list_operation_once(
@@ -760,8 +763,20 @@ class RemotePeerStore:
                 raise ReplicaOutOfStep(list_name, f"insert index {idx!r} not an index")
             # As ``list.insert`` (and the publisher's SDK, which sends the
             # caller's index): a negative index counts from the end, and one
-            # past either end clamps.
+            # past either end clamps. The publisher's ``length`` (after the
+            # insert) tells a short replica, which the clamp would hide.
             length = len(list_attr)
+            after = data.get("length")
+            if (
+                isinstance(after, int)
+                and not isinstance(after, bool)
+                and after != length + 1
+            ):
+                raise ReplicaOutOfStep(
+                    list_name,
+                    f"insert with the replica at {length} items, the publisher "
+                    f"at {after} after it",
+                )
             idx = max(0, length + idx) if idx < 0 else min(idx, length)
             list_attr.insert(idx, data["item"])
             return {"operation": "insert", "index": idx, "success": True}
@@ -941,11 +956,12 @@ class RemotePeerStore:
                 results.failed.append(subtarget)
             return results
         entries: Any = data
+        if subtarget and (data is None or data == {}):
+            # Nothing fetched (a failed or empty baseline): never a delete of
+            # what the replica holds, and not a baseline that settles.
+            results.failed.append(subtarget)
+            return results
         if subtarget:
-            if isinstance(data, list):
-                # A list's baseline at subtarget level is its items array
-                # (``GET /properties/<list>``).
-                data = {subtarget: {"_list": True, "items": data}}
             own = _wraps_list(data, subtarget, baseline=True)
             entries = data if own else {subtarget: data}
         for key, value in entries.items():

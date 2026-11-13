@@ -1,8 +1,8 @@
 """What a changed grant takes away from a peer's replica (3.16).
 
 With ``auto_delete_on_revocation`` on, a permission change from a peer whose
-whole ``properties`` target this actor subscribes to deletes what the peer
-no longer lets it read: every replica name (scalar or list) the new grant's
+``properties`` target this actor subscribes to (at any level) deletes what
+the peer no longer lets it read: every replica name (scalar or list) the new grant's
 patterns do not grant ``read`` for, or that an exclusion covers, and inside
 a kept object every excluded descendant. The decision is the publisher's own
 (``permission_evaluator``'s matcher and path rules), computed from the stored
@@ -13,8 +13,11 @@ A grant whose shape this cannot evaluate deletes nothing and says why
 (``NotEvaluated``). Names are enumerated without their values; an object's
 value is read only when the grant excludes something.
 
-A subscription below the whole target (a subtarget or a resource) is not
-covered: the replica does not record which subscription stored a key.
+When this actor also subscribes to another target of the same peer (stored
+in the same replica bucket), only the lists matching a pattern the grant
+dropped go (``revoked_by_patterns``, what 3.15 deleted); a change that drops
+no pattern is not evaluated. The replica does not record which subscription
+stored a key.
 """
 
 from __future__ import annotations
@@ -145,9 +148,10 @@ def apply_revoked(store: RemotePeerStore, revoked: RevokedNames) -> list[str]:
 
 
 def subscribes_to_whole_properties(config: Any, actor_id: str, peer_id: str) -> bool:
-    """Whether ``actor_id`` holds a subscription to ``peer_id``'s whole
-    ``properties`` target (the only kind the cleanup covers). One read of
-    the actor's subscriptions; a fault raises ``DbError``."""
+    """Whether ``actor_id`` holds a pushed subscription to ``peer_id``'s
+    whole ``properties`` target, which stores every name a subscription to
+    one of its properties would (``RemotePeerStore`` skips the latter). One
+    read of the actor's subscriptions; a fault raises ``DbError``."""
     from .db import get_subscription_list
 
     subscriptions = get_subscription_list(config).fetch(actor_id, strict=True) or []
@@ -157,6 +161,8 @@ def subscribes_to_whole_properties(config: Any, actor_id: str, peer_id: str) -> 
         and s.get("target") == "properties"
         and not s.get("subtarget")
         and not s.get("resource")
+        # A subscription never pushed to stores nothing it could cover.
+        and s.get("granularity") != "none"
         for s in subscriptions
         if isinstance(s, dict)
     )
@@ -206,14 +212,19 @@ def revoked_by_patterns(
     store: RemotePeerStore,
     old_grant: PeerPermissions | None,
     new_grant: PeerPermissions | None,
-) -> RevokedNames:
-    """For a replica bucket another target also stores into: only the names
-    matching a pattern the grant dropped, and that the new grant does not
-    let the subscriber read (what pre-3.16 deleted); names nothing of the
-    property grant decides are kept."""
+) -> RevokedNames | NotEvaluated:
+    """For a replica bucket another target also stores into: the lists
+    matching a pattern the grant dropped that the new grant does not let the
+    subscriber read (what 3.15 deleted: lists only, so another target's
+    scalars stay). A change that drops no pattern (an exclusion added,
+    ``read`` dropped) is not evaluated here: the property grant does not
+    decide the other target's names."""
     gone = _patterns(old_grant) - _patterns(new_grant)
     if not gone:
-        return RevokedNames()
+        return NotEvaluated(
+            "the replica also holds another target's data, and the grant "
+            "change drops no pattern"
+        )
     rules = _property_rules(new_grant)
 
     def revoked(name: str) -> bool:
@@ -221,12 +232,8 @@ def revoked_by_patterns(
             return False
         return isinstance(rules, NotEvaluated) or not readable(rules, name)
 
-    scalars = [n for n in store.list_scalar_names() if not n.startswith("list:")]
     lists = store.list_all_lists(strict=True)
-    return RevokedNames(
-        scalars=[n for n in scalars if revoked(n)],
-        lists=[n for n in lists if revoked(n)],
-    )
+    return RevokedNames(lists=[n for n in lists if revoked(n)])
 
 
 def plan_cleanup(

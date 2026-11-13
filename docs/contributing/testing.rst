@@ -191,8 +191,9 @@ diff in the commit that makes it.
   it once read.
 - A commit that changes or removes a recording that exists on ``master``
   carries one ``Wire-Phase: <plan>:<phase>`` trailer naming a phase among
-  that row's owners as ``master`` has them; an ownership change lands on
-  ``master`` first. ``tests/integration/verify_groups.py`` checks the
+  that row's owners as the commit's first parent has them; ownership is
+  taken in an earlier commit, on the branch or on ``master``, never in the
+  commit that re-records. ``tests/integration/verify_groups.py`` checks the
   branch's commits since the merge base, merges included. It checks commits
   already made, so run it after committing and amend if it fails. CI runs
   it too, so a PR whose commits break the rule fails.

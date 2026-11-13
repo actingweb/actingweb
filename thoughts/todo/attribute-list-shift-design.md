@@ -1,6 +1,6 @@
 # TODO: `ListAttribute` still has the shift-loop design `ListProperty` had before v2
 
-**Plan:** `thoughts/plans/2026-11-06-attribute-list-v2-port.md` (proposed, for 3.16). The plan supersedes this file,
+**Plan:** `thoughts/plans/2026-11-13-attribute-list-v2-port.md` (active, for 3.16). The plan supersedes this file,
 which is deleted when the plan lands; where the two disagree, the plan wins.
 
 `actingweb/attribute_list.py`'s `ListAttribute.__delitem__()` / `.insert()`

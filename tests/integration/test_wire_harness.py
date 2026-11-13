@@ -473,13 +473,12 @@ def test_sibling_callbacks_sort_by_the_receivers_name_and_nothing_else_moves():
     assert out[0]["children"][1]["children"] == [cb(c)]
 
 
-def test_an_owner_added_on_the_branch_does_not_count():
-    """Owners are read at the merge base: a branch that adds its own phase to
-    a row's owners (in that commit or an earlier one) and re-records the row
-    fails, so an ownership change lands on master first."""
-    at_base = {"WX1": {"owners": []}}
+def test_owners_are_read_at_the_first_parent():
+    """The phase must own the row in the registry the commit started from:
+    an owner the commit itself adds does not count."""
+    at_parent = {"WX1": {"owners": []}}
     problems = _verify_groups().wire_phase_problems(
-        "0123456789abcdef", [("M", "WX1.json")], ["p:3"], at_base, {"WX1.json"}
+        "0123456789abcdef", [("M", "WX1.json")], ["p:3"], at_parent, {"WX1.json"}
     )
     assert any("not among its owners" in p for p in problems), problems
 
@@ -510,9 +509,8 @@ def test_the_wire_phase_check_reads_merges_and_runs_from_anywhere(
     tmp_path, monkeypatch
 ):
     """End to end on a scratch repository: a merge commit that re-records a
-    row is checked against its first parent, an owner added on the branch
-    does not count, and the result does not depend on the working
-    directory."""
+    row is checked against its first parent's owners, and the result does
+    not depend on the working directory."""
     vg = _verify_groups()
     git = _git_repo(tmp_path)
     wire = tmp_path / "tests/integration/wire"
@@ -525,7 +523,7 @@ def test_the_wire_phase_check_reads_merges_and_runs_from_anywhere(
     git("checkout", "-qb", "branch")
     (wire / "rows.toml").write_text('[rows."WX1"]\nowners = ["p:2", "p:3"]\n')
     git("commit", "-qam", "make p:3 an owner on the branch")
-    git("checkout", "-qb", "side")
+    git("checkout", "-qb", "side", "master")
     (wire / "WX1.json").write_text('{"x": 1}\n')
     git("commit", "-qam", "side change\n\nWire-Phase: p:2")
     git("checkout", "-q", "branch")
@@ -533,15 +531,46 @@ def test_the_wire_phase_check_reads_merges_and_runs_from_anywhere(
     # its content matches neither parent.
     git("merge", "-q", "--no-ff", "--no-commit", "side")
     (wire / "WX1.json").write_text('{"x": 2}\n')
-    git("commit", "-qam", "merge\n\nWire-Phase: p:3")
+    git("commit", "-qam", "merge\n\nWire-Phase: p:4")
     monkeypatch.setattr(vg, "_REPO", tmp_path)
     monkeypatch.chdir(tmp_path / "tests")
     problems, skipped = vg.check_wire_phase(("master",))
     assert skipped is None
     # The side commit (p:2) passes; the merge's own re-recording is under
-    # p:3, an owner only on the branch.
-    assert any("not among its owners" in p and "p:3" in p for p in problems), problems
+    # p:4, which its first parent (the branch, owners p:2 and p:3) lacks.
+    assert any("not among its owners" in p and "p:4" in p for p in problems), problems
     assert len(problems) == 1, problems
+
+
+@pytest.mark.parametrize("same_commit", [False, True])
+def test_ownership_taken_on_the_branch_counts_from_the_next_commit(
+    tmp_path, monkeypatch, same_commit
+):
+    """A branch may make its own phase an owner in an earlier commit of its
+    own; an ownership change made in the commit that re-records the row
+    does not count."""
+    vg = _verify_groups()
+    git = _git_repo(tmp_path)
+    wire = tmp_path / "tests/integration/wire"
+    wire.mkdir(parents=True)
+    git("init", "-q", "-b", "master")
+    (wire / "rows.toml").write_text('[rows."WX1"]\nowners = []\n')
+    (wire / "WX1.json").write_text("{}\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "branch")
+    (wire / "rows.toml").write_text('[rows."WX1"]\nowners = ["p:3"]\n')
+    if not same_commit:
+        git("commit", "-qam", "take ownership")
+    (wire / "WX1.json").write_text('{"x": 1}\n')
+    git("commit", "-qam", "re-record\n\nWire-Phase: p:3")
+    monkeypatch.setattr(vg, "_REPO", tmp_path)
+    problems, skipped = vg.check_wire_phase(("master",))
+    assert skipped is None
+    if same_commit:
+        assert any("not among its owners" in p for p in problems), problems
+    else:
+        assert problems == []
 
 
 def test_merging_master_in_does_not_need_master_s_trailers(tmp_path, monkeypatch):
@@ -569,15 +598,19 @@ def test_merging_master_in_does_not_need_master_s_trailers(tmp_path, monkeypatch
     assert vg.check_wire_phase(("master",)) == ([], None)
 
 
-def test_an_unparsable_registry_at_the_merge_base_is_a_problem(tmp_path, monkeypatch):
+def test_an_unparsable_registry_at_the_first_parent_is_a_problem(tmp_path, monkeypatch):
     vg = _verify_groups()
     git = _git_repo(tmp_path)
     wire = tmp_path / "tests/integration/wire"
     wire.mkdir(parents=True)
     git("init", "-q", "-b", "master")
     (wire / "rows.toml").write_text("[rows.\n")
+    (wire / "WX1.json").write_text("{}\n")
     git("add", "-A")
     git("commit", "-qm", "base")
+    git("checkout", "-qb", "branch")
+    (wire / "WX1.json").write_text('{"x": 1}\n')
+    git("commit", "-qam", "re-record\n\nWire-Phase: p:1")
     monkeypatch.setattr(vg, "_REPO", tmp_path)
     problems, _ = vg.check_wire_phase(("master",))
     assert any("does not parse" in p for p in problems), problems

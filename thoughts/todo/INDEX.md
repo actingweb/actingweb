@@ -39,8 +39,9 @@ plan" paragraph, which says what that plan uses from the others and wins on
 that detail. One PR per plan, one commit per phase. A plan starts when the one
 before it has merged and its gates are met, because the checks allow one test
 run at a time. The 3.16 tag stays held until all seven have merged. Proposed
-is not approved: `attribute-list-v2-port` and `spec-1-5` say in their
-"Readiness" paragraph that they need another draft first. The history of the
+is not approved: `attribute-list-v2-port` was redrafted on 2026-11-13 as a
+new plan file (the 2026-11-06 one is `superseded`), and `spec-1-5` says in
+its "Readiness" paragraph that it needs another draft first. The history of the
 merged plans is in their plans and verifications, not here.
 
 | Order | Plan | Todo it closes | Needs first |
@@ -50,7 +51,7 @@ merged plans is in their plans and verifications, not here.
 | 0b | [`grant-enforcement-per-route`](../plans/2026-11-10-grant-enforcement-per-route.md) | — | **Merged** (#172, 2026-11-11) |
 | 1 | [`subscription-wire-baseline`](../plans/2026-11-06-subscription-wire-baseline.md) | — | **Merged** (#173, 2026-11-12) |
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md) | — | **Merged** (#175, 2026-11-13) |
-| 3 | [`attribute-list-v2-port`](../plans/2026-11-06-attribute-list-v2-port.md): replica lists on the rank format, list diffs from REST and web-UI edits, diffs filtered before they are stored | [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | Its redraft against `master` (its "Readiness" paragraph). **Next.** Ahead of plan 4 because the specification plan waits on it |
+| 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md): one list implementation for properties and attributes, the replica on it, list diffs from REST and web-UI edits | [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | The plan approved. Its PR opens with a records commit that takes the `rows.toml` owners on the branch (owner 2026-11-13) and relaxes gate 5's check to match **Next.** Ahead of plan 4 because the specification plan waits on it |
 | 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md): one read per actor load under the email flag, the vouched rename as one transaction | [The vouched SDK rename](vouched-rename-one-transaction.md) | Nothing from plan 3; the two could swap places |
 | 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | None; it files `outbound-callback-backpressure.md` | Plan 3, and its redraft |
 
@@ -68,6 +69,8 @@ Todos these plans edit without closing:
 | `spec-1-5` | `attribute-list-v2-port` | Hard: it documents the list diffs that plan creates and edits the same functions after it |
 | `attribute-list-v2-port` | `peer-authorisation-fixes` | Its `remote:<peer>$aux` side bucket must be added to `actingweb-peer-state`'s whitelist (`maintenance/peer_state.py`, `_remote_peer`), or the command reports it as `remote-unknown` |
 | `email-as-creator-at-write-time` | `subs-list-cache-lifetime` | The MCP loads go through `_load_actor` (`handlers/mcp.py`), which passes `rewrite_email=False` to `Actor.get`; this plan removes that keyword and must remove the argument there too |
+| `email-as-creator-at-write-time` | `attribute-list-v2-port` | Both add a check to `check_ready()` and reword the same lines of `interface/app.py`; the second to land rebases on the first |
+| `spec-1-5` | `attribute-list-v2-port` | It edits the resync block of `callback_processor.py` (`_reset_state` and the handler's fault paths) after this plan makes that block keep the owed rebuild |
 | `attribute-list-v2-port`, `spec-1-5` | `subscription-wire-baseline` | Their phases name the recordings they re-record and the ones that must stay identical (gate 5). `email-as-creator-at-write-time` re-records nothing; the recordings confirm it |
 
 Plans 3 and 5 edit the same publisher and receiver code (`register_diffs`,
@@ -102,7 +105,7 @@ owner-chosen approach and a proposed plan (2026-11-06).
 
 | Item | Impact of doing it | What it needs first |
 | --- | --- | --- |
-| [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | Removes the **last instance** of the design that caused the production list corruption — `ListAttribute` still has, verbatim, what `ListProperty` had before the v2 format, and every peer replica's `insert`/`remove` diff is applied through it (`RemotePeerStore`), so it is on the subscription path, not a side class | **Planned for 3.16**: `thoughts/plans/2026-11-06-attribute-list-v2-port.md` (proposed). Sequenced before whole-list rewrite atomicity, with the documented window |
+| [`ListAttribute` shift-loop design](attribute-list-shift-design.md) | Removes the **last instance** of the design that caused the production list corruption — `ListAttribute` still has, verbatim, what `ListProperty` had before the v2 format, and every peer replica's `insert`/`remove` diff is applied through it (`RemotePeerStore`), so it is on the subscription path, not a side class | **Planned for 3.16**: `thoughts/plans/2026-11-13-attribute-list-v2-port.md` (active). Sequenced before whole-list rewrite atomicity, with the documented window |
 
 ## 2. Real, not urgent
 

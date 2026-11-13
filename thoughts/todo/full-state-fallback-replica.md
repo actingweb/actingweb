@@ -40,7 +40,7 @@ while the rewrite removes items); seen from a test's poll under parallel load.
 
 Whichever is chosen, `WD12`'s recording changes; `rows.toml` must name the
 phase that owns it. The `ListAttribute` plan
-(`thoughts/plans/2026-11-06-attribute-list-v2-port.md`) rewrites the replica's
+(`thoughts/plans/2026-11-13-attribute-list-v2-port.md`) rewrites the replica's
 list application and is the natural owner of the list half.
 
 ## Two more, found 2026-11-09 (reverify-13 of `peer-authorisation-fixes`)

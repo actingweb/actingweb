@@ -440,18 +440,75 @@ is byte-identical.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
-      run at a time
-- [ ] Run the benchmarks alone on both backends; `TestListPropertyPerformance`
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
+      run at a time (DynamoDB 6,840 passed; PostgreSQL 6,635 passed; docs
+      build clean)
+- [x] Run the benchmarks alone on both backends; `TestListPropertyPerformance`
       within 10% of a run on `master`, both recorded in the verification
-- [ ] `git diff master -- tests/` shows new files, import lines and the three
+      (two runs each, in both orders; the largest regression +9.3% in the
+      branch-first run, every case faster than `master` in the master-first
+      run: noise dominates)
+- [x] `git diff master -- tests/` shows new files, import lines and the three
       patch targets; `git show --stat HEAD -- tests/integration/wire` is
-      empty
-- [ ] `grep -rn '"actingweb.property_list\.' tests/` lists no target whose
-      reader moved
+      empty (plus the records commit's harness tests, and the guard file
+      the plan names, `test_v1_maintenance_scoped_reads.py`)
+- [x] `grep -rn '"actingweb.property_list\.' tests/` lists no target whose
+      reader moved (only `get_property`, which `PropertyListStorage` reads)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-13):
+
+- `list_core.py` (about 4,800 lines) and `property_list.py` (about 2,100)
+  were produced by a script from the pre-phase file: every method without a
+  v1 branch moved with its storage calls rewritten
+  (`get_property(config).X(actor_id=…)` to `self._storage.X(…)`,
+  `set(value=None)` to `remove`, any other `set` to `put`, the side
+  partition to `side=True`); the dual-format public methods were split by
+  hand-written rules. All 5,201 unit tests passed with only the three patch
+  targets edited, before any new test was added.
+- **Deviations from the Changes list.** `ListStorage` also carries
+  `actor_id` (log and error text, `ListMetadataContentionError`) and
+  `side_key()` (what `_aux()` returns, `ValueError` without a side
+  partition). The core has six hooks, not two: besides `_foreign_rows()`
+  (one hook with `sweep=`, deleting or counting) and `_on_stored_format()`,
+  `_before_mutation()` (the lazy migration), `_default_metadata_no_db()`
+  and `_merge_length_delta()` (the split halves of `_load_metadata` and
+  `_save_metadata`), and `_not_v2_error()` (the property list keeps its
+  "is v2-only -- call migrate_to_v2()" text). The rank-cap text names
+  `_RANK_REMEDY`, a class attribute (`"run compact() to rebalance"`), which
+  `ListAttribute` overrides in Phase 2.
+- `ListProperty` keeps verbatim overrides of the dual-format methods whose
+  v2 half was already a `_v2_*` call; `clear`, `delete`, `remove_where` and
+  `update_where` had their v2 half inline, which became `_v2_clear`,
+  `_v2_delete`, `_v2_remove_where`, `_v2_update_where` in the core. The
+  cached `_is_v2()` reads (`slice`, `index`, `count`, `sizes_from_rows`,
+  `to_list_from_rows`) call `super()`, which costs no read (the core's
+  `_require_v2()` reads the same cache).
+- Tests: `tests/test_list_core.py` (structure, frozen surface, every public
+  method over an in-memory `ListStorage`, call parity with the property
+  list per operation, the rank-cap error) and
+  `tests/test_list_core_fault_suite.py` (the mutation-committed suite
+  through a bare `ListCore` over `PropertyListStorage`, less its v1 case and
+  the notifying wrapper's diffs). The parity is on range reads, last-rank
+  reads and writes: point reads differ by one (the property list's lazy
+  migration check reads the meta row on a fresh instance), and `verify` and
+  `compact` on the property list spend one keys-only range read counting
+  v1-shaped rows.
+- Outside voice (codex and a fresh-context reviewer, on `a0952d9..07c5b10`):
+  the mechanical rewrite is clean (every method compared with its original,
+  docstrings stripped). Taken: Emm's suite patches
+  `actingweb.property_list.time.sleep`, so `property_list` keeps a `time`
+  name; the rank constants, `_v2_is_rank` and `_KEYED_IN_FLIGHT_SECONDS`
+  are re-exported as this section says (they were not), and the surface
+  test checks them; a guard test fails when a test patches a re-exported
+  name on `property_list` (the patch would change nothing). Accepted: at
+  the four probed writes the property handle is now built inside the
+  in-flight mark, so a `get_property` construction fault (only possible on
+  a process's first handle, when tables auto-create) counts as an unknown
+  outcome and keeps the new span bodies for the aged sweep instead of
+  deleting them.
 
 ---
 

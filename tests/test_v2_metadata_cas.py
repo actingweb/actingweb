@@ -91,7 +91,7 @@ def _no_real_sleep(monkeypatch):
     without this they would burn up to ~1.5s (6 attempts) of wall clock
     each for no benefit -- the backoff mechanism itself isn't what's under
     test here."""
-    monkeypatch.setattr("actingweb.property_list.time.sleep", lambda *_: None)
+    monkeypatch.setattr("actingweb.list_core.time.sleep", lambda *_: None)
 
 
 class TestMetadataWriteRetriesAndMergesOntoTheNewValue:

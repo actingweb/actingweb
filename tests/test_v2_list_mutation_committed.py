@@ -47,7 +47,7 @@ def _no_real_sleep(monkeypatch):
     get-on-retry case (and the residual's CAS-then-creation-branch path)
     needs the CAS loop to lose at least once before its fault fires, and
     the retry loop backs off with real time.sleep() between attempts."""
-    monkeypatch.setattr("actingweb.property_list.time.sleep", lambda *_: None)
+    monkeypatch.setattr("actingweb.list_core.time.sleep", lambda *_: None)
 
 
 def _meta_name(name):

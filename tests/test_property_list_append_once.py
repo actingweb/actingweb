@@ -165,7 +165,7 @@ def _fake(monkeypatch: pytest.MonkeyPatch, store: dict[Any, Any], ctl: Ctl) -> N
 def aged(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every writer token counts as old: verify(), compact() and
     repair_keys() treat what the test wrote as finished, not in flight."""
-    monkeypatch.setattr("actingweb.property_list._KEYED_IN_FLIGHT_SECONDS", 0)
+    monkeypatch.setattr("actingweb.list_core._KEYED_IN_FLIGHT_SECONDS", 0)
 
 
 OLD_TOK = "1700000000000-" + "f" * 16  # minted 2023: never in flight

@@ -5,7 +5,8 @@ from actingweb.db import get_actor, get_property, get_property_list
 from actingweb.db.exceptions import DbError
 
 from .identifiers import first_control_character
-from .property_list import _V1_INDEX_RE, _V2_RANK_MARKER, ListProperty, _v2_is_rank
+from .list_core import _V2_RANK_MARKER, _v2_is_rank
+from .property_list import _V1_INDEX_RE, ListProperty
 from .property_list_span import aux_partition
 
 logger = logging.getLogger(__name__)

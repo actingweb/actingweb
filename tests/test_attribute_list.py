@@ -8,6 +8,7 @@ and a metadata object with ``length``.
 """
 
 import copy
+import json
 import math
 from typing import Any
 
@@ -686,3 +687,34 @@ class TestCosts:
         lst.extend(list(range(n)))
         assert counts.get("get_attr_range", 0) <= 3
         assert _lst(config, "big").to_list() == list(range(n))
+
+
+class TestVerificationFindings:
+    """Verification 2026-11-13 (code review 3 and 8)."""
+
+    def test_a_late_converter_does_not_recreate_a_row_deleted_since(self, env):
+        config, store = env
+        _plant_old(store, "notes", _OLD_ITEMS)
+        late = _lst(config)
+        snapshot = late._old_rows()  # noqa: SLF001 -- read before A finished
+        other = _lst(config)
+        other.append("new")  # A converts and finishes
+        other.pop(0)  # a user deletes item 0 since
+        expected = _lst(config).to_list()
+        late._old_rows = lambda: snapshot  # type: ignore[method-assign]
+        late._convert()  # noqa: SLF001
+        assert _lst(config).to_list() == expected
+
+    def test_a_primed_conflict_leaves_no_layout_behind(self, env):
+        config, store = env
+        _converted(config, store)
+        _plant_old(store, "notes", ["x"])
+        lst = _lst(config)
+        rows = dict(store.bucket(ACTOR, BUCKET))
+        rows = {name: row["data"] for name, row in rows.items()}
+        meta = json.loads(rows["list:notes-meta"])
+        meta.pop("layout_cleanup", None)
+        rows["list:notes-meta"] = json.dumps(meta)
+        with pytest.raises(ListLayoutConflictError):
+            lst.prime_from_rows(rows)
+        assert lst._layout is None  # noqa: SLF001

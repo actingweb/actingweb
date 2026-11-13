@@ -950,8 +950,8 @@ CHANGED
   (``list``, ``operation``, ``length``, and ``item``, ``index``,
   ``old_item`` or ``items`` as the operation needs) on the list's own
   subtarget: ``append``, ``update`` (with ``old_item`` when the item was
-  read), ``remove`` (by value; ``delete`` by index for a v1 list or a
-  spanned item), ``metadata``, ``delete_all`` and an empty ``extend`` for a
+  read), ``delete`` (by index, with ``old_item`` when the item was read,
+  so a replica tells equal items apart), ``metadata``, ``delete_all`` and an empty ``extend`` for a
   new list. HTTP responses do not change. **Check:** subscription data
   hooks and callback hooks that branch on a diff's shape (``"list" in
   value`` now also matches REST edits); ``build_list_diff()`` builds the
@@ -1025,9 +1025,14 @@ CHANGED
 
 - **Behavior change: a bulk list update over 25 changes is announced as one
   resync, and appends in one request arrive as one ``extend``.** Up to 25
-  changes are sent in order (a run of appends as one ``extend``); more send
-  no per-item diff and one resync of the list after the batch
-  (``Actor.request_resync``), without a suspension. **Check:** with
+  changes are sent in the order they are applied (on a v2 list: updates in
+  ascending index order, then appends, a run of them as one ``extend``,
+  then deletes in descending index order); more send no per-item diff and,
+  once anything was written, one resync after the batch
+  (``Actor.request_resync``), without a suspension: a subscription to the
+  list gets the list's resync, a subscription to the whole target a resync
+  of the whole target. A resync that faults is logged, not answered as
+  503 (the batch is committed). **Check:** with
   synchronous callbacks the request waits for each reading subscriber's
   resync in turn.
 
@@ -2045,8 +2050,9 @@ ADDED
 - **The nine attribute list methods** on the DynamoDB and PostgreSQL
   backends (see CHANGED).
 - **``Actor.request_resync(target, subtarget)``** sends a resync to the
-  subscribers that may read ``subtarget``, without a suspension, and
-  records the ones it misses for the next call.
+  subscribers that may read ``subtarget`` (a subscription to the whole
+  target gets a resync of the whole target), without a suspension; with
+  synchronous callbacks it records the ones it misses for the next call.
 - **``SubscriptionManager.rebuild_subscription()``** (and its async form)
   rebuilds a subscription's replica from a baseline; ``force=True`` skips
   the one-a-minute interval.

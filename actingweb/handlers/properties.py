@@ -345,7 +345,10 @@ class _PostListDiffs:
     the changes land so a request stopped part way announces what was
     written: one list diff per change, a run of appends as one ``extend``;
     or, for a batch over :data:`BULK_LIST_DIFF_LIMIT` changes, one resync
-    of the list once the whole batch was applied."""
+    of the list once anything was written (a batch stopped part way
+    included). A resync whose request faults is logged, not answered as 503:
+    the batch is committed, and a retried batch would apply its positional
+    deletes to shifted items."""
 
     def __init__(self, name: str, length: int = 0) -> None:
         self.name = name
@@ -359,6 +362,7 @@ class _PostListDiffs:
 
     def appended(self, item: Any) -> None:
         if self.resync:
+            self.applied = True
             return
         self.entries.append({"operation": "append", "item": item, "index": self.length})
         self.length += 1
@@ -366,6 +370,7 @@ class _PostListDiffs:
 
     def updated(self, index: int, item: Any, **old_fields: Any) -> None:
         if self.resync:
+            self.applied = True
             return
         self.entries.append(
             {
@@ -379,20 +384,19 @@ class _PostListDiffs:
 
     def deleted(self, index: int, old_fields: dict[str, Any] | None = None) -> None:
         if self.resync:
+            self.applied = True
             return
         self.length = max(self.length - 1, 0)
+        entry: dict[str, Any] = {
+            "operation": "delete",
+            "index": index,
+            "length": self.length,
+        }
         if old_fields and "old_item" in old_fields:
-            self.entries.append(
-                {
-                    "operation": "remove",
-                    "item": old_fields["old_item"],
-                    "length": self.length,
-                }
-            )
-        else:
-            self.entries.append(
-                {"operation": "delete", "index": index, "length": self.length}
-            )
+            # The receiver tells equal items apart by the index (a batch can
+            # create a duplicate of the item it then deletes).
+            entry["old_item"] = old_fields["old_item"]
+        self.entries.append(entry)
 
     def diffs(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -419,7 +423,14 @@ class _PostListDiffs:
     def register(self, myself: Any, config: Any) -> None:
         if self.resync:
             if self.applied:
-                myself.request_resync("properties", self.name)
+                try:
+                    myself.request_resync("properties", self.name)
+                except DbError as e:  # folds DbError: the batch is committed; a 503 would have the client re-apply positional deletes
+                    logger.error(
+                        f"Resync of list {self.name!r} after a bulk update "
+                        f"faulted; its subscribers may be stale until the next "
+                        f"change or resync: {e}"
+                    )
             return
         for diff in self.diffs():
             fields = dict(diff)
@@ -1592,20 +1603,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     list_prop = getattr(myself.property_lists, prop_name)
                     # The ListProperty is now created with metadata, but no items
 
-                    # Set description and explanation if provided
-                    description = self.request.get("description") or ""
-                    explanation = self.request.get("explanation") or ""
-
-                    if description:
-                        list_prop.set_description(description)
-                    if explanation:
-                        list_prop.set_explanation(explanation)
-                    if not description and not explanation:
-                        # Persist the metadata, or the list does not exist (3.16:
-                        # a form without a description created nothing).
-                        list_prop.set_description("")
-
-                    # Execute property post hook if available for list creation
+                    # The post hook first: a refused list leaves nothing behind (3.16)
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -1622,6 +1620,19 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 if self.response:
                                     self.response.set_status(403)
                                 return
+
+                    # Set description and explanation if provided
+                    description = self.request.get("description") or ""
+                    explanation = self.request.get("explanation") or ""
+
+                    if description:
+                        list_prop.set_description(description)
+                    if explanation:
+                        list_prop.set_explanation(explanation)
+                    if not description and not explanation:
+                        # Persist the metadata, or the list does not exist (3.16:
+                        # a form without a description created nothing).
+                        list_prop.set_description("")
 
                     pair[prop_name] = "[Empty list property created]"
                     self._post_list(prop_name, list_prop).created()
@@ -1685,8 +1696,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             except (DbError, _HookDenied):
                 # As the JSON branch (3.16): the keys already written get
                 # their diffs before the 503 (or a hook's 403).
-                if pair:
-                    self._register_post_diffs(myself, pair)
+                self._register_post_diffs(myself, pair)
                 raise
         else:
             try:
@@ -1710,14 +1720,12 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # A storage fault, or a hook's PERMISSION_DENIED, after some
                 # keys were applied: their diffs are registered (subscribers
                 # learn what changed), then 503 or 403.
-                if pair:
-                    self._register_post_diffs(myself, pair)
+                self._register_post_diffs(myself, pair)
                 raise
             if self.response and self.response.status_code not in (None, 200, 201):
                 # Stopped part way (a 400, 413 or a hook's 403): what was
                 # written before the stop still reaches the subscribers.
-                if pair:
-                    self._register_post_diffs(myself, pair)
+                self._register_post_diffs(myself, pair)
                 return
         if not pair:
             if self.response:
@@ -1851,18 +1859,8 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if myself and hasattr(myself, "property_lists"):
                     list_prop = getattr(myself.property_lists, key)
 
-                    # Set description and explanation if provided, or ensure metadata is persisted
-                    description_set = False
-                    if "description" in val:
-                        list_prop.set_description(val["description"])
-                        description_set = True
-                    if "explanation" in val:
-                        list_prop.set_explanation(val["explanation"])
-                    elif not description_set:
-                        # Ensure metadata is persisted even if no description/explanation provided
-                        list_prop.set_description("")
-
-                    # Execute property post hook if available for list creation
+                    # The post hook first: a refused list leaves nothing
+                    # behind (3.16; the metadata was written before it).
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -1875,14 +1873,21 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 [key],
                                 auth_context,
                             )
-                            if transformed is not None:
-                                pair[key] = "[Empty list property created]"
-                                self._post_list(key, list_prop).created()
-                            else:
+                            if transformed is None:
                                 continue
-                    else:
-                        pair[key] = "[Empty list property created]"
-                        self._post_list(key, list_prop).created()
+
+                    # Set description and explanation if provided, or ensure metadata is persisted
+                    description_set = False
+                    if "description" in val:
+                        list_prop.set_description(val["description"])
+                        description_set = True
+                    if "explanation" in val:
+                        list_prop.set_explanation(val["explanation"])
+                    elif not description_set:
+                        # Ensure metadata is persisted even if no description/explanation provided
+                        list_prop.set_description("")
+                    pair[key] = "[Empty list property created]"
+                    self._post_list(key, list_prop).created()
                 else:
                     # List properties not supported
                     continue
@@ -2860,10 +2865,10 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                     return
 
                 # v1/v2 split -- see the "update" branch above for the
-                # rationale. A v2 item is announced by value (``remove``),
-                # so a replica out of position still removes the right one;
-                # a spanned item, whose value is not read, and a v1 list's
-                # item are announced by index (``delete``).
+                # rationale. Announced as ``delete`` by index, with the item
+                # (``old_item``) when it was read: the receiver deletes the one
+                # equal item, or the one at the index among equal ones, so
+                # duplicates do not take the wrong row.
                 delete_operation = "delete"
                 delete_fields: dict[str, Any] = {"index": index}
                 try:
@@ -2878,8 +2883,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                         handle = pairs[index][0]
                         old_fields = handle_old_item_fields(list_prop, handle)
                         if "old_item" in old_fields:
-                            delete_operation = "remove"
-                            delete_fields = {"item": old_fields["old_item"]}
+                            delete_fields["old_item"] = old_fields["old_item"]
                         delete_fields["length"] = len(pairs) - 1
                         if not list_prop.delete_by_handle(handle):
                             self._respond_list_metadata_contended(

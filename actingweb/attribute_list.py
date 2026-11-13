@@ -473,6 +473,10 @@ class ListAttribute(ListCore):
             name[len(prefix) :]: raw
             for name, raw in self._storage.get_range(lower, upper).items()
         }
+        if self._storage.get(self._get_meta_property_name()) is not None:
+            # Another converter finished after this one read the old rows:
+            # the rows are its (and may have changed since), not a conflict.
+            return
         planned = set(ranks)
         stray = sorted(r for r in existing if r not in planned)
         if stray:
@@ -491,7 +495,10 @@ class ListAttribute(ListCore):
                     f"{self._storage.remedy}",
                 )
         for start in range(0, length, _CONVERT_BATCH):
-            if start and self._storage.get(self._get_meta_property_name()) is not None:
+            # Before every batch, the first included: a converter that read
+            # the old rows before another finished must not recreate a row
+            # deleted since (its rank no longer in ``existing``).
+            if self._storage.get(self._get_meta_property_name()) is not None:
                 return  # another converter finished; its rows are ours too
             self._create_batch(
                 [
@@ -522,33 +529,30 @@ class ListAttribute(ListCore):
     def _create_batch(self, batch: list[tuple[str, Any]]) -> None:
         heads: dict[str, str] = {}
         spans: dict[str, Any] = {}
-        try:
-            for rank, item in batch:
-                try:
-                    value_str, carries_marker = encode_item(item), False
-                except ValueError:
-                    # A pre-3.16 item carrying the reserved envelope key: kept
-                    # as it is, inside an envelope (a plain row would read as
-                    # one).
-                    value_str, carries_marker = json.dumps(item), True
-                span = (
-                    self._write_bodies(value_str)
-                    if self._check_item_size(value_str, can_span=True)
-                    else None
-                )
-                name = self._v2_item_name(rank)
-                spans[name] = span
-                heads[name] = (
-                    wrap(value=item)
-                    if carries_marker and span is None
-                    else self._make_head(value_str, span)
-                )
-            created = self._storage.create_many_if_not_exists(heads)
-        except BaseException:
-            # Some heads of the batch may have landed (a batch create is not
-            # atomic on DynamoDB): their bodies stay, and the bodies of heads
-            # that did not land are orphans the aged sweep removes.
-            raise
+        for rank, item in batch:
+            try:
+                value_str, carries_marker = encode_item(item), False
+            except ValueError:
+                # A pre-3.16 item carrying the reserved envelope key: kept
+                # as it is, inside an envelope (a plain row would read as
+                # one).
+                value_str, carries_marker = json.dumps(item), True
+            span = (
+                self._write_bodies(value_str)
+                if self._check_item_size(value_str, can_span=True)
+                else None
+            )
+            name = self._v2_item_name(rank)
+            spans[name] = span
+            heads[name] = (
+                wrap(value=item)
+                if carries_marker and span is None
+                else self._make_head(value_str, span)
+            )
+        # Some heads of the batch may land before a fault (a batch create is
+        # not atomic on DynamoDB): their bodies stay, and the bodies of heads
+        # that did not land are orphans the aged sweep removes.
+        created = self._storage.create_many_if_not_exists(heads)
         for name in set(heads) - created:
             self._span_delete_bodies(spans[name])
             stored = self._storage.get(name)
@@ -730,7 +734,9 @@ class ListAttribute(ListCore):
                 except (ValueError, TypeError, AttributeError):
                     marked = False
                 if not marked:
-                    self._settle_layout(None, fresh=True)  # raises the conflict
+                    # The instance keeps no layout: a later call settles it
+                    # from storage (and raises the conflict there again).
+                    self._layout = None
                     raise ListLayoutConflictError(self.name, "rows of both layouts")
             if new_meta is None:
                 self._layout = "old"

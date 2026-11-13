@@ -172,8 +172,10 @@ class TestShapes:
         remote.apply_callback_data({"hex": "#fff"}, subtarget="color")
         assert remote.get_value("color") == {"hex": "#fff"}
         assert remote.get_value("hex") is None
+        # An object whose one key is the subtarget is a value, not a wrapper
+        # (verification 2026-11-13, CR6): a subtarget's diffs are bare.
         remote.apply_callback_data({"color": {"hex": "#000"}}, subtarget="color")
-        assert remote.get_value("color") == {"hex": "#000"}
+        assert remote.get_value("color") == {"color": {"hex": "#000"}}
 
     def test_resource_level_merges(self, env):
         remote, _, _ = env
@@ -281,3 +283,65 @@ class TestOutsideVoiceFindings:
         assert r.failed == ["big"]
         r = remote.apply_resync_data({"list:k": "scalar"})
         assert r.failed == []  # a refused key is the peer's own, not a failure
+
+
+class TestVerificationFindings:
+    """Verification 2026-11-13: the receiver's side of the new shapes."""
+
+    def test_a_delete_with_old_item_takes_the_one_at_its_index(self, env):
+        remote, _, _ = env
+        # A bulk "move to top" on [A, B, C]: update 0 to C, delete 2 (C).
+        remote.set_list("n", ["A", "B", "C"])
+        remote.apply_callback_data(
+            {"n": _diff("n", "update", index=0, old_item="A", item="C")}
+        )
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "delete", index=2, old_item="C")}
+        )
+        assert r.out_of_step is None
+        assert remote.get_list("n") == ["C", "B"]
+
+    def test_a_delete_with_old_item_finds_a_moved_item(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["x", "A", "B"])
+        remote.apply_callback_data({"n": _diff("n", "delete", index=0, old_item="B")})
+        assert remote.get_list("n") == ["x", "A"]
+
+    def test_a_delete_of_an_absent_item_is_a_noop_and_a_drifted_duplicate_out_of_step(
+        self, env
+    ):
+        remote, _, _ = env
+        remote.set_list("n", ["A", "A", "B"])
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "delete", index=0, old_item="gone")}
+        )
+        assert r.out_of_step is None and r["n"].get("noop")
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "delete", index=2, old_item="A")}
+        )
+        assert r.out_of_step is not None
+        assert remote.get_list("n") == ["A", "A", "B"]
+
+    def test_a_refused_list_name_in_a_baseline_is_not_a_failure(self, env):
+        remote, _, _ = env
+        r = remote.apply_resync_data({"_x": {"_list": True, "items": [1]}})
+        assert r["_x"]["error"] == "refused name"
+        assert r.failed == []
+
+    def test_a_baseline_repairs_a_list_in_both_layouts(self, env):
+        remote, store, _ = env
+        remote.set_list("n", ["a"])
+        rows = store.bucket(ACTOR, remote.bucket)
+        rows["list:n:meta"] = {"data": {"length": 1, "version": "1.0"}}
+        rows["list:n:0"] = {"data": "old"}
+        r = remote.apply_resync_data({"n": {"_list": True, "items": ["b"]}})
+        assert r.failed == []
+        assert remote.get_list("n") == ["b"]
+        assert "list:n:meta" not in store.bucket(ACTOR, remote.bucket)
+
+    def test_an_object_whose_one_key_is_its_name_is_a_value(self, env):
+        remote, _, _ = env
+        remote.apply_callback_data({"status": "ok"}, subtarget="status")
+        assert remote.get_value("status") == {"status": "ok"}
+        remote.apply_resync_data({"status": "fine"}, subtarget="status")
+        assert remote.get_value("status") == {"status": "fine"}

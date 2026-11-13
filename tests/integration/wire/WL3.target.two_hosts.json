@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 1, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -208,13 +208,14 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "item": {
+           "index": 0,
+           "length": 1,
+           "list": "notes",
+           "old_item": {
             "id": "a",
             "text": "one"
            },
-           "length": 1,
-           "list": "notes",
-           "operation": "remove"
+           "operation": "delete"
           }
          },
          "event": "subscription_data",
@@ -232,13 +233,14 @@
        "request": {
         "data": {
          "notes": {
-          "item": {
+          "index": 0,
+          "length": 1,
+          "list": "notes",
+          "old_item": {
            "id": "a",
            "text": "one"
           },
-          "length": 1,
-          "list": "notes",
-          "operation": "remove"
+          "operation": "delete"
          }
         },
         "granularity": "high",

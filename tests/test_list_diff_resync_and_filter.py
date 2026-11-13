@@ -126,10 +126,11 @@ class TestRequestResync:
             assert actor.subs_list is None, "the memo is reset first"
             return self._subs()
 
-        def send(target, subtarget, subs, suspension, *, missed):  # noqa: ANN001
+        def send(target, subtarget, subs, suspension, *, missed, fold_faults):  # noqa: ANN001
             assert suspension is None, "no suspension row"
+            assert fold_faults, "a store fault is a miss, not a 503"
             for sub in subs:
-                sent.append(sub["subscriptionid"])
+                sent.append(f"{sub['subscriptionid']}:{subtarget}")
                 if sub["subscriptionid"] in (missed_ids or set()):
                     missed.append(sub["subscriptionid"])
             return len(subs)
@@ -158,7 +159,10 @@ class TestRequestResync:
         self, actor
     ) -> None:
         count, sent, written = self._run(actor)
-        assert sent == ["s1", "s3"] and count == 2
+        # s1 subscribes to the whole target: a resync of the whole target
+        # (its receiver resets the subscription's sequence on a resync);
+        # s3 subscribes to the list: the list's.
+        assert sent == ["s3:notes", "s1:None"] and count == 2
         assert written == []
 
     def test_a_missed_subscriber_is_recorded(self, actor) -> None:
@@ -168,7 +172,11 @@ class TestRequestResync:
 
 class TestFullStateIsTwoDiffs:
     def _resync(
-        self, actor: Any, state: dict[str, Any], keys: set[str]
+        self,
+        actor: Any,
+        state: dict[str, Any],
+        keys: set[str],
+        subtarget: str | None = None,
     ) -> tuple[list[tuple[int, Any]], list[dict[str, Any]]]:
         stored: list[tuple[int, Any]] = []
         payloads: list[dict[str, Any]] = []
@@ -212,7 +220,12 @@ class TestFullStateIsTwoDiffs:
             ),
         ):
             assert actor._callback_subscription_resync(  # noqa: SLF001
-                {"peerid": "p1", "subscriptionid": "s1", "target": "properties"}
+                {
+                    "peerid": "p1",
+                    "subscriptionid": "s1",
+                    "target": "properties",
+                    "subtarget": subtarget,
+                }
             )
         return stored, payloads
 
@@ -270,3 +283,15 @@ class TestFullStateIsTwoDiffs:
             }
         )
         assert replica.get_list("notes") == [1, 2]
+
+    def test_a_subscription_to_the_list_gets_bare_diffs(self, actor) -> None:
+        extend = {"list": "notes", "operation": "extend", "items": [1], "length": 1}
+        stored, _ = self._resync(actor, {"notes": extend}, {"notes"}, "notes")
+        assert stored == [
+            (7, {"list": "notes", "operation": "clear", "length": 0}),
+            (8, extend),
+        ]
+
+    def test_a_subscription_to_a_scalar_gets_the_bare_value(self, actor) -> None:
+        stored, _ = self._resync(actor, {"status": {"status": "ok"}}, set(), "status")
+        assert stored == [(7, {"status": "ok"})]

@@ -447,9 +447,11 @@ to the replica:
        without ``index`` are dropped). Without ``old_item``, replaces the
        row at ``index``
    * - ``delete``
-     - ``index``
-     - Removes the row at ``index`` (a v1 list or a spanned item; other REST
-       deletes send ``remove``)
+     - ``index``, and ``old_item`` when the item was read
+     - With ``old_item``: removes the one row holding that value, or, when
+       several do, the one at ``index`` (none at ``index`` is out of step);
+       no row holding it is a no-op (applied before). Without ``old_item``:
+       removes the row at ``index``. REST, bulk and web-UI deletes send this
    * - ``pop``
      - ``index`` (default ``-1``, negative counts from the end)
      - Removes the row at ``index``
@@ -570,7 +572,7 @@ keyword-only ``subtarget`` and ``resource``:
 
    store = RemotePeerStore(actor, peer_id)
    result = store.apply_callback_data(
-       {"list": "notes", "operation": "remove", "length": 2, "item": "old"},
+       {"list": "notes", "operation": "delete", "index": 1, "old_item": "old", "length": 2},
        subtarget="notes",          # the subscription's subtarget, or None
        resource=None,              # the subscription's resource, or None
    )

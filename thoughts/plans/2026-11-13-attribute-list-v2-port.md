@@ -1690,3 +1690,125 @@ coverage tests passed.
   peer-reachable switch; results that steer control flow belong outside the
   per-key map.
 
+
+## Iterations
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-attribute-list-v2-port.md
+
+#### 1. A delete is `delete` by index with `old_item` (OV2)
+
+**Category**: Verification fix (decision changed)
+
+**What changed**: REST, bulk and web-UI deletes of a v2 item send `delete`
+with the index and, when the item was read, `old_item` (they sent `remove`
+by value). The receiver's `delete` with `old_item` deletes the one equal
+item, or the one at `index` among equal ones; none equal is an applied
+delete (no-op); equal items none at `index` is out of step.
+
+**Files affected**:
+- `actingweb/handlers/properties.py` — the items `delete` action and
+  `_PostListDiffs.deleted`
+- `actingweb/handlers/www.py` — the item delete form
+- `actingweb/remote_storage.py` — `delete` with `old_item`
+- `tests/test_replica_receiver.py`, `tests/test_list_diff_publishers.py` —
+  the move-to-top batch, duplicates, a moved item, a drifted duplicate
+
+**Rationale**: a value-addressed `remove` took the first equal item: a bulk
+batch that updated a row into a duplicate of the row it then deleted, or any
+list with duplicates, diverged the replica silently.
+
+#### 2. A bulk resync reaches a whole-target subscription as a whole-target resync (OV4)
+
+**Category**: Verification fix
+
+**What changed**: `Actor.request_resync(target, subtarget)` sends a
+subscription to the whole target a resync of the whole target, and a
+subscription to the subtarget its own; a subscriber's store fault is recorded
+as a miss (`fold_faults`), not raised.
+
+**Files affected**: `actingweb/actor.py`;
+`tests/test_list_diff_resync_and_filter.py`.
+
+**Rationale**: a receiver resets the whole subscription's sequence on a
+resync; a baseline of one list dropped the other keys' diffs in flight.
+
+#### 3. A bulk batch stopped part way announces what landed (OV1, OV5)
+
+**Category**: Verification fix
+
+**What changed**: the stop paths register the list diffs whatever `pair`
+holds; a batch over the limit is owed its resync from its first write; a
+resync that faults is logged and the committed batch answers as it would.
+
+**Files affected**: `actingweb/handlers/properties.py`;
+`tests/test_list_diff_publishers.py`.
+
+**Rationale**: a single-key batch that faulted after some writes registered
+nothing; a 503 after a committed batch invited a retry whose positional
+deletes hit shifted items.
+
+#### 4. The receiver and the rebuild (CR1, CR2, CR5, CR6, CR7)
+
+**Category**: Verification fix
+
+**What changed**:
+- `set_list` clears (both layouts) before it size-checks, so a baseline
+  repairs a list in both layouts and spans an item over the threshold.
+- A baseline list whose name the replica refuses answers `refused name`,
+  not a failure, so a rebuild is not owed for ever.
+- A rebuild deletes stale names only for a `properties` subscription (the
+  replica bucket is shared by every target).
+- Only a list's state keyed by its own name is unwrapped at subtarget level;
+  the publisher's full-state fallback sends a subscription to one property
+  its state bare, as every diff it gets.
+- A batch stopped for a rebuild prunes the pending queue only through the
+  callback that stopped it.
+
+**Files affected**: `actingweb/remote_storage.py`,
+`actingweb/interface/subscription_manager.py`, `actingweb/callback_processor.py`,
+`actingweb/actor.py` (the fallback); `tests/test_replica_receiver.py`,
+`tests/test_replica_rebuild.py`, `tests/test_callback_processor.py`,
+`tests/test_list_diff_resync_and_filter.py`, `tests/test_property_list_spans.py`.
+
+**Rationale**: the verification's code review findings 1, 2, 5, 6 and 7.
+
+#### 5. Attribute list conversion (CR3, CR8, CR10)
+
+**Category**: Verification fix
+
+**What changed**: a converter checks for a finished conversion after reading
+the new rows and before every batch (a late converter neither recreates a
+row deleted since nor reports the other's rows as a conflict);
+`prime_from_rows` leaves no layout on a conflict; the no-op `try` in
+`_create_batch` is gone.
+
+**Files affected**: `actingweb/attribute_list.py`; `tests/test_attribute_list.py`.
+
+#### 6. The web UI and the post hook (OV6, OV7)
+
+**Category**: Verification fix
+
+**What changed**: a rank-addressed web-UI update or delete carries the
+resolved position; the post hook runs before a new list's metadata is
+written on all three create paths (JSON `_type`, the REST form, the web UI).
+
+**Files affected**: `actingweb/handlers/www.py`,
+`actingweb/handlers/properties.py`; `tests/test_list_diff_publishers.py`.
+
+#### 7. Docs (OV3, OV8)
+
+**Category**: Verification fix
+
+**What changed**: the CHANGELOG, the migration guide, the subscriptions guide
+and the property lists guide describe `delete` with `old_item`, the bulk
+order as applied, the whole-target resync, and that misses are recorded with
+synchronous callbacks only.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/guides/subscriptions.rst`, `docs/guides/property-lists.rst`.
+
+**Recordings**: `WL3` (both levels), `WL7.target`, `WL10.target`
+re-recorded (owned by `:4`).
+
+**Not changed**: CR9 (the old-layout probe's extra read) is the accepted cost
+filed in `attribute-list-old-layout-removal.md`.

@@ -51,6 +51,18 @@ class ReplicaOutOfStep(Exception):
 _CREATING_OPERATIONS = frozenset({"append", "insert", "extend"})
 
 
+def _wraps_list(value: Any, name: str) -> bool:
+    """Whether ``value`` is a list's state keyed by the list's own name: a
+    list diff for ``name`` or the ``{"_list": true}`` baseline form."""
+    if not isinstance(value, dict) or set(value) != {name}:
+        return False
+    inner = value[name]
+    return isinstance(inner, dict) and (
+        inner.get("_list") is True
+        or ("operation" in inner and inner.get("list") == name)
+    )
+
+
 class ReplicaApplyResult(dict[str, Any]):
     """What ``apply_callback_data``/``apply_resync_data`` did: a result per
     key, plus two attributes that are never keys (a key is a name the peer
@@ -211,9 +223,8 @@ class RemotePeerStore:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Replace the list ``name`` with ``items`` (a baseline from the peer,
-        sanitised). The name is validated and every item encoded and
-        size-checked before the first write; then ``clear()`` and
-        ``extend()``. A baseline holding an item that cannot be stored
+        sanitised). The name is validated first; then ``clear()`` (both
+        layouts), every item encoded and size-checked, and ``extend()``. A baseline holding an item that cannot be stored
         deletes the list (and logs it), so the next diff does not find the
         stale one; a refused name raises ``ValueError``."""
         from .db.utils import sanitize_json_data
@@ -238,6 +249,10 @@ class RemotePeerStore:
             # arrived as one): the list replaces it.
             self.delete_value(name)
             list_attr = self._get_list_store().get(name)
+        # Cleared first: clear() removes both layouts, so the size check
+        # below is the new layout's (an item over the span threshold spans)
+        # and a list stored in both layouts is repaired, not refused.
+        list_attr.clear()
         try:
             for item in sanitized_items:
                 list_attr.check_item_size(item)
@@ -251,7 +266,6 @@ class RemotePeerStore:
             )
             list_attr.delete()
             raise
-        list_attr.clear()
         if sanitized_items:
             list_attr.extend(sanitized_items)
         if sanitized_metadata:
@@ -437,8 +451,10 @@ class RemotePeerStore:
           bound to the key it arrived under, never to a name its value
           carries.
         - subtarget level: a list diff whose ``list`` is the subtarget is
-          one list operation; an object keyed by the subtarget's own name is
-          its full state, unwrapped; anything else is the one scalar's value.
+          one list operation; a list's state keyed by the subtarget's own name
+          (a list diff, or the ``{"_list": true}`` form) is unwrapped;
+          anything else, an object whose one key is the subtarget included,
+          is the one scalar's value.
         - resource level: the value is merged into the stored property at
           the resource's path (segments are keys, never interpreted; a parent
           that is not an object is replaced); an empty value deletes that
@@ -499,7 +515,10 @@ class RemotePeerStore:
                     ),
                 )
             else:
-                if isinstance(value, dict) and set(value) == {subtarget}:
+                if _wraps_list(value, subtarget):
+                    # A list's full state keyed by its own name. Only a
+                    # list's: a scalar whose one key is its own name (a
+                    # property ``status`` = ``{"status": "ok"}``) is a value.
                     value = value[subtarget]
                 record(
                     subtarget,
@@ -756,8 +775,27 @@ class RemotePeerStore:
                 list_attr.clear()
             return {"operation": "extend", "count": len(items), "success": True}
 
-        if operation == "delete" and "index" in data:
-            idx = data["index"]
+        if operation == "delete" and ("index" in data or "old_item" in data):
+            idx = data.get("index")
+            if "old_item" in data:
+                # The item is named: delete the one equal item, or the one at
+                # ``index`` among several equal ones; none left is an
+                # already-applied delete. Equal items none of which is at
+                # ``index`` mean the replica drifted: out of step.
+                old_item = data["old_item"]
+                values = list_attr.to_list()
+                matches = [i for i, v in enumerate(values) if v == old_item]
+                if not matches:
+                    return {"operation": "delete", "success": True, "noop": True}
+                if len(matches) == 1:
+                    del list_attr[matches[0]]
+                    return {"operation": "delete", "index": matches[0], "success": True}
+                if isinstance(idx, int) and idx in matches:
+                    del list_attr[idx]
+                    return {"operation": "delete", "index": idx, "success": True}
+                raise ReplicaOutOfStep(
+                    list_name, f"delete of a duplicated item at index {idx!r}"
+                )
             if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
                 raise ReplicaOutOfStep(list_name, f"delete index {idx!r} out of range")
             del list_attr[idx]
@@ -834,7 +872,7 @@ class RemotePeerStore:
             return results
         entries: Any = data
         if subtarget:
-            own = isinstance(data, dict) and set(data) == {subtarget}
+            own = _wraps_list(data, subtarget)
             entries = data if own else {subtarget: data}
         for key, value in entries.items():
             try:
@@ -864,6 +902,17 @@ class RemotePeerStore:
         from datetime import datetime
 
         def as_list(name: str, items: list[Any]) -> tuple[str, dict[str, Any]]:
+            why = self._invalid_list_name(name)
+            if why is not None:
+                # The peer's own name, refused: not a baseline this replica
+                # failed to store (a rebuild must not stay owed for it).
+                logger.warning(
+                    "Refused list %r from peer %s in a baseline: the name %s",
+                    name,
+                    self._peer_id,
+                    why,
+                )
+                return name, {"error": "refused name", "success": False}
             metadata = {
                 "source_actor": self._peer_id,
                 "source_property": name,

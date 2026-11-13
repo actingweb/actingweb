@@ -645,7 +645,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         }
@@ -811,13 +811,14 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "item": {
+           "index": 1,
+           "length": 2,
+           "list": "notes",
+           "old_item": {
             "id": "b",
             "text": "two"
            },
-           "length": 2,
-           "list": "notes",
-           "operation": "remove"
+           "operation": "delete"
           }
          },
          "event": "subscription_data",
@@ -835,13 +836,14 @@
        "request": {
         "data": {
          "notes": {
-          "item": {
+          "index": 1,
+          "length": 2,
+          "list": "notes",
+          "old_item": {
            "id": "b",
            "text": "two"
           },
-          "length": 2,
-          "list": "notes",
-          "operation": "remove"
+          "operation": "delete"
          }
         },
         "granularity": "high",
@@ -939,7 +941,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
@@ -1233,7 +1235,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
@@ -1531,7 +1533,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
@@ -1830,7 +1832,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
@@ -2124,7 +2126,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
@@ -2426,7 +2428,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"remove\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 2, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },

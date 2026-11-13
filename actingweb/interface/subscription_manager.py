@@ -2482,10 +2482,16 @@ class SubscriptionManager:
                 settled = False
             carried = set(applied)
             stale: set[str] = {name for name in owed if name not in carried}
-            if not sub.subtarget and isinstance(baseline, dict):
+            if (
+                sub.target == "properties"
+                and not sub.subtarget
+                and isinstance(baseline, dict)
+            ):
                 # A whole-target baseline carries every name the peer may
                 # read: a replica name it lacks was deleted at the publisher
-                # (perhaps in the batch this rebuild dropped).
+                # (perhaps in the batch this rebuild dropped). Properties
+                # only: the replica bucket is shared by every auto-stored
+                # subscription to the peer, whatever its target.
                 stale |= {
                     name
                     for name in [*store.list_all_lists(), *store.list_scalar_names()]

@@ -817,8 +817,8 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed. A batch
             # stopped for a rebuild advances through the callback that
-            # stopped it; the rest of it is pruned (the rebuild supersedes
-            # it).
+            # stopped it; the rest stays pending (a successful rebuild prunes
+            # it through the baseline's sequence).
             new_last_seq = (
                 stop_at if stop_at is not None else callbacks_to_process[-1].sequence
             )
@@ -842,10 +842,13 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
+                        # Through the last callback processed: a batch
+                        # stopped for a rebuild keeps the rest pending, so a
+                        # rebuild that fails leaves no gap they could fill.
                         self._prune_pending(
                             peer_id,
                             subscription_id,
-                            callbacks_to_process[-1].sequence,
+                            new_last_seq,
                         )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")
@@ -1236,8 +1239,8 @@ class CallbackProcessor:
             # This prevents duplicate detection on retry and ensures sequence only
             # advances after the callback has been fully processed. A batch
             # stopped for a rebuild advances through the callback that
-            # stopped it; the rest of it is pruned (the rebuild supersedes
-            # it).
+            # stopped it; the rest stays pending (a successful rebuild prunes
+            # it through the baseline's sequence).
             new_last_seq = (
                 stop_at if stop_at is not None else callbacks_to_process[-1].sequence
             )
@@ -1261,10 +1264,13 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
+                        # Through the last callback processed: a batch
+                        # stopped for a rebuild keeps the rest pending, so a
+                        # rebuild that fails leaves no gap they could fill.
                         self._prune_pending(
                             peer_id,
                             subscription_id,
-                            callbacks_to_process[-1].sequence,
+                            new_last_seq,
                         )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")

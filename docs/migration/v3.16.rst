@@ -1799,9 +1799,13 @@ list's own subtarget: ``{"list", "operation", "length"}`` plus ``item``,
 ``append``, ``extend``, ``insert``, ``update``, ``delete``, ``pop``,
 ``remove``, ``clear``, ``delete_all`` and ``metadata``
 (``actingweb.property_list.build_list_diff``). A bulk ``POST /properties``
-with ``items`` sends up to 25 changes in order, a run of appends as one
-``extend``; more send one resync of the list after the batch
-(``Actor.request_resync``). A peer without resync support receives a list's
+with ``items`` sends up to 25 changes in the order they are applied (on a
+v2 list: updates by ascending index, appends, a run of them as one
+``extend``, then deletes by descending index); more send one resync after
+the batch (``Actor.request_resync``: the list's for a subscription to it,
+the whole target's for a subscription to the whole target). A REST or
+web-UI delete is ``delete`` by index with ``old_item``: the replica deletes
+the one equal item, or the one at the index among equal ones. A peer without resync support receives a list's
 full state as a ``clear`` and then an ``extend``, under consecutive sequence
 numbers. A list diff is filtered as a unit: it reaches a subscriber that may
 read the list's name, whole.

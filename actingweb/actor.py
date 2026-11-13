@@ -4636,12 +4636,17 @@ class Actor:
 
         The subscribers are read afresh (the memo is reset). Only those whose
         grant lets them read ``subtarget`` are sent anything: a subscriber
-        that may not read it is not told its name. A subscriber the send
-        misses (an HTTP failure or timeout, which does not fail this call)
-        is recorded, and the next ``request_resync()`` or
-        ``resume_subscriptions()`` for the same target re-sends to it. A peer
-        without resync support receives the full state as a ``clear`` and
-        then an ``extend`` for each list.
+        that may not read it is not told its name. A subscription to
+        ``subtarget`` gets its resync; a subscription to the whole target
+        gets a resync of the whole target (a receiver resets the whole
+        subscription's sequence on a resync). With synchronous callbacks
+        (``sync_subscription_callbacks``) a subscriber the send misses (an
+        HTTP failure or timeout, or a store fault, none of which fails this
+        call) is recorded, and the next ``request_resync()`` or
+        ``resume_subscriptions()`` for the same target re-sends to it; an
+        asynchronous send counts as sent once scheduled, so nothing is
+        recorded for it. A peer without resync support receives the full
+        state as a ``clear`` and then an ``extend`` for each list.
 
         Returns:
             The number of resync callbacks sent
@@ -4670,8 +4675,17 @@ class Actor:
             readable.append(sub)
         pending = self._resync_pending(target, subtarget)
         missed: list[str] = []
+        # A subscription to the whole target gets a resync of the whole
+        # target: its receiver resets the subscription's sequence on a
+        # resync, so a baseline of one subtarget would drop the other keys'
+        # diffs in flight. A subscription to the subtarget gets its own.
+        whole = [s for s in readable if subtarget and not s.get("subtarget")]
+        scoped = [s for s in readable if s not in whole]
         count = self._send_resync_callbacks(
-            target, subtarget, readable, None, missed=missed
+            target, subtarget, scoped, None, missed=missed, fold_faults=True
+        )
+        count += self._send_resync_callbacks(
+            target, None, whole, None, missed=missed, fold_faults=True
         )
         if pending is not None or missed:
             self._write_resync_pending(target, subtarget, missed)
@@ -4685,8 +4699,12 @@ class Actor:
         suspension: Any = None,
         *,
         missed: list[str] | None = None,
+        fold_faults: bool = False,
     ) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
+
+        ``fold_faults`` (``request_resync``): a transient store fault is
+        recorded in ``missed`` like a permanent one instead of raised.
 
         ``missed`` collects the subscription ids whose resync did not land
         (an HTTP failure or a permanent store error), for the record a later
@@ -4758,6 +4776,9 @@ class Actor:
                 logger.error(
                     f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
                 )
+                if fold_faults and missed is not None:
+                    missed.append(_resync_id(sub))
+                    continue
                 fault = fault or e
 
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
@@ -5113,12 +5134,19 @@ class Actor:
             # cleared first, under its own sequence number, and the full
             # state follows under the next; two callbacks, in order. A list
             # that became a reference is re-read by the receiver: no clear.
-            clears = {
+            clears: Any = {
                 name: {"list": name, "operation": "clear", "length": 0}
                 for name in sorted(list_keys)
                 if isinstance(full_state.get(name), dict)
                 and "items" in full_state[name]
             }
+            own = subscription.get("subtarget")
+            if own and set(full_state) == {own}:
+                # A subscription to one property gets the bare state, as
+                # every diff it gets is bare: a receiver cannot tell
+                # ``{name: value}`` from a value whose one key is its name.
+                full_state = full_state[own]
+                clears = clears.get(own) if clears else clears
             if clears:
                 clear_url = self._store_subscription_diff(
                     peer_id, sub_id, new_seq, clears

@@ -200,3 +200,15 @@ class TestALostMark:
             assert processor._mark_or_owe(  # noqa: SLF001
                 PEER, SUB, {"version": 0}, 1, ["notes"]
             )
+
+
+class TestAnotherTarget:
+    def test_a_rebuild_of_another_target_deletes_no_property(self, env):
+        env.replica.set_value("kept", {"v": 1})
+        env.replica.set_list("notes", ["a"])
+        env.sub.target = "resources"
+        env.owe()
+        env.baselines = [{}]
+        env.rebuild()
+        assert env.replica.get_value("kept") == {"v": 1}
+        assert env.replica.list_all_lists() == ["notes"]

@@ -1482,7 +1482,10 @@ class TestOutOfStepRebuild:
         assert self._run(processor, 2, handler) == ProcessResult.REBUILD
         assert seen == [1, 2, 3]
         assert sequences["peer1:sub1"] == 3
-        assert processor._get_pending("peer1", "sub1") == []  # noqa: SLF001
+        # 4 stays pending: the rebuild prunes it once it lands, and a failed
+        # rebuild leaves no gap (outside voice, verification 2026-11-13).
+        pending = processor._get_pending("peer1", "sub1")  # noqa: SLF001
+        assert [p["sequence"] for p in pending] == [4]
 
     def test_a_resync_keeps_an_owed_rebuild_until_its_handler_returns(
         self,

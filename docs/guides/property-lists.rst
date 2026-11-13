@@ -1036,12 +1036,12 @@ relying on batch semantics:
 the web UI, registers a list diff on the list's own subtarget (3.16; the
 HTTP responses are unchanged): ``append`` from the ``/items`` ``add``
 action, ``update`` from ``PUT ?index=N`` and the ``update`` action (with
-``old_item`` when the item was read), ``remove`` from the ``delete`` action
-(``delete`` by index for a v1 list or a spanned item), ``metadata`` from
+``old_item`` when the item was read), ``delete`` by index (with
+``old_item`` when the item was read) from the ``delete`` action, ``metadata`` from
 the metadata ``PUT``, ``delete_all`` from ``DELETE``, and an empty
-``extend`` for a new list. A bulk update sends up to 25 changes in order (a
-run of appends as one ``extend``) and, beyond that, one resync of the list
-after the batch. See :doc:`subscriptions` ("List Operations") for the
+``extend`` for a new list. A bulk update sends up to 25 changes in the order
+they are applied (a run of appends as one ``extend``) and, beyond that, one
+resync after the batch. See :doc:`subscriptions` ("List Operations") for the
 fields and what a subscriber's replica does with them.
 
 **Item too large (413 Payload Too Large)**

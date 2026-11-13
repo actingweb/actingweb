@@ -77,11 +77,17 @@ def _drop_schema(schema: str) -> None:
 
 
 @contextmanager
-def isolated_store(backend: str, worker_prefix: str) -> Iterator[None]:
-    """Point this process at an empty store of its own, then back."""
+def isolated_store(
+    backend: str, worker_prefix: str, *, revision: str = "head", tag: str = "uc_"
+) -> Iterator[None]:
+    """Point this process at an empty store of its own, then back.
+
+    ``revision``: on PostgreSQL, the Alembic revision the schema is built to
+    (a migration's own test starts below it). ``tag``: what tells this
+    store's schema or tables apart from another isolated store's."""
     from actingweb.db.dynamodb._ensure import reset_ensure_cache
 
-    prefix = f"{worker_prefix}uc_"
+    prefix = f"{worker_prefix}{tag}"
     if backend == "postgresql":
         from actingweb.db.postgresql.connection import close_pool
 
@@ -90,7 +96,7 @@ def isolated_store(backend: str, worker_prefix: str) -> Iterator[None]:
         _drop_schema(schema)
         env = {**os.environ, "PG_DB_PREFIX": prefix, "PG_DB_SCHEMA": "public"}
         subprocess.run(
-            ["poetry", "run", "alembic", "upgrade", "head"],
+            ["poetry", "run", "alembic", "upgrade", revision],
             cwd=MIGRATIONS_DIR,
             env=env,
             check=True,
@@ -125,7 +131,7 @@ def isolated_store(backend: str, worker_prefix: str) -> Iterator[None]:
         yield
     finally:
         for model in models:
-            if "uc_" in model.Meta.table_name and model.exists():
+            if tag in model.Meta.table_name and model.exists():
                 model.delete_table()
             model.Meta.table_name = originals[model]
         reset_ensure_cache()

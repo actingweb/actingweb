@@ -18,6 +18,11 @@ def pytest_configure(config):
     This is critical - it sets environment variables BEFORE ActingWeb modules
     are imported, ensuring that PynamoDB models use test table names.
     """
+    config.addinivalue_line(
+        "markers",
+        "property_only(reason): a property-list test the attribute-list parity "
+        "run skips (tests/_attribute_parity.py)",
+    )
     # Set test AWS credentials
     os.environ["AWS_ACCESS_KEY_ID"] = "test"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "test"

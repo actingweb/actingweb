@@ -3,6 +3,7 @@ from typing import Any, cast
 
 from actingweb.db import get_attribute, get_attribute_bucket_list
 from actingweb.db.exceptions import DbError
+from actingweb.property_list_span import AUX_SUFFIX
 
 logger = logging.getLogger(__name__)
 
@@ -547,10 +548,25 @@ class Attributes:
         return success
 
     def delete_bucket(self) -> bool:
-        """Deletes the attribute bucket in the database"""
+        """Deletes the attribute bucket in the database, with its attribute
+        lists' side bucket ``{bucket}$aux`` (span bodies and key rows).
+
+        The side bucket goes first; a fault there still deletes the main
+        bucket, then raises it."""
         if not self.dbprop:
             return False
-        if self.dbprop.delete_bucket(actor_id=self.actor_id, bucket=self.bucket):
+        side_fault: Exception | None = None
+        if self.bucket and "$" not in self.bucket:
+            try:
+                self.dbprop.delete_bucket(
+                    actor_id=self.actor_id, bucket=self.bucket + AUX_SUFFIX
+                )
+            except Exception as e:  # folds DbError: re-raised below
+                side_fault = e
+        deleted = self.dbprop.delete_bucket(actor_id=self.actor_id, bucket=self.bucket)
+        if side_fault is not None:
+            raise side_fault
+        if deleted:
             if self.config:
                 self.dbprop = get_attribute(self.config)
             else:

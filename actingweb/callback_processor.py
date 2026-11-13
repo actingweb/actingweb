@@ -786,7 +786,13 @@ class CallbackProcessor:
         # retried, instead of leaving this peer's state behind.
         all_attrs = db.get_bucket() or {}
         for attr_name in list(all_attrs.keys()):
-            if f":{peer_id}:" in attr_name:
+            # Keys are "state:{peer_id}:{subscription_id}" and
+            # "pending:{peer_id}:{subscription_id}", and a peer id may contain
+            # ":" (a subscription id never does): compare the peer segment,
+            # never a substring, or ending trust with peer "b" would clear
+            # peer "a:b"'s state ("state:a:b:<sub>").
+            head, sep, _sub = attr_name.rpartition(":")
+            if sep and head in (f"state:{peer_id}", f"pending:{peer_id}"):
                 db.delete_attr(name=attr_name)
 
     def process_callback_sync(

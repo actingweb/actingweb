@@ -30,6 +30,9 @@ from actingweb.property_list_span import (
     span_prefix,
     wrap,
 )
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import FakePropertyDb
 
 ACTOR = "actorspan"
@@ -303,6 +306,7 @@ class TestEnvelopeRefusals:
         report = lst.verify()
         assert report["malformed_heads"] and report["healthy"] is False
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_migrate_refuses_an_envelope_shaped_v1_item(
         self, config: Config, store: dict[Any, Any]
     ) -> None:
@@ -744,6 +748,7 @@ class TestResidueAndDowngrade:
         store[(AUX, f"{span_prefix(name, OLD_GEN)}p0000")] = "x"
         store[(AUX, f"list:{name}-$key-{'b' * 64}")] = "{}"
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_deleted_list_residue_swept(
         self, config: Config, store: dict[Any, Any]
     ) -> None:
@@ -751,6 +756,7 @@ class TestResidueAndDowngrade:
         assert _lst(config, "gone").sweep_foreign_format_rows() == 2
         assert aux_rows(store) == {}
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_list_residue_swept(self, config: Config, store: dict[Any, Any]) -> None:
         store[(ACTOR, "list:old-0")] = '"a"'
         store[(ACTOR, "list:old-meta")] = json.dumps({"length": 1})
@@ -758,6 +764,7 @@ class TestResidueAndDowngrade:
         assert _lst(config, "old").sweep_foreign_format_rows() == 2
         assert aux_rows(store) == {}
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v2_list_keeps_its_rows(
         self, config: Config, store: dict[Any, Any]
     ) -> None:

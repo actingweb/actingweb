@@ -24,6 +24,9 @@ from actingweb.config import Config
 from actingweb.db.exceptions import DbError
 from actingweb.property_list import ListItemTooLargeError, ListProperty
 from actingweb.property_list_span import AUX_SUFFIX, key_row_name, new_gen, parse, wrap
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import FakePropertyDb
 
 ACTOR = "actorkeyed"
@@ -232,6 +235,7 @@ class TestFirstCallAndRepeat:
         # The key itself is stored nowhere.
         assert not any(KEY in str(k) or KEY in str(v) for k, v in store.items())
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_repeat_returns_the_stored_item_with_two_point_reads(
         self, config: Config, store: dict[Any, Any], ctl: Ctl
     ) -> None:
@@ -294,6 +298,7 @@ class TestFirstCallAndRepeat:
     def test_a_512_character_key_is_accepted(self, config: Config) -> None:
         assert _lst(config).append_once("a", key="k" * 512).created is True
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_list_names_migrate_to_v2(
         self, config: Config, store: dict[Any, Any]
     ) -> None:
@@ -892,10 +897,16 @@ class TestRepairScript:
         "duplicate_keyed_items": ["a0", "a1"],
     }
 
+    @pytest.mark.property_only(
+        "the property lists' operator script (actingweb-verify-property-lists builds ListProperty itself)"
+    )
     def test_keys_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         report = {**self.BASE, "needs_rebalance": False}
         assert self._sweep(monkeypatch, report) == ["repair_keys"]
 
+    @pytest.mark.property_only(
+        "the property lists' operator script (actingweb-verify-property-lists builds ListProperty itself)"
+    )
     def test_keys_and_ranks(self, monkeypatch: pytest.MonkeyPatch) -> None:
         report = {**self.BASE, "needs_rebalance": True}
         assert self._sweep(monkeypatch, report) == ["compact"]

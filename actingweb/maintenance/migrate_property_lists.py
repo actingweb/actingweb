@@ -427,7 +427,12 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Bulk-migrate v1 property lists to v2 storage format."
+        description=(
+            "Bulk-migrate v1 property lists to v2 storage format. Attribute "
+            "lists (3.16) are not migrated here: one in the pre-3.16 layout "
+            "converts on its first change, or with "
+            "'actingweb-verify-property-lists --attributes --repair'."
+        )
     )
     parser.add_argument(
         "--migrate",

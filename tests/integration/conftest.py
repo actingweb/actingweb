@@ -1507,9 +1507,10 @@ def remote_store_verifier():
             peer_id: str,
             list_name: str,
         ) -> bool:
-            """Check if a list exists in the remote store."""
+            """Check if a list exists in the remote store (its ``-meta`` row
+            since 3.16; ``:meta`` for a list still in the old layout)."""
             data = self.get_stored_data(actor_url, actor_auth, peer_id)
-            return f"list:{list_name}:meta" in data
+            return f"list:{list_name}-meta" in data or f"list:{list_name}:meta" in data
 
         def get_callback_state(
             self,

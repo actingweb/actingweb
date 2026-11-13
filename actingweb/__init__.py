@@ -30,11 +30,12 @@ for the real signatures.
 
 __version__ = "3.15.1"
 
-# Modules below are lazy-loaded on-demand for backward compatibility with
-# pre-3.x code (`from actingweb import actor`, etc.). This is NOT the
-# recommended API -- use `from actingweb.interface import ActingWebApp` and
-# `from actingweb.mcp import mcp_tool` instead, per the module docstring
-# above.
+# Modules below are lazy-loaded on-demand (`from actingweb import actor`,
+# etc.). Most are here for backward compatibility with pre-3.x code and are
+# NOT the recommended API -- use `from actingweb.interface import
+# ActingWebApp` and `from actingweb.mcp import mcp_tool` instead, per the
+# module docstring above. attribute_list and attribute_list_store are
+# current: reach them through ActorInterface.attribute_lists(bucket).
 __all__ = [
     "actor",  # pyright: ignore[reportUnsupportedDunderAll]
     "attribute",  # pyright: ignore[reportUnsupportedDunderAll]

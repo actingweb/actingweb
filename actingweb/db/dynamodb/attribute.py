@@ -12,11 +12,11 @@ from pynamodb.attributes import (
     UTCDateTimeAttribute,
 )
 from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
-from pynamodb.exceptions import DoesNotExist, PutError
+from pynamodb.exceptions import DeleteError, DoesNotExist, PutError, UpdateError
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
-from actingweb.db.exceptions import DbError
+from actingweb.db.exceptions import AttributeKeyCollision, DbError
 
 # ``delete_by_chain`` scans whole token buckets; past this many rows in one
 # bucket it logs a WARNING that the scan is outgrowing its budget (see the
@@ -87,6 +87,10 @@ def normalize_json(data: Any) -> Any:
     return json.loads(json.dumps(data, sort_keys=True))
 
 
+def _condition_failed(e: Exception) -> bool:
+    return getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException"
+
+
 class DbAttribute:
     """
     DbProperty does all the db operations for property objects
@@ -95,6 +99,10 @@ class DbAttribute:
     that will be reused by set() (overwrite attribute) and
     delete().
     """
+
+    # DynamoDB's item size limit, as DbProperty declares it; read with getattr
+    # (it is not part of the runtime-checkable protocol).
+    MAX_ROW_BYTES: int | None = 409_600
 
     @staticmethod
     def get_bucket(
@@ -269,7 +277,15 @@ class DbAttribute:
             ttl_timestamp=ttl_timestamp,
         )
         try:
-            new.save()
+            # Never over a row another bucket owns under the same key
+            # ("a" + "b:c" and "a:b" + "c" share "a:b:c").
+            new.save(
+                condition=Attribute.id.does_not_exist() | (Attribute.bucket == bucket)
+            )
+        except PutError as e:
+            if _condition_failed(e):
+                raise AttributeKeyCollision(bucket, name, actor_id) from e
+            raise DbError("attribute set") from e
         except Exception as e:
             raise DbError("attribute set") from e
         return True
@@ -470,6 +486,241 @@ class DbAttribute:
                 return False
             return normalize_json(stored.data) == normalize_json(data)
         return False
+
+    # -- list primitives (thoughts/plans/2026-11-13-attribute-list-v2-port.md)
+    #
+    # The list core stores strings; each method reads and writes the
+    # attribute's ``data`` as given (no sanitising: a compare-and-swap must
+    # compare what was written). A row another bucket owns under the same
+    # composite key is never read, matched, overwritten or deleted; a put or
+    # create that meets one raises ``AttributeKeyCollision``. TTLs are
+    # ignored.
+
+    @staticmethod
+    def get_attr_range(
+        actor_id: str,
+        bucket: str,
+        lower: str,
+        upper: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name is in ``[lower, upper]`` (bytes)."""
+        if not actor_id or not bucket or lower > upper:
+            return {}
+        condition = Attribute.bucket_name.between(
+            bucket + ":" + lower, bucket + ":" + upper
+        )
+        fields = ["bucket", "name"] if keys_only else ["bucket", "name", "data"]
+        results: dict[str, Any] = {}
+        try:
+            for item in Attribute.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=consistent_read,
+                attributes_to_get=fields,
+            ):
+                if item.bucket != bucket:
+                    continue
+                results[str(item.name)] = "" if keys_only else item.data
+        except Exception as e:
+            raise DbError("attribute range read", actor_id) from e
+        return results
+
+    @staticmethod
+    def get_attr_prefix(
+        actor_id: str,
+        bucket: str,
+        prefix: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name begins with ``prefix``."""
+        if not actor_id or not bucket:
+            return {}
+        condition = Attribute.bucket_name.startswith(bucket + ":" + prefix)
+        fields = ["bucket", "name"] if keys_only else ["bucket", "name", "data"]
+        results: dict[str, Any] = {}
+        try:
+            for item in Attribute.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=consistent_read,
+                attributes_to_get=fields,
+            ):
+                if item.bucket != bucket:
+                    continue
+                results[str(item.name)] = "" if keys_only else item.data
+        except Exception as e:
+            raise DbError("attribute prefix read", actor_id) from e
+        return results
+
+    @staticmethod
+    def get_last_attr_in_range(
+        actor_id: str, bucket: str, lower: str, upper: str
+    ) -> str | None:
+        """The greatest name of ``bucket`` in ``[lower, upper]``, or None.
+        Reads backwards past rows another bucket owns."""
+        if not actor_id or not bucket or lower > upper:
+            return None
+        condition = Attribute.bucket_name.between(
+            bucket + ":" + lower, bucket + ":" + upper
+        )
+        try:
+            for item in Attribute.query(
+                actor_id,
+                range_key_condition=condition,
+                consistent_read=True,
+                scan_index_forward=False,
+                attributes_to_get=["bucket", "name"],
+                # Small pages: the first row usually answers, and a page
+                # without a limit reads up to 1 MB.
+                page_size=10,
+            ):
+                if item.bucket == bucket:
+                    return str(item.name)
+        except Exception as e:
+            raise DbError("attribute last-in-range read", actor_id) from e
+        return None
+
+    @staticmethod
+    def _owner(actor_id: str, bucket: str, name: str) -> str | None:
+        """The bucket that owns the row at this key, or None when absent."""
+        try:
+            stored = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+        except DoesNotExist:
+            return None
+        return str(stored.bucket)
+
+    @staticmethod
+    def create_attr_if_not_exists(
+        actor_id: str, bucket: str, name: str, data: Any
+    ) -> bool:
+        """Create the row; True only when this call created it. False when
+        the bucket already holds the name (whatever its data or TTL)."""
+        item = Attribute(
+            id=actor_id,
+            bucket_name=bucket + ":" + name,
+            bucket=bucket,
+            name=name,
+            data=data,
+        )
+        try:
+            item.save(condition=Attribute.id.does_not_exist())
+            return True
+        except PutError as e:
+            if not _condition_failed(e):
+                raise DbError("attribute create", actor_id) from e
+        except Exception as e:
+            raise DbError("attribute create", actor_id) from e
+        try:
+            owner = DbAttribute._owner(actor_id, bucket, name)
+        except Exception as e:
+            raise DbError("attribute create read-back", actor_id) from e
+        if owner is not None and owner != bucket:
+            raise AttributeKeyCollision(bucket, name, actor_id)
+        return False
+
+    @staticmethod
+    def create_attrs_if_not_exist(
+        actor_id: str, bucket: str, rows: dict[str, Any]
+    ) -> set[str]:
+        """``create_attr_if_not_exists`` for each row: the names this call
+        created. One conditional put per row (DynamoDB has no conditional
+        batch write)."""
+        return {
+            name
+            for name, data in rows.items()
+            if DbAttribute.create_attr_if_not_exists(actor_id, bucket, name, data)
+        }
+
+    @staticmethod
+    def set_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str, data: Any
+    ) -> bool:
+        """Replace the row's data when it equals ``expected`` exactly; False
+        when it differs, the row is absent, or another bucket owns it."""
+        item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+        try:
+            item.update(
+                actions=[Attribute.data.set(data)],
+                condition=(
+                    Attribute.id.exists()
+                    & (Attribute.bucket == bucket)
+                    & (Attribute.data == expected)
+                ),
+            )
+            return True
+        except UpdateError as e:
+            if _condition_failed(e):
+                return False
+            raise DbError("attribute compare-and-swap", actor_id) from e
+        except Exception as e:
+            raise DbError("attribute compare-and-swap", actor_id) from e
+
+    @staticmethod
+    def delete_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str
+    ) -> bool:
+        """Delete the row when its data equals ``expected`` exactly."""
+        item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+        try:
+            item.delete(
+                condition=(
+                    Attribute.id.exists()
+                    & (Attribute.bucket == bucket)
+                    & (Attribute.data == expected)
+                )
+            )
+            return True
+        except DeleteError as e:
+            if _condition_failed(e):
+                return False
+            raise DbError("attribute conditional delete", actor_id) from e
+        except Exception as e:
+            raise DbError("attribute conditional delete", actor_id) from e
+
+    @staticmethod
+    def delete_attrs(actor_id: str, bucket: str, names: list[str]) -> None:
+        """Delete each named row of ``bucket`` (absent ones are fine). One
+        delete per row, conditioned on the bucket, so a row another bucket
+        owns stays."""
+        for name in names:
+            item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+            try:
+                item.delete(condition=Attribute.bucket == bucket)
+            except DeleteError as e:
+                if _condition_failed(e):
+                    continue
+                raise DbError("attribute batch delete", actor_id) from e
+            except Exception as e:
+                raise DbError("attribute batch delete", actor_id) from e
+
+    @staticmethod
+    def put_attr(actor_id: str, bucket: str, name: str, data: Any) -> None:
+        """Write the row unconditionally within the bucket. A falsy ``data``
+        is refused (``ValueError``), never turned into a delete."""
+        if not data:
+            raise ValueError("put_attr does not store falsy data")
+        item = Attribute(
+            id=actor_id,
+            bucket_name=bucket + ":" + name,
+            bucket=bucket,
+            name=name,
+            data=data,
+        )
+        try:
+            item.save(
+                condition=Attribute.id.does_not_exist() | (Attribute.bucket == bucket)
+            )
+        except PutError as e:
+            if _condition_failed(e):
+                raise AttributeKeyCollision(bucket, name, actor_id) from e
+            raise DbError("attribute put", actor_id) from e
+        except Exception as e:
+            raise DbError("attribute put", actor_id) from e
 
     @staticmethod
     def delete_bucket(actor_id=None, bucket=None):

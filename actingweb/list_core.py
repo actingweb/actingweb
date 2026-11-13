@@ -303,6 +303,12 @@ class ListItemTooLargeError(ValueError):
         )
 
 
+class ListNameTakenError(ValueError):
+    """A list cannot be created: a scalar row of the same name exists (a
+    property, or an attribute). A ``ValueError`` as before; the replica
+    path catches it to replace the scalar with the list."""
+
+
 class ListRankExhaustedError(RuntimeError):
     """A rank key would pass the length cap: the list needs ``compact()``
     (or, on a replica, a rebuild) before another item can go here.
@@ -627,7 +633,7 @@ class ListCore:
     def _is_v2(self) -> bool:
         return self._format() == 2
 
-    def storage_format(self) -> int:
+    def storage_format(self) -> int | str:
         """Which storage format this list uses: 1 (dense integers) or 2
         (fractional rank keys).
 
@@ -1377,8 +1383,9 @@ class ListCore:
             # Check for a scalar collision - error if one exists
             if self._storage.scalar_exists(self.name):
                 noun = self._storage.noun
-                raise ValueError(
-                    f"Cannot create list '{self.name}': a {noun} with this name already exists. "
+                article = "an" if noun[:1] in "aeiou" else "a"
+                raise ListNameTakenError(
+                    f"Cannot create list '{self.name}': {article} {noun} with this name already exists. "
                     f"Delete the {noun} first or use a different name."
                 )
 

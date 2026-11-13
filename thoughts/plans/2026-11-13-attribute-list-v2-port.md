@@ -783,17 +783,120 @@ That is what lets `set_list` repair a damaged list.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
-      run at a time (the PostgreSQL run included)
-- [ ] Run the benchmarks alone on both backends
-- [ ] `grep -n "Shift all items" actingweb/attribute_list.py` returns nothing
-- [ ] `git show --stat HEAD -- tests/integration/wire` lists only rows
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
+      run at a time (the PostgreSQL run included): DynamoDB 7,272 passed,
+      PostgreSQL 7,069 passed, docs build clean
+- [x] Run the benchmarks alone on both backends (mean of
+      `TestListAttributePerformance` beside `TestListPropertyPerformance`
+      in the same run: DynamoDB `to_list` 25.1 ms against 14.9,
+      `items_with_handles` 24.0 against 20.1, append+remove 35.0 against
+      25.7; PostgreSQL 5.3 against 5.1, 6.5 against 7.7, 11.7 against 18.9)
+- [x] `grep -n "Shift all items" actingweb/attribute_list.py` returns nothing
+- [x] `git show --stat HEAD -- tests/integration/wire` lists only rows
       `rows.toml` assigns to `attribute-list-v2-port:2`, with
       the `Wire-Phase` trailer if any changed; `WL11.target`, `WD8` and
-      `WD10` are unchanged
+      `WD10` are unchanged (only `WL12.target`, both topologies: the falsy
+      items read back)
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-13):
+
+- **Deviations from the Changes list.**
+  - The range and prefix primitives return each row's stored JSON value as
+    it is (`dict[str, Any]`), not a string: the old layout's rows hold JSON
+    items, and its reader needs their types. `AttributeListStorage` turns
+    values into the strings the core reads.
+  - The attribute span threshold is not measured per item: it is the
+    configured threshold capped at (the backend's `MAX_ROW_BYTES` less
+    4,096 bytes of key overhead) / 6, the worst JSON growth (a control
+    character in the `str()` fallback). Parts are cut at the threshold, so
+    a body row fits too. On DynamoDB that is 67,584 bytes. Measured growth
+    of the stored form: quotes and backslashes 2.0, `\uXXXX` escapes about
+    1.17, plain ASCII 1.0 (`tests/integration/test_attribute_list_row_size.py`).
+  - Reads do not write, including a conversion's unfinished cleanup: a
+    `-meta` row with the marker reads as the core's list, and the next
+    mutation (or `convert()`) finishes the cleanup.
+  - `ListAttribute.convert()` is public (the tool's `--repair` uses it).
+    `storage_format()` is typed `int | str` in the core; `ListProperty`
+    keeps `-> int`.
+  - `ListNameTakenError(ValueError)` (in the core) is what a list creation
+    over a same-named scalar raises; the replica catches it to replace the
+    scalar (Phase 3's rule moved here), and `RemotePeerStore.get_list()`
+    answers `[]` for a name held as a scalar (a replica name is one or the
+    other).
+  - `AttributeListStore` returns a fresh `ListAttribute` per access (the
+    old store cached one per name; a cached instance keeps its layout
+    decision and metadata past concurrent writers).
+  - `callback_processor.clear_all_state_for_peer` matches the peer segment
+    of both `state:` and `pending:` keys.
+  - **PostgreSQL revision**: the migration environment (`env.py`) now lets
+    Alembic own the transaction (the search path is set and committed
+    first), which `autocommit_block()` needs. The index is built
+    CONCURRENTLY only on a table that holds rows, with no lock timeout (a
+    concurrent build waits for every older transaction in the database;
+    the parallel test workers' migrations timed out under the 10 s
+    `lock_timeout` the plan put on the whole revision); an empty table is
+    indexed inside the transaction. `lock_timeout` stays on the `ALTER`.
+    The prefix query carries byte bounds beside `starts_with()`, so the
+    partial index gives it a range; `EXPLAIN` under a forced generic plan
+    uses `ix_attributes_list_rows` for all four list queries (the partial
+    index, not the full one). The INVALID-index message also names
+    `REINDEX INDEX CONCURRENTLY` (a second upgrade rebuilds the index only
+    when the failed build left the revision unapplied).
+  - `list_all()`'s skip-scan reads backwards ("greatest name below the
+    cursor", the only one-row read the primitives have), jumping a list's
+    item rows as one block. Known gap, in its docstring: a pre-3.16 list
+    whose name continues another's with `-#` or `:<digit>` is not listed.
+  - DynamoDB `get_last_attr_in_range` reads pages of 10.
+- **Parity**: `tests/_attribute_parity.py` (the adapter and the autouse
+  parametrised fixture) runs the twelve suites against
+  `AttributeParityList`; 120 of their attribute runs are skipped as `property_only` (the v1 format and its
+  migration, a write that answers `False`, the operator script, the HTTP
+  handler half of `test_list_item_limits`). The adapter maps a one-row delete
+  to the property `set(value=None)` so the suites' fault injection on it
+  reaches the attribute run.
+- **Existing tests changed**: `test_db_attribute_buckets.py`'s collision
+  test pinned last-writer-wins; it now pins the first writer keeping the row
+  and the second getting `AttributeKeyCollision`. `test_attribute.py`'s
+  `delete_bucket` test expects the side bucket first.
+  `test_attribute_list.py` and `test_attribute_list_store.py` are rewritten
+  onto the in-memory backend. `TestApplyResyncData` in
+  `test_remote_storage.py` moved onto it (its mocked config could not hold a
+  list once the core bypasses `Attributes`).
+- **Outside voice** (codex and a fresh-context reviewer, on
+  `a125c50..2e20d85`), fixed in this commit: a failed batch create deleted
+  the bodies of heads that had already landed (DynamoDB's batch is one put
+  per row), so bodies are now left to the aged sweep; PostgreSQL's batch
+  create committed the rows before a collision and named the wrong key (now
+  rolled back, naming the colliding one); a resumed conversion adopted
+  whatever sat at a conversion rank (now every existing row in the list's
+  new range is compared with the item it should hold, and any other row is
+  a conflict: conversion ranks are a fresh list's first ranks); a stale
+  instance's cached "old" layout could re-convert a list after a pre-3.16
+  write (a mutation now settles the layout again unless the instance knows
+  the `-meta` row); a converter finding a partial old layout because another
+  converter is cleaning up now yields to it; rows at or above the recorded
+  length are a crashed pre-3.16 append's leftovers, ignored and swept, not
+  damage; the migration emits the concurrent build offline (`--sql`);
+  `prime_from_rows` settles the layout (both layouts raise); the old-layout
+  sweep is one keys-only read; `_below` never builds a surrogate or
+  `chr(-1)`; the known gap's wording; `compact()` and `repair_keys()`
+  convert first. Noted, not changed: a peer-chosen subscription id
+  containing `:` would make the callback-state cleanup match by the wrong
+  segment (subscription ids are UUID hex today); a crash leaving the
+  cleanup marker in place lets old-layout rows written after it be swept as
+  residue until the next mutation finishes the cleanup. The Phase 2 gaps
+  the reviewer tied to Phase 3 (a collision answering 503 on the replica
+  path, `getattr` resolving a peer list named `get`) close in Phase 3, in
+  the same PR.
+- A note for the changelog phase: a new config-free surface (no route, hook
+  or response field): `actor.attribute_lists()`, `AttributeListStore.get()`,
+  `ListAttribute.convert()`, `AttributeKeyCollision`,
+  `AttributeSchemaNotReady`, `ListNameTakenError`, the nine primitives, the
+  tool flags `--attributes`, `--bucket`, `--delete-damaged-replicas`; a
+  changed contract: `set_attr` raises on a composite-key collision.
 
 ---
 

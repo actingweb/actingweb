@@ -28,6 +28,9 @@ import pytest
 from actingweb.db.exceptions import DbError
 from actingweb.interface.property_store import NotifyingListProperty
 from actingweb.property_list import ListMetadataContentionError, ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     FakePropertyDb,
     _patch_get_property,
@@ -510,6 +513,7 @@ class TestExistingRowSwallowsBackendFault:
 
 
 class TestBoundaries:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_semantic_length_write_still_raises_on_backend_fault(
         self, monkeypatch, fake_store
     ):

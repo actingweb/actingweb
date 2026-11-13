@@ -12,6 +12,7 @@ from re import Pattern
 from typing import TYPE_CHECKING, Any
 
 from .db.exceptions import DbError
+from .list_core import ListNameTakenError
 
 if TYPE_CHECKING:
     from .interface.actor_interface import ActorInterface
@@ -142,13 +143,17 @@ class RemotePeerStore:
 
     # List operations
 
-    def get_list(self, name: str) -> list[dict[str, Any]]:
+    def get_list(self, name: str) -> list[Any]:
         """Get a list by name."""
         from .db.utils import sanitize_json_data
 
         store = self._get_list_store()
         list_attr = getattr(store, name)
-        items = list(list_attr)
+        try:
+            items = list(list_attr)
+        except ListNameTakenError:
+            # The replica holds a scalar of this name: there is no list.
+            return []
         # Defense-in-depth: sanitize on read to catch surrogates that
         # survived storage (e.g., from JSON round-trip of \uD800 escapes)
         return sanitize_json_data(items, log_source=f"read:peer:{self._peer_id}")
@@ -156,7 +161,7 @@ class RemotePeerStore:
     def set_list(
         self,
         name: str,
-        items: list[dict[str, Any]],
+        items: list[Any],
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Set a list from remote peer (sanitizes for security)."""
@@ -172,7 +177,14 @@ class RemotePeerStore:
 
         store = self._get_list_store()
         list_attr = getattr(store, name)
-        list_attr.clear()
+        try:
+            list_attr.clear()
+        except ListNameTakenError:
+            # A scalar of this name (a pre-3.16 publisher's REST list edit
+            # arrived as one): the list replaces it.
+            self.delete_value(name)
+            list_attr = getattr(store, name)
+            list_attr.clear()
         list_attr.extend(sanitized_items)
         if sanitized_metadata:
             # ListAttribute only supports setting description and explanation
@@ -395,7 +407,24 @@ class RemotePeerStore:
     def _apply_list_operation(
         self, list_name: str, operation: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Apply a single list operation."""
+        """Apply a single list operation. A list arriving where a scalar of
+        that name is stored (a pre-3.16 publisher's REST list edit arrived
+        as one) deletes the scalar first: a name is a scalar or a list in a
+        replica, never both."""
+        try:
+            return self._apply_list_operation_once(list_name, operation, data)
+        except ListNameTakenError:
+            logger.info(
+                "Replacing the scalar %r with a list in the replica of peer %s",
+                list_name,
+                self._peer_id,
+            )
+            self.delete_value(list_name)
+            return self._apply_list_operation_once(list_name, operation, data)
+
+    def _apply_list_operation_once(
+        self, list_name: str, operation: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
         if data.get("spanned") is True:
             # A reference (property_list.diff_reference): the publisher's
             # values were over the span threshold and the diff carries none.

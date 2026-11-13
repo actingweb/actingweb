@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from actingweb.attribute import Attributes, Buckets, InternalStore
 
 
@@ -240,8 +242,48 @@ class TestAttributesDeleteBucket:
 
         assert result is True
         assert attrs.data == {}
+        # The attribute lists' side bucket goes first, then the bucket.
+        assert [c.kwargs for c in mock_db_attr.delete_bucket.call_args_list] == [
+            {"actor_id": "test_actor", "bucket": "test_bucket$aux"},
+            {"actor_id": "test_actor", "bucket": "test_bucket"},
+        ]
+
+    def test_a_side_bucket_fault_still_deletes_the_bucket_then_raises(self):
+        """A fault deleting {bucket}$aux leaves no main bucket behind."""
+        from actingweb.db.exceptions import DbError
+
+        mock_config = Mock()
+        mock_db_attr = Mock()
+        mock_db_attr.get_bucket.return_value = {}
+
+        def delete_bucket(actor_id, bucket):
+            if bucket.endswith("$aux"):
+                raise DbError("attribute delete_bucket")
+            return True
+
+        mock_db_attr.delete_bucket.side_effect = delete_bucket
+        mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
+        attrs = Attributes(
+            actor_id="test_actor", bucket="test_bucket", config=mock_config
+        )
+        with pytest.raises(DbError):
+            attrs.delete_bucket()
+        assert mock_db_attr.delete_bucket.call_args_list[-1].kwargs == {
+            "actor_id": "test_actor",
+            "bucket": "test_bucket",
+        }
+
+    def test_a_bucket_with_a_dollar_has_no_side_bucket_to_delete(self):
+        mock_config = Mock()
+        mock_db_attr = Mock()
+        mock_db_attr.get_bucket.return_value = {}
+        mock_db_attr.delete_bucket.return_value = True
+        mock_config.DbAttribute.DbAttribute.return_value = mock_db_attr
+        Attributes(
+            actor_id="a", bucket="remote:p$aux", config=mock_config
+        ).delete_bucket()
         mock_db_attr.delete_bucket.assert_called_once_with(
-            actor_id="test_actor", bucket="test_bucket"
+            actor_id="a", bucket="remote:p$aux"
         )
 
     def test_delete_bucket_failure(self):

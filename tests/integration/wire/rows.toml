@@ -958,8 +958,8 @@ test = "test_wire_list_properties.py::test_wl12_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:2", "attribute-list-v2-port:3"]
 exposure = false
-expected = "SDK appends of 0, \"\", False, None, [] and {}: each sent and answered 204, but from the first one B's replica list cannot be read (IndexError: item at index 0 not found), recorded as read_error. Known wrong. Beside the read error, the replica list's stored length is recorded: it grows 1 to 6, so each append lands in the metadata while the items stay unreadable."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stored length beside the read error (subscription-wire-baseline iteration 6)"]
+expected = "SDK appends of 0, \"\", False, None, [] and {}: each sent and answered 204, and B's replica list holds each falsy item in order (0, \"\", false, null, [], {})."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stored length beside the read error (subscription-wire-baseline iteration 6)", "2026-11-13 falsy items are stored and read back: replica lists are the list core over attribute storage (attribute-list-v2-port:2)"]
 
 [rows."WL13.target"]
 test = "test_wire_list_properties.py::test_wl13_target"

@@ -31,9 +31,23 @@ finding is adjacent_duplicates -- compact() itself leaves duplicate
 residue intact (a duplicate always means a destroyed item, and silently
 collapsing one copy would bless the data loss as intentional).
 
+--attributes adds each actor's attribute lists (3.16): the replica buckets
+``remote:{peer}`` of its trusted peers, plus any --bucket named. Lists are
+found by a skip-scan, never a whole-bucket read. A dry run writes nothing
+and reports a list still in the pre-3.16 attribute layout as such; --repair
+converts a healthy one (as its first change would), and applies
+repair_keys()/compact() as for property lists. A list in both layouts, or
+an old-layout list that is damaged, stays unhealthy; with
+--delete-damaged-replicas (and --repair) such a list in a ``remote:``
+bucket is deleted, so the peer's next baseline rebuilds it (never in any
+other bucket: nothing would rebuild it). --repair-reverted applies to
+property lists only. The checkpoint records whether --attributes was given;
+a run refuses a checkpoint written in the other mode.
+
 Exit code 0 if every list is healthy (or was repaired to healthy) by the
 end of the run, 1 if any list is still unhealthy or errored. 2 if the actor list
-could not be read (nothing was scanned).
+could not be read (nothing was scanned), or the checkpoint is of the other
+mode.
 """
 
 import argparse
@@ -76,22 +90,43 @@ class RateLimiter:
             time.sleep(delay)
 
 
-class Checkpoint:
-    """Set of actor IDs already swept this run, persisted for resume."""
+class CheckpointModeMismatch(Exception):
+    """The checkpoint was written by a run of the other mode (with or
+    without --attributes): resuming from it would skip actors whose lists
+    of the other kind were never swept."""
 
-    def __init__(self, path: str | None) -> None:
+
+class Checkpoint:
+    """Set of actor IDs already swept this run, persisted for resume, with
+    the mode that swept them (``"properties"`` or ``"attributes"``; a bare
+    list, as written before 3.16, is ``"properties"``)."""
+
+    def __init__(self, path: str | None, mode: str = "properties") -> None:
         self._path = path
+        self._mode = mode
         self._done: set[str] = set()
         if path and os.path.exists(path):
             try:
                 with open(path) as f:
-                    self._done = set(json.load(f))
-                logger.info(
-                    f"Resuming from checkpoint {path} "
-                    f"({len(self._done)} actors already swept)"
-                )
+                    stored = json.load(f)
             except Exception as e:  # folds DbError: no DB access (checkpoint file)
                 logger.warning(f"Could not read checkpoint {path}: {e}")
+                return
+            if isinstance(stored, dict):
+                stored_mode = stored.get("mode", "properties")
+                done = stored.get("done", [])
+            else:
+                stored_mode, done = "properties", stored
+            if stored_mode != mode:
+                raise CheckpointModeMismatch(
+                    f"Checkpoint {path} was written by a {stored_mode} run; this "
+                    f"is a {mode} run. Finish that run, or delete the file."
+                )
+            self._done = set(done)
+            logger.info(
+                f"Resuming from checkpoint {path} "
+                f"({len(self._done)} actors already swept)"
+            )
 
     def is_done(self, actor_id: str) -> bool:
         return actor_id in self._done
@@ -101,7 +136,7 @@ class Checkpoint:
         if self._path:
             tmp = f"{self._path}.tmp"
             with open(tmp, "w") as f:
-                json.dump(sorted(self._done), f)
+                json.dump({"mode": self._mode, "done": sorted(self._done)}, f)
             os.replace(tmp, self._path)
 
 
@@ -150,6 +185,10 @@ def sweep_actor(
     repair_reverted: bool = False,
     spans: bool = False,
     sweep_spans: bool = False,
+    *,
+    attributes: bool = False,
+    buckets: tuple[str, ...] = (),
+    delete_damaged_replicas: bool = False,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
 
@@ -160,6 +199,10 @@ def sweep_actor(
     make a list unhealthy. The sweep is the one body enumeration; the verify
     after it reads bodies only with ``spans``. Without ``repair``,
     ``sweep_spans`` reports what a sweep would find (``verify(spans=True)``).
+
+    ``attributes`` adds the actor's attribute lists (see the module
+    docstring); ``buckets`` names buckets beyond the ``remote:{peer}`` ones
+    of its trusted peers.
 
     Returns (lists_checked, lists_unhealthy_after, lists_errored).
     """
@@ -173,10 +216,37 @@ def sweep_actor(
     unhealthy_after = 0
     errored = 0
 
-    for name in list_names:
+    targets: list[tuple[str, Any, str | None]] = [
+        (
+            f"actor={actor_id} list={name}",
+            lambda name=name: ListProperty(actor_id=actor_id, name=name, config=config),
+            None,
+        )
+        for name in list_names
+    ]
+    if attributes:
+        try:
+            targets += _attribute_targets(actor_id, config, buckets, limiter)
+        except Exception as e:  # folds DbError: counted as error, exit 1
+            logger.error(f"actor={actor_id}: attribute lists could not be listed: {e}")
+            errored += 1
+
+    for label, make, bucket in targets:
         limiter.wait()
         checked += 1
-        list_prop = ListProperty(actor_id=actor_id, name=name, config=config)
+        list_prop = make()
+        if bucket is not None:
+            outcome = _settle_attribute_layout(
+                list_prop, label, bucket, repair, delete_damaged_replicas
+            )
+            if outcome == "done":
+                continue
+            if outcome == "unhealthy":
+                unhealthy_after += 1
+                continue
+            if outcome == "error":
+                errored += 1
+                continue
         # The span sweep runs first, ahead of verify and of the healthy
         # short-circuit (an orphan body generation does not make a list
         # unhealthy). It enumerates the list's body rows itself, so the
@@ -190,18 +260,18 @@ def sweep_actor(
         if repair and sweep_spans:
             try:
                 if list_prop.storage_format() == 2:
-                    swept = list_prop.sweep_span_orphans()
+                    sweep_report: dict[str, Any] = list_prop.sweep_span_orphans()
+                    swept = sweep_report
                     logger.info(
-                        f"actor={actor_id} list={name}: span sweep removed "
-                        f"{swept.get('orphan_span_gens_removed', 0)} orphan "
-                        f"generation(s), {swept.get('broken_spans_removed', 0)} "
+                        f"{label}: span sweep removed "
+                        f"{sweep_report.get('orphan_span_gens_removed', 0)} orphan "
+                        f"generation(s), {sweep_report.get('broken_spans_removed', 0)} "
                         f"broken span(s) and "
-                        f"{swept.get('malformed_heads_removed', 0)} malformed head(s)"
+                        f"{sweep_report.get('malformed_heads_removed', 0)} "
+                        f"malformed head(s)"
                     )
             except Exception as e:  # folds DbError: counted as error, exit 1
-                logger.error(
-                    f"actor={actor_id} list={name}: sweep_span_orphans() failed: {e}"
-                )
+                logger.error(f"{label}: sweep_span_orphans() failed: {e}")
                 errored += 1
                 sweep_failed = True
         try:
@@ -214,7 +284,7 @@ def sweep_actor(
                 spans=spans or (sweep_spans and not repair),
             )
         except Exception as e:  # folds DbError: counted as error, exit 1
-            logger.error(f"actor={actor_id} list={name}: verify() failed: {e}")
+            logger.error(f"{label}: verify() failed: {e}")
             if not sweep_failed:  # one list counts once
                 errored += 1
             continue
@@ -225,7 +295,7 @@ def sweep_actor(
 
         if is_v2 and (report.get("spanned_items") or "span_body_rows" in report):
             logger.info(
-                f"actor={actor_id} list={name}: spanned_items="
+                f"{label}: spanned_items="
                 f"{report.get('spanned_items')} span_bytes={report.get('span_bytes')}"
                 + (
                     f" span_body_rows={report['span_body_rows']} "
@@ -237,7 +307,7 @@ def sweep_actor(
             )
         if report.get("malformed_heads"):
             logger.warning(
-                f"actor={actor_id} list={name}: "
+                f"{label}: "
                 f"{len(report['malformed_heads'])} head row(s) hold a malformed "
                 f"storage envelope -- --repair --sweep-spans removes the ones "
                 f"that carry the library's marker; a head that is not valid "
@@ -269,7 +339,7 @@ def sweep_actor(
             )
             if reverted:
                 logger.warning(
-                    f"actor={actor_id} list={name}: DAMAGED **and** carrying "
+                    f"{label}: DAMAGED **and** carrying "
                     f"{report['foreign_format_rows']} row(s) of the v2 storage "
                     f"format. This is a REVERTED MIGRATION, not an ordinary "
                     f"hole -- the items are probably intact in those v2 rows. "
@@ -279,7 +349,7 @@ def sweep_actor(
                 )
             else:
                 logger.info(
-                    f"actor={actor_id} list={name}: {report['foreign_format_rows']} "
+                    f"{label}: {report['foreign_format_rows']} "
                     f"row(s) of the other storage format present -- residue from "
                     f"an interrupted migration/downgrade. Inert to readers of "
                     f"this list's format; clear it by re-running "
@@ -288,7 +358,7 @@ def sweep_actor(
 
         if report.get("dangling_key_rows"):
             logger.info(
-                f"actor={actor_id} list={name}: "
+                f"{label}: "
                 f"{len(report['dangling_key_rows'])} dangling key row(s) "
                 f"(append_once() items deleted while their key-row delete "
                 f"failed) -- informational; the next call with the key, or "
@@ -306,7 +376,7 @@ def sweep_actor(
             )
             if sweep_left > 0:
                 logger.warning(
-                    f"actor={actor_id} list={name}: UNHEALTHY: the span sweep "
+                    f"{label}: UNHEALTHY: the span sweep "
                     f"left {sweep_left} broken span(s) in place (changed under "
                     f"the sweep) -- re-run, or remove the item(s) with "
                     f"delete_by_handle()"
@@ -325,14 +395,14 @@ def sweep_actor(
         # info instead. See ListProperty.verify()/._v2_verify().
         if is_v2:
             logger.warning(
-                f"actor={actor_id} list={name}: UNHEALTHY (v2) "
+                f"{label}: UNHEALTHY (v2) "
                 f"length={report['length']} "
                 f"max_rank_length={report['max_rank_length']} "
                 f"adjacent_duplicates={report['adjacent_duplicates']}"
             )
         else:
             logger.warning(
-                f"actor={actor_id} list={name}: UNHEALTHY "
+                f"{label}: UNHEALTHY "
                 f"stored_length={report['stored_length']} "
                 f"readable_count={report['readable_count']} "
                 f"missing_indices={report['missing_indices']} "
@@ -341,13 +411,13 @@ def sweep_actor(
             )
         if report.get("duplicate_keyed_items"):
             logger.warning(
-                f"actor={actor_id} list={name}: keyed items share a key at "
+                f"{label}: keyed items share a key at "
                 f"ranks {report['duplicate_keyed_items']} -- --repair keeps the "
                 f"one the key row names and removes the others"
             )
         if report["adjacent_duplicates"]:
             logger.warning(
-                f"actor={actor_id} list={name}: duplicate residue reported "
+                f"{label}: duplicate residue reported "
                 f"-- --repair never rewrites this, resolve manually"
             )
         if (
@@ -356,7 +426,7 @@ def sweep_actor(
             and (report.get("length") or report.get("readable_count"))
         ):
             logger.warning(
-                f"actor={actor_id} list={name}: NO row carries "
+                f"{label}: NO row carries "
                 f"'{identity_key}' -- the identity duplicate check compared "
                 f"nothing. A clean result here means 'not checked', not "
                 f"'no duplicates'. Check the field name."
@@ -366,7 +436,7 @@ def sweep_actor(
                 report["duplicate_identities"].items(), key=lambda kv: str(kv[0])
             ):
                 logger.warning(
-                    f"actor={actor_id} list={name}: {identity_key}={identity} "
+                    f"{label}: {identity_key}={identity} "
                     f"appears at positions {positions} -- --repair never "
                     f"rewrites this, resolve manually"
                 )
@@ -402,7 +472,7 @@ def sweep_actor(
             else:
                 compact_report = list_prop.compact(allow_reverted=repair_reverted)
         except Exception as e:  # folds DbError: counted as error, exit 1
-            logger.error(f"actor={actor_id} list={name}: repair failed: {e}")
+            logger.error(f"{label}: repair failed: {e}")
             errored += 1
             continue
 
@@ -415,16 +485,105 @@ def sweep_actor(
 
         post = list_prop.verify(identity_key=identity_key)
         if post["healthy"] and sweep_left <= 0:
-            logger.info(f"actor={actor_id} list={name}: repaired")
+            logger.info(f"{label}: repaired")
         else:
             unhealthy_after += 1
 
     return checked, unhealthy_after, errored
 
 
+def _attribute_targets(
+    actor_id: str, config: Any, buckets: tuple[str, ...], limiter: RateLimiter
+) -> list[tuple[str, Any, str | None]]:
+    """``(label, make list, bucket)`` for each attribute list of the actor's
+    ``remote:{peer}`` buckets and of ``buckets``. Each enumeration read is
+    paced by ``limiter``."""
+    from actingweb.attribute_list import ListAttribute
+    from actingweb.attribute_list_store import AttributeListStore
+    from actingweb.db import get_trust_list
+    from actingweb.remote_storage import get_remote_bucket
+
+    limiter.wait()
+    trusts = get_trust_list(config).fetch(actor_id, strict=True) or []
+    names = [
+        get_remote_bucket(str(t.get("peerid")), validate=False)
+        for t in trusts
+        if t.get("peerid")
+    ]
+    targets: list[tuple[str, Any, str | None]] = []
+    for bucket in dict.fromkeys([*names, *buckets]):
+        store = AttributeListStore(actor_id=actor_id, bucket=bucket, config=config)
+        for name in store._skip_scan(on_read=limiter.wait):  # noqa: SLF001
+            targets.append(
+                (
+                    f"actor={actor_id} bucket={bucket!r} list={name!r}",
+                    lambda b=bucket, n=name: ListAttribute(actor_id, b, n, config),
+                    bucket,
+                )
+            )
+    return targets
+
+
+def _settle_attribute_layout(
+    list_attr: Any, label: str, bucket: str, repair: bool, delete_damaged: bool
+) -> str:
+    """The layout half of an attribute list's check: ``"v2"`` (verify it),
+    ``"done"`` (an old-layout list in a dry run: reported, nothing to
+    verify yet), ``"unhealthy"`` or ``"error"``."""
+    from actingweb.attribute_list import OLD_LAYOUT
+    from actingweb.list_core import ListCorruptionError, ListLayoutConflictError
+
+    try:
+        old = list_attr.storage_format() == OLD_LAYOUT
+        if old and not repair:
+            logger.info(
+                f"{label}: in the pre-3.16 attribute layout -- converted on "
+                f"its first change, or by --repair"
+            )
+            return "done"
+        if repair:
+            if list_attr.convert():
+                logger.info(f"{label}: converted from the pre-3.16 layout")
+        return "v2"
+    except ListLayoutConflictError:
+        why = "rows of both layouts (a pre-3.16 writer beside a converted list)"
+    except ListCorruptionError:
+        why = "damaged in the pre-3.16 layout (a hole or a wrong length)"
+    except Exception as e:  # folds DbError: counted as error, exit 1
+        logger.error(f"{label}: layout check failed: {e}")
+        return "error"
+    if not (repair and delete_damaged):
+        logger.warning(
+            f"{label}: UNHEALTHY: {why}"
+            + (
+                " -- --repair --delete-damaged-replicas deletes it so the "
+                "peer's next baseline rebuilds it"
+                if bucket.startswith("remote:")
+                else " -- resolve manually (nothing rebuilds a list here)"
+            )
+        )
+        return "unhealthy"
+    if not bucket.startswith("remote:"):
+        logger.warning(
+            f"{label}: UNHEALTHY: {why} -- not deleted: "
+            f"--delete-damaged-replicas applies to remote: buckets only"
+        )
+        return "unhealthy"
+    try:
+        list_attr.delete()
+    except Exception as e:  # folds DbError: counted as error, exit 1
+        logger.error(f"{label}: delete failed: {e}")
+        return "error"
+    logger.warning(f"{label}: {why} -- deleted; the next baseline rebuilds it")
+    return "done"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sweep all actors' property lists for index corruption."
+        description=(
+            "Sweep all actors' property lists (and, with --attributes, "
+            "attribute lists) for index corruption."
+        )
     )
     parser.add_argument(
         "--repair",
@@ -482,11 +641,42 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--attributes",
+        action="store_true",
+        help=(
+            "also sweep each actor's attribute lists: the remote:{peer} "
+            "buckets of its trusted peers, plus any --bucket. A list still in "
+            "the pre-3.16 attribute layout is reported (dry run) or converted "
+            "(--repair)"
+        ),
+    )
+    parser.add_argument(
+        "--bucket",
+        action="append",
+        default=[],
+        help="with --attributes, an attribute bucket to sweep too (repeatable)",
+    )
+    parser.add_argument(
+        "--delete-damaged-replicas",
+        action="store_true",
+        help=(
+            "with --repair --attributes: delete a list in a remote: bucket "
+            "that is damaged or in both layouts, so the peer's next baseline "
+            "rebuilds it. Refused for any other bucket"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-file",
         default=".verify_property_lists.checkpoint.json",
         help="resume state file (default .verify_property_lists.checkpoint.json)",
     )
     args = parser.parse_args()
+    if args.delete_damaged_replicas and not (args.repair and args.attributes):
+        parser.error("--delete-damaged-replicas needs --repair and --attributes")
+    if args.bucket and not args.attributes:
+        parser.error("--bucket needs --attributes")
+    if args.repair_reverted and args.attributes:
+        logger.info("--repair-reverted applies to property lists only")
 
     from actingweb.config import Config
     from actingweb.db import get_actor_list
@@ -500,7 +690,14 @@ def main() -> int:
     rows = iter(get_actor_list(config).iter_rows())
     actors_read = 0
 
-    checkpoint = Checkpoint(args.checkpoint_file if args.repair else None)
+    try:
+        checkpoint = Checkpoint(
+            args.checkpoint_file if args.repair else None,
+            mode="attributes" if args.attributes else "properties",
+        )
+    except CheckpointModeMismatch as e:
+        logger.error(str(e))
+        return 2
     limiter = RateLimiter(args.rps)
 
     total_checked = 0
@@ -536,6 +733,9 @@ def main() -> int:
             repair_reverted=args.repair_reverted,
             spans=args.spans,
             sweep_spans=args.sweep_spans,
+            attributes=args.attributes,
+            buckets=tuple(args.bucket),
+            delete_damaged_replicas=args.delete_damaged_replicas,
         )
         total_checked += checked
         total_unhealthy += unhealthy

@@ -581,3 +581,185 @@ class TestMidSweepFault:
         assert os.path.exists(checkpoint_file)
         with open(checkpoint_file) as f:
             assert test_actor.id in f.read()
+
+
+def _plant_old_attribute_list(config, actor_id, bucket, name, items, length=None):
+    """A list in the pre-3.16 attribute layout, as that code wrote it."""
+    from actingweb.db import get_attribute
+
+    db = get_attribute(config)
+    db.set_attr(
+        actor_id=actor_id,
+        bucket=bucket,
+        name=f"list:{name}:meta",
+        data={"length": len(items) if length is None else length, "description": ""},
+    )
+    for i, item in enumerate(items):
+        db.set_attr(
+            actor_id=actor_id, bucket=bucket, name=f"list:{name}:{i}", data=item
+        )
+
+
+def _bucket_rows(config, actor_id, bucket):
+    from actingweb.db import get_attribute
+
+    return get_attribute(config).get_bucket(actor_id=actor_id, bucket=bucket) or {}
+
+
+class TestAttributesMode:
+    """``--attributes`` (3.16): the actor's attribute lists in its
+    ``remote:{peer}`` buckets and any ``--bucket``."""
+
+    PEER = "c" * 32
+
+    def _trust(self, actor):
+        from actingweb.db import get_trust
+
+        assert get_trust(actor.config).create(
+            actor_id=actor.id,
+            peerid=self.PEER,
+            baseuri=f"http://peer.test/{self.PEER}",
+            relationship="friend",
+            secret="s" * 20,
+        )
+
+    def _run(self, monkeypatch, *args):
+        import verify_property_lists as script  # type: ignore[import-not-found]
+
+        monkeypatch.setattr(sys, "argv", ["verify_property_lists.py", *args])
+        return script.main()
+
+    def test_a_dry_run_reports_and_writes_nothing(
+        self, test_actor, monkeypatch, tmp_path, caplog
+    ):
+        from actingweb.attribute_list import ListAttribute
+
+        only_this_actor(monkeypatch, test_actor.id)
+        self._trust(test_actor)
+        remote = f"remote:{self.PEER}"
+        _plant_old_attribute_list(
+            test_actor.config, test_actor.id, remote, "old", [{"secret": "VALUE1"}]
+        )
+        ListAttribute(test_actor.id, remote, "new", test_actor.config).extend(
+            [{"secret": "VALUE2"}]
+        )
+        ListAttribute(test_actor.id, "app", "mine", test_actor.config).append("x")
+        before = {
+            b: _bucket_rows(test_actor.config, test_actor.id, b)
+            for b in (remote, "app")
+        }
+        caplog.set_level("INFO")
+        code = self._run(
+            monkeypatch,
+            "--attributes",
+            "--bucket",
+            "app",
+            "--checkpoint-file",
+            str(tmp_path / "c.json"),
+        )
+        assert code == 0
+        after = {
+            b: _bucket_rows(test_actor.config, test_actor.id, b)
+            for b in (remote, "app")
+        }
+        assert after == before
+        assert "pre-3.16 attribute layout" in caplog.text
+        assert "list='old'" in caplog.text
+        assert "VALUE1" not in caplog.text and "VALUE2" not in caplog.text
+
+    def test_repair_converts_a_healthy_old_list(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        from actingweb.attribute_list import ListAttribute
+
+        only_this_actor(monkeypatch, test_actor.id)
+        self._trust(test_actor)
+        remote = f"remote:{self.PEER}"
+        _plant_old_attribute_list(
+            test_actor.config, test_actor.id, remote, "old", [1, 2]
+        )
+        code = self._run(
+            monkeypatch,
+            "--attributes",
+            "--repair",
+            "--checkpoint-file",
+            str(tmp_path / "c.json"),
+        )
+        assert code == 0
+        lst = ListAttribute(test_actor.id, remote, "old", test_actor.config)
+        assert lst.storage_format() == 2 and lst.to_list() == [1, 2]
+
+    def test_a_damaged_replica_is_deleted_only_when_asked(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        only_this_actor(monkeypatch, test_actor.id)
+        self._trust(test_actor)
+        remote = f"remote:{self.PEER}"
+        _plant_old_attribute_list(
+            test_actor.config, test_actor.id, remote, "bad", [1], length=3
+        )
+        _plant_old_attribute_list(
+            test_actor.config, test_actor.id, "app", "bad", [1], length=3
+        )
+        checkpoint = str(tmp_path / "c.json")
+        base = ["--attributes", "--bucket", "app", "--checkpoint-file", checkpoint]
+        assert self._run(monkeypatch, *base, "--repair") == 1
+        assert "list:bad:meta" in _bucket_rows(test_actor.config, test_actor.id, remote)
+        assert (
+            self._run(monkeypatch, *base, "--repair", "--delete-damaged-replicas") == 1
+        )
+        rows = _bucket_rows(test_actor.config, test_actor.id, remote)
+        assert not [n for n in rows if n.startswith("list:bad")]
+        # Never outside remote: buckets: nothing would rebuild it there.
+        assert "list:bad:meta" in _bucket_rows(test_actor.config, test_actor.id, "app")
+
+    def test_delete_damaged_replicas_needs_repair(self, monkeypatch, tmp_path):
+        with pytest.raises(SystemExit):
+            self._run(
+                monkeypatch,
+                "--attributes",
+                "--delete-damaged-replicas",
+                "--checkpoint-file",
+                str(tmp_path / "c.json"),
+            )
+
+    def test_a_checkpoint_of_the_other_mode_is_refused(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        only_this_actor(monkeypatch, test_actor.id)
+        checkpoint = tmp_path / "c.json"
+        checkpoint.write_text(json.dumps(["someone"]))
+        assert (
+            self._run(
+                monkeypatch,
+                "--attributes",
+                "--repair",
+                "--checkpoint-file",
+                str(checkpoint),
+            )
+            == 2
+        )
+        checkpoint.write_text(json.dumps({"mode": "attributes", "done": []}))
+        assert (
+            self._run(monkeypatch, "--repair", "--checkpoint-file", str(checkpoint))
+            == 2
+        )
+
+    def test_a_fault_listing_one_actors_lists_is_an_error(
+        self, test_actor, monkeypatch, tmp_path
+    ):
+        from actingweb.db.exceptions import DbError
+
+        only_this_actor(monkeypatch, test_actor.id)
+
+        def broken(*args, **kwargs):
+            raise DbError("trust list")
+
+        monkeypatch.setattr("actingweb.db.get_trust_list", broken)
+        code = self._run(
+            monkeypatch,
+            "--attributes",
+            "--checkpoint-file",
+            str(tmp_path / "c.json"),
+        )
+        assert code == 1

@@ -27,6 +27,9 @@ import logging
 import pytest
 
 from actingweb.property_list import ListMetadataContentionError, ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     FakePropertyDb,
     _patch_get_property,
@@ -125,6 +128,7 @@ class TestMetadataWriteRetriesAndMergesOntoTheNewValue:
 
 
 class TestStaleDispatchKeepsForeignFormatRowsAtZero:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_stale_cached_instance_append_leaves_no_foreign_format_rows(
         self, monkeypatch, fake_store
     ):
@@ -291,6 +295,7 @@ class TestAdvisoryCarveOutBoundary:
         assert repaired.get_metadata()["length"] == 1  # exact again
         assert repaired.verify()["count_hint_drift"] == 0
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_semantic_length_write_still_raises_on_exhaustion(
         self, monkeypatch, fake_store
     ):
@@ -315,6 +320,7 @@ class TestAdvisoryCarveOutBoundary:
 
 
 class TestV1LengthDeltaNotAbsoluteFromStaleCache:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_append_merges_delta_onto_fresh_length_not_stale_cached_absolute(
         self, monkeypatch, fake_store
     ):
@@ -342,6 +348,7 @@ class TestV1LengthDeltaNotAbsoluteFromStaleCache:
         # delta merge lands on the fresh stored truth: 5 + 1 = 6.
         assert _stored_meta(fake_store, actor_id, name)["length"] == 6
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_insert_merges_delta_onto_fresh_length_not_stale_cached_absolute(
         self, monkeypatch, fake_store
     ):

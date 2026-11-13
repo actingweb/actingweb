@@ -568,6 +568,11 @@ class ListProperty(ListCore):
             if isinstance(current_length, int):
                 meta["length"] = max(0, current_length + length_delta)
 
+    def storage_format(self) -> int:
+        """Which storage format this list uses: 1 (dense integers) or 2
+        (fractional rank keys). One point read of the metadata row."""
+        return self._format()
+
     # -- v1 and the dual-format public methods -----------------------------
 
     def _get_item_property_name(self, index: int) -> str:

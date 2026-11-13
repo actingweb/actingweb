@@ -1333,10 +1333,15 @@ class TestApplyResyncData:
 
     @pytest.fixture
     def mock_actor(self):
-        """Create a mock ActorInterface."""
+        """A mock ActorInterface over the in-memory attribute backend: the
+        list core reaches the backend's list primitives directly (it never
+        goes through ``Attributes``), so a mocked config cannot hold a
+        list."""
+        from tests.mcp_token_double import make_config
+
         actor = MagicMock()
         actor.id = "actor123"
-        actor.config = MagicMock()
+        actor.config, _store = make_config()
         return actor
 
     def test_apply_resync_data_flag_based_list(self, mock_actor):
@@ -1366,6 +1371,11 @@ class TestApplyResyncData:
             assert results["memory_travel"]["success"] is True
             assert results["memory_travel"]["items"] == 3
             assert results["memory_travel"]["operation"] == "resync"
+            assert [i["location"] for i in store.get_list("memory_travel")] == [
+                "Paris",
+                "Tokyo",
+                "NYC",
+            ]
 
     def test_apply_resync_data_legacy_list_prefix(self, mock_actor):
         """Test backward compatibility with legacy "list:" prefix format."""

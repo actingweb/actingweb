@@ -45,8 +45,13 @@ baseline's failures by name and nothing else:
 - `subs-list-cache-lifetime` (on `c738f21`); no new IAM action.
 - Not run for `subscription-wire-baseline` (no library change).
 
-Still to run: `attribute-list-v2-port`, `email-as-creator-at-write-time`,
-`spec-1-5`.
+- `attribute-list-v2-port` (environment 9, on `6d1387c`; the PostgreSQL
+  database migrated to `a7b8c9d0e1f2` first): the baseline's failures, plus
+  Emm's own date-dependent `tests/test_trial_state_pure.py` case, failing
+  from 2026-11-13 on any library
+  (`thoughts/verifications/2026-11-13-attribute-list-v2-port.md`).
+
+Still to run: `email-as-creator-at-write-time`, `spec-1-5`.
 
 ## How a run is done
 

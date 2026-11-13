@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-13-attribute-list-v2-port.md
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
@@ -1442,7 +1443,7 @@ row.
       `rows.toml` assigns to `attribute-list-v2-port:4`, with
       the `Wire-Phase` trailer
 - [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
-- [ ] Emm's suite on this branch, before the PR opens, run as
+- [x] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, recorded in this plan's verification
       document
@@ -1668,10 +1669,9 @@ amended Phase 3 tree alone: unit suite 5,801 passed, `WP4` and the sync
 coverage tests passed.
 
 ### Still owed before the PR opens
-- **Emm's suite on this branch** (`thoughts/todo/emm-suite-against-master.md`,
-  gate 2): not run. The Phase 4 verification box stays open.
-- **`/verify_implementation`** for each phase (the owner's per-phase routine):
-  not run. The outside voice ran on Phases 1, 2 and 3; not on Phase 4.
+- Emm's suite ran on `6d1387c` and `/verify_implementation` ran
+  (`thoughts/verifications/2026-11-13-attribute-list-v2-port.md`): its
+  peer-reachable findings are fixed through `/iterate_plan` before the PR.
 
 ### Deviations from Plan
 - Each phase's notes list them. In short: the format moved with two hooks

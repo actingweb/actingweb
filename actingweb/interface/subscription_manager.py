@@ -194,6 +194,19 @@ class SubscriptionSyncResult:
 
 
 @dataclass
+class PeerSubscriptions:
+    """One peer's subscriptions, as :meth:`SubscriptionManager.get_subscriptions_by_peer`
+    groups them: ``outbound`` as :attr:`SubscriptionManager.outbound_subscriptions`
+    selects (we subscribed to the peer), ``inbound`` as
+    :attr:`SubscriptionManager.inbound_subscriptions` does (the peer
+    subscribed to us)."""
+
+    peer_id: str
+    outbound: list[SubscriptionInfo]
+    inbound: list[SubscriptionInfo]
+
+
+@dataclass
 class PeerSyncResult:
     """Result of syncing all subscriptions to a peer."""
 
@@ -273,6 +286,26 @@ class SubscriptionManager:
         These are subscriptions others created - callback=False means we send callbacks.
         """
         return [sub for sub in self.all_subscriptions if not sub.is_callback]
+
+    def get_subscriptions_by_peer(self) -> dict[str, PeerSubscriptions]:
+        """Every subscription of the actor, grouped by peer id (3.16).
+
+        One subscription read for the whole map. A peer with no subscription
+        has no key. A read fault raises ``DbError``, as the other accessors
+        do.
+        """
+        groups: dict[str, PeerSubscriptions] = {}
+        for sub in self.all_subscriptions:
+            group = groups.get(sub.peer_id)
+            if group is None:
+                group = groups[sub.peer_id] = PeerSubscriptions(
+                    peer_id=sub.peer_id, outbound=[], inbound=[]
+                )
+            if sub.is_outbound:
+                group.outbound.append(sub)
+            if not sub.is_callback:
+                group.inbound.append(sub)
+        return groups
 
     def get_subscriptions_to_peer(self, peer_id: str) -> list[SubscriptionInfo]:
         """Get all subscriptions to a specific peer (outbound subscriptions).
@@ -1668,6 +1701,10 @@ class SubscriptionManager:
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
                         exc_info=True,
                     )
+                finally:
+                    # The deletes went to storage, not through the core
+                    # actor: its memo would keep the deleted rows (3.16).
+                    self._core_actor.subs_list = None
             elif state == "unknown":
                 logger.warning(
                     f"Could not tell whether {peer_id} still trusts this actor; "
@@ -2754,6 +2791,10 @@ class SubscriptionManager:
                         f"Error cleaning up dead subscriptions for {peer_id}: {e}",
                         exc_info=True,
                     )
+                finally:
+                    # As in the sync clean-up: the memo would keep the
+                    # deleted rows (3.16).
+                    self._core_actor.subs_list = None
             elif state == "unknown":
                 logger.warning(
                     f"Could not tell whether {peer_id} still trusts this actor; "

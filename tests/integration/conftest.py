@@ -1367,8 +1367,10 @@ def wire_pair(wire_app, wire_peer_app, worker_info):
 
     yield WirePairFactory()
 
-    # Teardown through the library, by id: suspension rows first (actor
-    # deletion leaves them), then the actors. Fails loudly on a leftover.
+    # Teardown through the library, by id: suspension rows first (an actor a
+    # row deleted over REST already has none; resuming first keeps a
+    # suspended target from muting the deletion's own diffs), then the
+    # actors. Fails loudly on a leftover.
     leftovers: list[str] = []
     for actor in created:
         suspension_store = get_subscription_suspension(actor.host.config, actor.id)

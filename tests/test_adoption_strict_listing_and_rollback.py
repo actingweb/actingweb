@@ -254,9 +254,7 @@ class TestCreateRollbackAndTheBridgeWinner:
 
         try:
             with patch.object(Actor, "create", unmarked_row_wins):
-                result = handler._get_or_create_actor_cached(
-                    actor_id, {"email": uuid_email()}, 0.0
-                )
+                result = handler._get_or_create_actor(actor_id, {"email": uuid_email()})
 
             assert result is None
         finally:

@@ -399,3 +399,20 @@ class DbSubscriptionDiffList:
 
         except Exception as e:
             raise DbError("subscription diff list delete") from e
+
+    def delete_all_of_actor(self, actor_id: str) -> bool:
+        """Delete every diff of ``actor_id`` in one statement. A missing table
+        holds none: ``True``. Any other fault raises ``DbError``."""
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM subscription_diffs WHERE id = %s",
+                        (actor_id,),
+                    )
+                conn.commit()
+        except psycopg.errors.UndefinedTable:
+            return True
+        except Exception as e:
+            raise DbError("subscription diff list delete") from e
+        return True

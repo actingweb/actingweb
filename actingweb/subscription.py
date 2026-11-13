@@ -1,17 +1,21 @@
 import datetime
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from actingweb.db import (
     get_subscription,
     get_subscription_diff,
     get_subscription_diff_list,
     get_subscription_list,
+    get_subscription_suspension,
 )
 
 from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 class Subscription:
@@ -277,19 +281,24 @@ class Subscriptions:
                 return []
         return self.subscriptions
 
-    def delete(self):
+    def delete(self, *, wipe_diffs: bool = True):
+        """Delete every subscription row of the actor and, unless
+        ``wipe_diffs`` is False (a caller that wipes them by actor id itself
+        afterwards: ``Actor.delete()``, ``purge_relationships()``), every
+        diff of the actor. A fault raises ``DbError``."""
         if not self.list:
             logger.debug("Already deleted list in subscriptions")
             return False
         if self.subscriptions is None:
-            self.fetch()  # strict: the diffs are found through this list
-        if self.subscriptions:
-            for sub in self.subscriptions:
-                if not self.config:
-                    continue
-                diff_list = get_subscription_diff_list(self.config)
-                diff_list.fetch(actor_id=self.actor_id, subid=sub["subscriptionid"])
-                diff_list.delete()
+            self.fetch()  # strict: a fault raises before anything is removed
+        config = self.config
+        if wipe_diffs and self.subscriptions and config:
+            # Every caller wipes the whole actor (deletion, purge, adoption):
+            # its diffs go by actor id (3.16; before, one diff read per
+            # subscription).
+            _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(
+                self.actor_id
+            )
         self.list.delete()
         self.list = None
         self.subscriptions = None
@@ -316,3 +325,48 @@ class Subscriptions:
             self.fetch()
         except DbError:  # folds DbError: the caller's fetch() re-reads and decides
             pass
+
+
+def _store(build: Callable[[], _T]) -> _T:
+    """A store built by ``build``; any error building it (the DynamoDB table
+    check runs in the constructor) is a ``DbError``, so a resumable delete,
+    a create's rollback and ``actingweb-deletions`` see the fault they
+    handle (3.16)."""
+    try:
+        return build()
+    except DbError:
+        raise
+    except Exception as e:  # the store's table check
+        raise DbError("subscription store") from e
+
+
+def delete_actor_subscription_rows(actor_id: str, config: Any) -> None:
+    """Every subscription row of ``actor_id``, by actor id (3.16): the rows
+    only, their diffs go with :func:`delete_actor_diffs_and_suspensions`. A
+    fault raises ``DbError``."""
+    rows = _store(lambda: get_subscription_list(config))
+    if rows.fetch(actor_id=actor_id):
+        rows.delete()
+
+
+def clear_actor_suspensions(actor_id: str, config: Any) -> None:
+    """Every subscription suspension of ``actor_id`` (3.16). Raises
+    ``DbError`` unless the store confirms it, also when building the store
+    fails (the DynamoDB store checks its table first), so a caller's rollback
+    or resumable delete runs."""
+    try:
+        cleared = get_subscription_suspension(config, actor_id).delete_all()
+    except DbError:
+        raise
+    except Exception as e:  # the store's table check or a backend error
+        raise DbError("suspension clear", actor_id) from e
+    if not cleared:
+        raise DbError("suspension clear", actor_id)
+
+
+def delete_actor_diffs_and_suspensions(actor_id: str, config: Any) -> None:
+    """Every subscription diff of ``actor_id`` (by actor id, one diff at a
+    time is never fetched) and every suspension (3.16). A missing diff or
+    suspension table holds none. A fault raises ``DbError``."""
+    _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(actor_id)
+    clear_actor_suspensions(actor_id, config)

@@ -1226,11 +1226,20 @@ class Actor:
             # stalled deletion. A fault fails the create (503); the swap's row
             # is kept, as the marker rollback below keeps it.
             try:
+                # Suspensions a deletion before 3.16 (or one that faulted
+                # after its row went) left under this id would make the new
+                # actor send no diffs. After the row, never before: a create
+                # under a live actor's id answers False and must not touch
+                # that actor's suspensions. Before the tombstone: a clear
+                # that fails rolls the row back, and the deleted actor's
+                # tombstone must still be there then.
+                if self.config is not None:
+                    subscription.clear_actor_suspensions(actor_id, self.config)
                 deletion.clear_actor_tombstone(self.id, self.config, strict=True)
             except DbError:
                 logger.error(
-                    f"Actor {self.id}: its deletion tombstone could not be "
-                    "confirmed cleared; failing the create"
+                    f"Actor {self.id}: its deletion tombstone or suspensions "
+                    "could not be confirmed cleared; failing the create"
                 )
                 if replace_holder is None:
                     try:
@@ -1546,6 +1555,12 @@ class Actor:
         ``_between_steps`` is its lease keeper, run before each step that can
         wait on a peer.
 
+        The wipe covers properties, peer trustees, subscriptions and their
+        diffs, every trust with its side-stores, a subscription a peer created
+        during the wipe, every remaining subscription diff of the actor, its
+        subscription suspensions (3.16) and its attribute buckets. A
+        suspension delete that cannot be confirmed raises ``DbError``.
+
         The actor row is removed **last**, so the actor keeps resolving for the
         duration of the wipe. Existence checks therefore fail open here, and
         that is why the tombstone is written before the first destructive
@@ -1588,18 +1603,24 @@ class Actor:
                 actor_id=self.id, config=self.config
             )
         self.property_list.delete()
-        subs.delete()
+        # The diffs go with the leftovers wipe below, after the trusts.
+        subs.delete(wipe_diffs=False)
+        self.subs_list = None
         if relationships:
             for rel in relationships:
                 if isinstance(rel, dict) and "peerid" in rel:
                     step()
+                    # The list was wiped above: nothing for the sibling to
+                    # read per relationship.
                     self.delete_reciprocal_trust(
                         peerid=rel.get("peerid", ""),
                         delete_peer=True,
                         notify_peers=notify_peers,
+                        _subscriptions=[],
                     )
         trusts.delete()
         step()
+        self._wipe_subscription_leftovers()
         buckets = attribute.Buckets(actor_id=self.id, config=self.config)
         buckets.delete()
         # A backend that answers False for a row that is already gone (a
@@ -1612,6 +1633,25 @@ class Actor:
             # unfinished, with no TTL, for ever.
             deletion.finish_unleased(self.id, self.config)
         return gone
+
+    def _wipe_subscription_leftovers(self) -> None:
+        """Remove what subscriptions leave behind (3.16): a subscription a
+        peer created while its trust row still lived, every diff of the actor
+        (one created between the list read and its wipe has no row to be
+        found through), and the suspension rows. A fault raises ``DbError``,
+        so a resumable delete stops before the actor row goes."""
+        if not self.config or not self.id:
+            return
+        subscription.delete_actor_subscription_rows(self.id, self.config)
+        self.subs_list = None
+        self._wipe_diffs_and_suspensions()
+
+    def _wipe_diffs_and_suspensions(self) -> None:
+        """Every subscription diff and suspension row of this actor, by actor
+        id; ``DbError`` when the suspensions cannot be confirmed removed."""
+        if not self.config or not self.id:
+            return
+        subscription.delete_actor_diffs_and_suspensions(self.id, self.config)
 
     def _row_strict(self) -> dict[str, Any] | None:
         """This actor's row, read strictly (``DbError`` on a fault)."""
@@ -1980,137 +2020,145 @@ class Actor:
         changed. ``approved``, ``verified`` and ``peer_approved`` are a bool
         or ``"true"``/``"false"``; anything else raises ``ValueError``
         (3.16), before anything is read or written."""
-        # Text is a flag here too: "true" meets the approval gate, the
-        # binding to the row read and the peer's notification below.
-        approved = trust.as_flag(approved)
-        verified = trust.as_flag(verified)
-        peer_approved = trust.as_flag(peer_approved)
-        if not relationship or not peerid:
-            return False
-        relationships = self.get_trust_relationships(
-            relationship=relationship, peerid=peerid
-        )
-        if not relationships:
-            return False
-        this_trust = relationships[0]
-        if (
-            approved is True
-            and not this_trust.get("approved")
-            and not this_trust.get("verified")
-            and not self.reverify_pending_trust(peerid)
-        ):
-            # Only a verified row is approved (3.16): its secret is whatever
-            # the requester chose, and anyone can file a request under a
-            # peer's id (Trust.modify refuses the write as well).
-            logger.warning(
-                f"Refused to approve the trust with {peerid}: the request is "
-                "not verified (create the trust toward the peer's URL instead)"
-            )
-            return False
-
-        # IMPORTANT: Save approval to database BEFORE notifying peer
-        # This prevents race condition where peer tries to subscribe back
-        # before our approval is saved
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
         try:
-            result = dbtrust.modify(
-                baseuri=baseuri,
-                secret=secret,
-                desc=desc,
-                approved=approved,
-                verified=verified,
-                verification_token=verification_token,
-                peer_approved=peer_approved,
-                client_name=client_name,
-                client_version=client_version,
-                client_platform=client_platform,
-                oauth_client_id=oauth_client_id,
-                last_accessed=last_accessed,
-                last_connected_via=last_connected_via,
-                # An approval lands on the row read above, or not at all: a
-                # row replaced meanwhile (another request) is not approved
-                # unseen, and the peer is told with the secret it holds.
-                only_if_secret=(
-                    str(this_trust.get("secret") or "") or None
-                    if approved is True
-                    else None
-                ),
+            # Text is a flag here too: "true" meets the approval gate, the
+            # binding to the row read and the peer's notification below.
+            approved = trust.as_flag(approved)
+            verified = trust.as_flag(verified)
+            peer_approved = trust.as_flag(peer_approved)
+            if not relationship or not peerid:
+                return False
+            relationships = self.get_trust_relationships(
+                relationship=relationship, peerid=peerid
             )
-        except DbError:
-            raise
-        except Exception as e:
-            logger.error(f"Exception in dbtrust.modify: {e}", exc_info=True)
-            return False
-        if not result:
-            # Not written (the row is gone, replaced, or not verified): the
-            # peer is not told anything changed.
-            logger.warning(f"The trust with {peerid} was not modified")
-            return False
+            if not relationships:
+                return False
+            this_trust = relationships[0]
+            if (
+                approved is True
+                and not this_trust.get("approved")
+                and not this_trust.get("verified")
+                and not self.reverify_pending_trust(peerid)
+            ):
+                # Only a verified row is approved (3.16): its secret is whatever
+                # the requester chose, and anyone can file a request under a
+                # peer's id (Trust.modify refuses the write as well).
+                logger.warning(
+                    f"Refused to approve the trust with {peerid}: the request is "
+                    "not verified (create the trust toward the peer's URL instead)"
+                )
+                return False
 
-        # Now that approval is saved, notify peer so their auto-subscribe will succeed
-        headers = {}
-        if approved is True and this_trust["approved"] is False:
-            params = {
-                "approved": True,
-            }
-            # The base URI this call wrote, else the row's as it stands after
-            # the write (3.16: the notification went to the URL the row had
-            # before, also when another request had moved it meanwhile).
-            if not baseuri:
-                try:
-                    after: Any = trust.Trust(
-                        actor_id=self.id, peerid=peerid, config=self.config
-                    ).get()
-                except DbError as e:  # folds DbError: the approval committed
-                    # The peer is still told, at the URL read before the
-                    # write: a 503 now would leave it never told (a retry
-                    # finds the row approved and sends nothing).
-                    logger.warning(f"Re-read of the trust with {peerid} failed: {e}")
-                    after = None
-                # The secret the row holds after this call: the one it wrote,
-                # else the one it had (a secret written with the approval is
-                # this call's own write, not a re-pair).
-                expected = str(secret or this_trust["secret"] or "")
-                if after and not secret_equals(
-                    str(after.get("secret") or ""), expected
-                ):
-                    # Replaced since (a re-pair): its base URI is not where
-                    # this row's secret goes; the URL read before stands.
-                    after = None
-                baseuri_now = str((after or this_trust).get("baseuri") or "")
-            else:
-                baseuri_now = baseuri
-            requrl = baseuri_now + "/trust/" + relationship + "/" + self.id
-            # The secret the row holds now: the one this call wrote, if any.
-            bearer = str(secret or this_trust["secret"] or "")
-            if bearer:
-                headers = {
-                    "Authorization": "Bearer " + bearer,
-                    "Content-Type": "application/json",
-                }
-            data = json.dumps(params)
-            # Note the POST here instead of PUT. POST is used to used to notify about
-            # state change in the relationship (i.e. not change the object as PUT
-            # would do)
-            logger.debug(
-                "Trust relationship has been approved, notifying peer at url("
-                + requrl
-                + ")"
-            )
+            # IMPORTANT: Save approval to database BEFORE notifying peer
+            # This prevents race condition where peer tries to subscribe back
+            # before our approval is saved
+            dbtrust = trust.Trust(actor_id=self.id, peerid=peerid, config=self.config)
             try:
-                response = requests.post(
-                    url=requrl, data=data, headers=headers, timeout=(5, 10)
+                result = dbtrust.modify(
+                    baseuri=baseuri,
+                    secret=secret,
+                    desc=desc,
+                    approved=approved,
+                    verified=verified,
+                    verification_token=verification_token,
+                    peer_approved=peer_approved,
+                    client_name=client_name,
+                    client_version=client_version,
+                    client_platform=client_platform,
+                    oauth_client_id=oauth_client_id,
+                    last_accessed=last_accessed,
+                    last_connected_via=last_connected_via,
+                    # An approval lands on the row read above, or not at all: a
+                    # row replaced meanwhile (another request) is not approved
+                    # unseen, and the peer is told with the secret it holds.
+                    only_if_secret=(
+                        str(this_trust.get("secret") or "") or None
+                        if approved is True
+                        else None
+                    ),
                 )
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
+            except DbError:
+                raise
+            except Exception as e:
+                logger.error(f"Exception in dbtrust.modify: {e}", exc_info=True)
+                return False
+            if not result:
+                # Not written (the row is gone, replaced, or not verified): the
+                # peer is not told anything changed.
+                logger.warning(f"The trust with {peerid} was not modified")
+                return False
+
+            # Now that approval is saved, notify peer so their auto-subscribe will succeed
+            headers = {}
+            if approved is True and this_trust["approved"] is False:
+                params = {
+                    "approved": True,
+                }
+                # The base URI this call wrote, else the row's as it stands after
+                # the write (3.16: the notification went to the URL the row had
+                # before, also when another request had moved it meanwhile).
+                if not baseuri:
+                    try:
+                        after: Any = trust.Trust(
+                            actor_id=self.id, peerid=peerid, config=self.config
+                        ).get()
+                    except DbError as e:  # folds DbError: the approval committed
+                        # The peer is still told, at the URL read before the
+                        # write: a 503 now would leave it never told (a retry
+                        # finds the row approved and sends nothing).
+                        logger.warning(
+                            f"Re-read of the trust with {peerid} failed: {e}"
+                        )
+                        after = None
+                    # The secret the row holds after this call: the one it wrote,
+                    # else the one it had (a secret written with the approval is
+                    # this call's own write, not a re-pair).
+                    expected = str(secret or this_trust["secret"] or "")
+                    if after and not secret_equals(
+                        str(after.get("secret") or ""), expected
+                    ):
+                        # Replaced since (a re-pair): its base URI is not where
+                        # this row's secret goes; the URL read before stands.
+                        after = None
+                    baseuri_now = str((after or this_trust).get("baseuri") or "")
+                else:
+                    baseuri_now = baseuri
+                requrl = baseuri_now + "/trust/" + relationship + "/" + self.id
+                # The secret the row holds now: the one this call wrote, if any.
+                bearer = str(secret or this_trust["secret"] or "")
+                if bearer:
+                    headers = {
+                        "Authorization": "Bearer " + bearer,
+                        "Content-Type": "application/json",
+                    }
+                data = json.dumps(params)
+                # Note the POST here instead of PUT. POST is used to used to notify about
+                # state change in the relationship (i.e. not change the object as PUT
+                # would do)
+                logger.debug(
+                    "Trust relationship has been approved, notifying peer at url("
+                    + requrl
+                    + ")"
                 )
-            except Exception:  # folds DbError: peer HTTP only
-                logger.debug("Not able to notify peer at url(" + requrl + ")")
-                self.last_response_code = 500
-        return result
+                try:
+                    response = requests.post(
+                        url=requrl, data=data, headers=headers, timeout=(5, 10)
+                    )
+                    self.last_response_code = response.status_code
+                    self.last_response_message = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
+                except Exception:  # folds DbError: peer HTTP only
+                    logger.debug("Not able to notify peer at url(" + requrl + ")")
+                    self.last_response_code = 500
+            return result
+        finally:
+            # A peer may subscribe back while this call runs (the request
+            # above lets it): the next subscription read on this instance
+            # reads the list again (3.16).
+            self.subs_list = None
 
     async def modify_trust_and_notify_async(
         self,
@@ -2181,184 +2229,192 @@ class Actor:
             relationship: The trust type/permission level to request (friend, admin, etc.)
             trust_type: Expected peer mini-app type for validation (optional)
         """
-        # Whether this call approved a waiting request instead of sending
-        # one: set by _approve_on_create, read by TrustManager for its hook.
-        self.last_trust_approved_on_create = None
-        if len(url) == 0:
-            return False
-        from .trust import is_valid_peer_baseuri
-
-        if not is_valid_peer_baseuri(url):
-            # Stored as the peer's base URI: the same shape a peer must
-            # give when it asks us.
-            logger.warning("Refused to request trust from an invalid peer URL")
-            return False
-        if not secret or len(secret) == 0:
-            return False
-        res = self.get_peer_info(url)
-        if (
-            not res
-            or res["last_response_code"] < 200
-            or res["last_response_code"] >= 300
-        ):
-            return False
-        peer = res["data"]
-        from .trust import is_valid_peer_id
-
-        if not is_valid_peer_id(peer.get("id")):
-            # The peer names itself: refuse an id that is not plainly one
-            # (it is shown to the owner and built into links).
-            logger.warning(
-                "Received an invalid peer id when trying to establish trust: %r",
-                url,
-            )
-            return False
-        if not peer["id"] or not peer["type"] or len(peer["type"]) == 0:
-            logger.info(
-                "Received invalid peer info when trying to establish trust: " + url
-            )
-            return False
-        if len(trust_type) > 0:
-            if trust_type.lower() != peer["type"].lower():
-                logger.info("Peer is of the wrong actingweb type: " + peer["type"])
+        try:
+            # Whether this call approved a waiting request instead of sending
+            # one: set by _approve_on_create, read by TrustManager for its hook.
+            self.last_trust_approved_on_create = None
+            if len(url) == 0:
                 return False
-        if not relationship or len(relationship) == 0:
-            relationship = self.config.default_relationship if self.config else ""
-        existing = trust.Trust(
-            actor_id=self.id, peerid=peer["id"], config=self.config
-        ).get()
-        if (
-            existing
-            and self._is_unproven_pending(existing)
-            and not self._re_pair_refusal(url, existing, relationship)
-            and self.reverify_pending_trust(peer["id"])
-        ):
-            # A genuine request whose first verification failed (a timeout,
-            # say) verifies now: it is approved below, not replaced, so the
-            # peer's own row still matches ours. Only one for this
-            # relationship at this URL: any other is replaced as before.
+            from .trust import is_valid_peer_baseuri
+
+            if not is_valid_peer_baseuri(url):
+                # Stored as the peer's base URI: the same shape a peer must
+                # give when it asks us.
+                logger.warning("Refused to request trust from an invalid peer URL")
+                return False
+            if not secret or len(secret) == 0:
+                return False
+            res = self.get_peer_info(url)
+            if (
+                not res
+                or res["last_response_code"] < 200
+                or res["last_response_code"] >= 300
+            ):
+                return False
+            peer = res["data"]
+            from .trust import is_valid_peer_id
+
+            if not is_valid_peer_id(peer.get("id")):
+                # The peer names itself: refuse an id that is not plainly one
+                # (it is shown to the owner and built into links).
+                logger.warning(
+                    "Received an invalid peer id when trying to establish trust: %r",
+                    url,
+                )
+                return False
+            if not peer["id"] or not peer["type"] or len(peer["type"]) == 0:
+                logger.info(
+                    "Received invalid peer info when trying to establish trust: " + url
+                )
+                return False
+            if len(trust_type) > 0:
+                if trust_type.lower() != peer["type"].lower():
+                    logger.info("Peer is of the wrong actingweb type: " + peer["type"])
+                    return False
+            if not relationship or len(relationship) == 0:
+                relationship = self.config.default_relationship if self.config else ""
             existing = trust.Trust(
                 actor_id=self.id, peerid=peer["id"], config=self.config
             ).get()
-        replace_pending = self._is_unproven_pending(existing)
-        if existing and replace_pending:
-            # A request nobody proved (unverified, unapproved): anyone can
-            # file one under the peer's id. It is replaced by this owner's own
-            # request, with this owner's secret, never approved as it is.
-            logger.warning(
-                f"Replacing an unverified pending trust request for {peer['id']} "
-                "with this actor's own request"
-            )
-        elif existing:
-            # A re-pair: our row stays as it is until the peer accepts.
-            refusal = self._re_pair_refusal(url, existing, relationship)
-            if refusal:
-                logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
-                return False
-            if not existing.get("approved"):
-                # The peer's verified request waits for this owner: creating
-                # the trust approves it, and the peer is told.
-                return self._approve_on_create(peer["id"], existing)
-            request = self._re_pair_request(existing, secret, desc, relationship)
-            try:
-                response = requests.post(
-                    url=request["url"],
-                    data=request["data"],
-                    timeout=(5, 10),
-                    headers=request["headers"],
+            if (
+                existing
+                and self._is_unproven_pending(existing)
+                and not self._re_pair_refusal(url, existing, relationship)
+                and self.reverify_pending_trust(peer["id"])
+            ):
+                # A genuine request whose first verification failed (a timeout,
+                # say) verifies now: it is approved below, not replaced, so the
+                # peer's own row still matches ours. Only one for this
+                # relationship at this URL: any other is replaced as before.
+                existing = trust.Trust(
+                    actor_id=self.id, peerid=peer["id"], config=self.config
+                ).get()
+            replace_pending = self._is_unproven_pending(existing)
+            if existing and replace_pending:
+                # A request nobody proved (unverified, unapproved): anyone can
+                # file one under the peer's id. It is replaced by this owner's own
+                # request, with this owner's secret, never approved as it is.
+                logger.warning(
+                    f"Replacing an unverified pending trust request for {peer['id']} "
+                    "with this actor's own request"
                 )
-            except Exception as e:  # folds DbError: peer HTTP only
-                return self._re_pair_unknown(
-                    peer["id"], existing, secret, relationship, f"no answer ({e})"
+            elif existing:
+                # A re-pair: our row stays as it is until the peer accepts.
+                refusal = self._re_pair_refusal(url, existing, relationship)
+                if refusal:
+                    logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
+                    return False
+                if not existing.get("approved"):
+                    # The peer's verified request waits for this owner: creating
+                    # the trust approves it, and the peer is told.
+                    return self._approve_on_create(peer["id"], existing)
+                request = self._re_pair_request(existing, secret, desc, relationship)
+                try:
+                    response = requests.post(
+                        url=request["url"],
+                        data=request["data"],
+                        timeout=(5, 10),
+                        headers=request["headers"],
+                    )
+                except Exception as e:  # folds DbError: peer HTTP only
+                    return self._re_pair_unknown(
+                        peer["id"], existing, secret, relationship, f"no answer ({e})"
+                    )
+                if response.status_code >= 500:
+                    return self._re_pair_unknown(
+                        peer["id"],
+                        existing,
+                        secret,
+                        relationship,
+                        f"{response.status_code} {response.reason}",
+                    )
+                return self._finish_re_pair(
+                    peer["id"], secret, response.status_code, response.reason
                 )
-            if response.status_code >= 500:
-                return self._re_pair_unknown(
-                    peer["id"],
-                    existing,
-                    secret,
-                    relationship,
-                    f"{response.status_code} {response.reason}",
-                )
-            return self._finish_re_pair(
-                peer["id"], secret, response.status_code, response.reason
-            )
-        # Create trust, so that peer can do a verify on the relationship (using
-        # verification_token) when we request the relationship
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
-        if not dbtrust.create(
-            baseuri=url,
-            secret=secret,
-            peer_type=peer["type"],
-            relationship=relationship,
-            approved=True,
-            verified=True,  # Requesting actor has verified=True by default per ActingWeb spec
-            desc=desc,
-            established_via="trust",
-            only_if_absent=not replace_pending,
-            only_if_pending=replace_pending,
-        ):
-            logger.warning(
-                "Trying to establish a new Reciprocal trust when peer relationship already exists ("
-                + peer["id"]
-                + ")"
-            )
-            return False
-        # Since we are initiating the relationship, we implicitly approve it
-        # It is not verified until the peer has verified us
-        new_trust = dbtrust.get()
-        params = {
-            "baseuri": (self.config.root if self.config else "") + (self.id or ""),
-            "id": self.id,
-            "type": self.config.aw_type if self.config else "",
-            "secret": secret,
-            "desc": desc,
-            "verify": new_trust["verification_token"] if new_trust else "",
-        }
-        requrl = url + "/trust/" + relationship
-        data = json.dumps(params)
-        logger.debug(
-            f"Creating reciprocal trust at url({requrl}) for peer {params.get('id', 'unknown')}"
-        )
-        try:
-            response = requests.post(
-                url=requrl,
-                data=data,
-                timeout=(5, 10),
-                headers={
-                    "Content-Type": "application/json",
-                },
-            )
-            self.last_response_code = response.status_code
-            self.last_response_message = (
-                response.content.decode("utf-8", "ignore")
-                if isinstance(response.content, bytes)
-                else str(response.content)
-            )
-        except Exception:  # folds DbError: peer HTTP only
-            logger.debug("Not able to create trust with peer, deleting my trust.")
-            self._drop_failed_attempt(peer["id"], secret)
-            return False
-        if self.last_response_code == 201 or self.last_response_code == 202:
-            # Reload the trust to check if approval was done
-            mod_trust = trust.Trust(
+            # Create trust, so that peer can do a verify on the relationship (using
+            # verification_token) when we request the relationship
+            dbtrust = trust.Trust(
                 actor_id=self.id, peerid=peer["id"], config=self.config
             )
-            mod_trust_data = mod_trust.get()
-            if not mod_trust_data or len(mod_trust_data) == 0:
-                logger.error(
-                    "Couldn't find trust relationship after peer POST and verification"
+            if not dbtrust.create(
+                baseuri=url,
+                secret=secret,
+                peer_type=peer["type"],
+                relationship=relationship,
+                approved=True,
+                verified=True,  # Requesting actor has verified=True by default per ActingWeb spec
+                desc=desc,
+                established_via="trust",
+                only_if_absent=not replace_pending,
+                only_if_pending=replace_pending,
+            ):
+                logger.warning(
+                    "Trying to establish a new Reciprocal trust when peer relationship already exists ("
+                    + peer["id"]
+                    + ")"
                 )
                 return False
-            if self.last_response_code == 201:
-                # Already approved by peer (probably auto-approved)
-                # Do it direct on the trust (and not self.modifyTrustAndNotify) to avoid a callback
-                # to the peer
-                mod_trust.modify(peer_approved=True)
-            return mod_trust.get()
-        else:
-            logger.debug("Not able to create trust with peer, deleting my trust.")
-            self._drop_failed_attempt(peer["id"], secret)
-            return False
+            # Since we are initiating the relationship, we implicitly approve it
+            # It is not verified until the peer has verified us
+            new_trust = dbtrust.get()
+            params = {
+                "baseuri": (self.config.root if self.config else "") + (self.id or ""),
+                "id": self.id,
+                "type": self.config.aw_type if self.config else "",
+                "secret": secret,
+                "desc": desc,
+                "verify": new_trust["verification_token"] if new_trust else "",
+            }
+            requrl = url + "/trust/" + relationship
+            data = json.dumps(params)
+            logger.debug(
+                f"Creating reciprocal trust at url({requrl}) for peer {params.get('id', 'unknown')}"
+            )
+            try:
+                response = requests.post(
+                    url=requrl,
+                    data=data,
+                    timeout=(5, 10),
+                    headers={
+                        "Content-Type": "application/json",
+                    },
+                )
+                self.last_response_code = response.status_code
+                self.last_response_message = (
+                    response.content.decode("utf-8", "ignore")
+                    if isinstance(response.content, bytes)
+                    else str(response.content)
+                )
+            except Exception:  # folds DbError: peer HTTP only
+                logger.debug("Not able to create trust with peer, deleting my trust.")
+                self._drop_failed_attempt(peer["id"], secret)
+                return False
+            if self.last_response_code == 201 or self.last_response_code == 202:
+                # Reload the trust to check if approval was done
+                mod_trust = trust.Trust(
+                    actor_id=self.id, peerid=peer["id"], config=self.config
+                )
+                mod_trust_data = mod_trust.get()
+                if not mod_trust_data or len(mod_trust_data) == 0:
+                    logger.error(
+                        "Couldn't find trust relationship after peer POST and verification"
+                    )
+                    return False
+                if self.last_response_code == 201:
+                    # Already approved by peer (probably auto-approved)
+                    # Do it direct on the trust (and not self.modifyTrustAndNotify) to avoid a callback
+                    # to the peer
+                    mod_trust.modify(peer_approved=True)
+                return mod_trust.get()
+            else:
+                logger.debug("Not able to create trust with peer, deleting my trust.")
+                self._drop_failed_attempt(peer["id"], secret)
+                return False
+        finally:
+            # A peer may subscribe back while this call runs (the request
+            # above lets it): the next subscription read on this instance
+            # reads the list again (3.16).
+            self.subs_list = None
 
     async def create_reciprocal_trust_async(
         self,
@@ -2372,194 +2428,206 @@ class Actor:
 
         Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
         """
-        # Whether this call approved a waiting request instead of sending
-        # one: set by _approve_on_create, read by TrustManager for its hook.
-        self.last_trust_approved_on_create = None
-        if len(url) == 0:
-            return False
-        from .trust import is_valid_peer_baseuri
-
-        if not is_valid_peer_baseuri(url):
-            # Stored as the peer's base URI: the same shape a peer must
-            # give when it asks us.
-            logger.warning("Refused to request trust from an invalid peer URL")
-            return False
-        if not secret or len(secret) == 0:
-            return False
-
-        # Get peer info async
-        res = await self.get_peer_info_async(url)
-        if (
-            not res
-            or res["last_response_code"] < 200
-            or res["last_response_code"] >= 300
-        ):
-            return False
-        peer = res["data"]
-        from .trust import is_valid_peer_id
-
-        if not is_valid_peer_id(peer.get("id")):
-            # The peer names itself: see create_reciprocal_trust().
-            logger.warning(
-                "Received an invalid peer id when trying to establish trust: %r",
-                url,
-            )
-            return False
-        if not peer.get("id") or not peer.get("type") or len(peer["type"]) == 0:
-            logger.info(
-                "Received invalid peer info when trying to establish trust: " + url
-            )
-            return False
-        if len(trust_type) > 0:
-            if trust_type.lower() != peer["type"].lower():
-                logger.info("Peer is of the wrong actingweb type: " + peer["type"])
+        try:
+            # Whether this call approved a waiting request instead of sending
+            # one: set by _approve_on_create, read by TrustManager for its hook.
+            self.last_trust_approved_on_create = None
+            if len(url) == 0:
                 return False
-        if not relationship or len(relationship) == 0:
-            relationship = self.config.default_relationship if self.config else ""
+            from .trust import is_valid_peer_baseuri
 
-        import httpx
+            if not is_valid_peer_baseuri(url):
+                # Stored as the peer's base URI: the same shape a peer must
+                # give when it asks us.
+                logger.warning("Refused to request trust from an invalid peer URL")
+                return False
+            if not secret or len(secret) == 0:
+                return False
 
-        existing = trust.Trust(
-            actor_id=self.id, peerid=peer["id"], config=self.config
-        ).get()
-        if (
-            existing
-            and self._is_unproven_pending(existing)
-            and not self._re_pair_refusal(url, existing, relationship)
-            and await asyncio.to_thread(self.reverify_pending_trust, peer["id"])
-        ):
-            # See create_reciprocal_trust(): a request that verifies now is
-            # approved, not replaced.
+            # Get peer info async
+            res = await self.get_peer_info_async(url)
+            if (
+                not res
+                or res["last_response_code"] < 200
+                or res["last_response_code"] >= 300
+            ):
+                return False
+            peer = res["data"]
+            from .trust import is_valid_peer_id
+
+            if not is_valid_peer_id(peer.get("id")):
+                # The peer names itself: see create_reciprocal_trust().
+                logger.warning(
+                    "Received an invalid peer id when trying to establish trust: %r",
+                    url,
+                )
+                return False
+            if not peer.get("id") or not peer.get("type") or len(peer["type"]) == 0:
+                logger.info(
+                    "Received invalid peer info when trying to establish trust: " + url
+                )
+                return False
+            if len(trust_type) > 0:
+                if trust_type.lower() != peer["type"].lower():
+                    logger.info("Peer is of the wrong actingweb type: " + peer["type"])
+                    return False
+            if not relationship or len(relationship) == 0:
+                relationship = self.config.default_relationship if self.config else ""
+
+            import httpx
+
             existing = trust.Trust(
                 actor_id=self.id, peerid=peer["id"], config=self.config
             ).get()
-        replace_pending = self._is_unproven_pending(existing)
-        if existing and replace_pending:
-            # See create_reciprocal_trust(): an unproven request is replaced.
-            logger.warning(
-                f"Replacing an unverified pending trust request for {peer['id']} "
-                "with this actor's own request"
-            )
-        elif existing:
-            # A re-pair: our row stays as it is until the peer accepts.
-            refusal = self._re_pair_refusal(url, existing, relationship)
-            if refusal:
-                logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
-                return False
-            if not existing.get("approved"):
-                # The peer's verified request waits for this owner: creating
-                # the trust approves it, and the peer is told.
-                return await asyncio.to_thread(
-                    self._approve_on_create, peer["id"], existing
+            if (
+                existing
+                and self._is_unproven_pending(existing)
+                and not self._re_pair_refusal(url, existing, relationship)
+                and await asyncio.to_thread(self.reverify_pending_trust, peer["id"])
+            ):
+                # See create_reciprocal_trust(): a request that verifies now is
+                # approved, not replaced.
+                existing = trust.Trust(
+                    actor_id=self.id, peerid=peer["id"], config=self.config
+                ).get()
+            replace_pending = self._is_unproven_pending(existing)
+            if existing and replace_pending:
+                # See create_reciprocal_trust(): an unproven request is replaced.
+                logger.warning(
+                    f"Replacing an unverified pending trust request for {peer['id']} "
+                    "with this actor's own request"
                 )
-            request = self._re_pair_request(existing, secret, desc, relationship)
+            elif existing:
+                # A re-pair: our row stays as it is until the peer accepts.
+                refusal = self._re_pair_refusal(url, existing, relationship)
+                if refusal:
+                    logger.warning(f"Not re-pairing with {peer['id']}: {refusal}")
+                    return False
+                if not existing.get("approved"):
+                    # The peer's verified request waits for this owner: creating
+                    # the trust approves it, and the peer is told.
+                    return await asyncio.to_thread(
+                        self._approve_on_create, peer["id"], existing
+                    )
+                request = self._re_pair_request(existing, secret, desc, relationship)
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.post(
+                            request["url"],
+                            content=request["data"],
+                            headers=request["headers"],
+                        )
+                except Exception as e:  # folds DbError: peer HTTP only (InvalidURL too)
+                    return await self._re_pair_unknown_async(
+                        peer["id"], existing, secret, relationship, f"no answer ({e})"
+                    )
+                if response.status_code >= 500:
+                    return await self._re_pair_unknown_async(
+                        peer["id"],
+                        existing,
+                        secret,
+                        relationship,
+                        f"{response.status_code} {response.reason_phrase}",
+                    )
+                return self._finish_re_pair(
+                    peer["id"], secret, response.status_code, response.reason_phrase
+                )
+
+            # Create trust locally (synchronous DB operation)
+            dbtrust = trust.Trust(
+                actor_id=self.id, peerid=peer["id"], config=self.config
+            )
+            if not dbtrust.create(
+                baseuri=url,
+                secret=secret,
+                peer_type=peer["type"],
+                relationship=relationship,
+                approved=True,
+                verified=True,
+                desc=desc,
+                established_via="trust",
+                only_if_absent=not replace_pending,
+                only_if_pending=replace_pending,
+            ):
+                logger.warning(
+                    f"Trying to establish a new Reciprocal trust when peer relationship already exists ({peer['id']})"
+                )
+                return False
+
+            # Request relationship from peer async
+            new_trust = dbtrust.get()
+            params = {
+                "baseuri": (self.config.root if self.config else "") + (self.id or ""),
+                "id": self.id,
+                "type": self.config.aw_type if self.config else "",
+                "secret": secret,
+                "desc": desc,
+                "verify": new_trust["verification_token"] if new_trust else "",
+            }
+
+            requrl = url + "/trust/" + relationship
+            data = json.dumps(params)
+            # The body carries the new trust secret and verification token.
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"Requesting trust relationship async from peer at ({requrl}) with "
+                    f"data({summarize_payload(params, encoded_len=len(data))})"
+                )
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.post(
-                        request["url"],
-                        content=request["data"],
-                        headers=request["headers"],
+                        requrl,
+                        content=data,
+                        headers={"Content-Type": "application/json"},
                     )
-            except Exception as e:  # folds DbError: peer HTTP only (InvalidURL too)
-                return await self._re_pair_unknown_async(
-                    peer["id"], existing, secret, relationship, f"no answer ({e})"
+                    self.last_response_code = response.status_code
+                    self.last_response_message = (
+                        response.content.decode("utf-8", "ignore")
+                        if isinstance(response.content, bytes)
+                        else str(response.content)
+                    )
+            except httpx.TimeoutException:
+                logger.debug(
+                    "Timeout creating trust with peer async, deleting my trust."
                 )
-            if response.status_code >= 500:
-                return await self._re_pair_unknown_async(
-                    peer["id"],
-                    existing,
-                    secret,
-                    relationship,
-                    f"{response.status_code} {response.reason_phrase}",
-                )
-            return self._finish_re_pair(
-                peer["id"], secret, response.status_code, response.reason_phrase
-            )
-
-        # Create trust locally (synchronous DB operation)
-        dbtrust = trust.Trust(actor_id=self.id, peerid=peer["id"], config=self.config)
-        if not dbtrust.create(
-            baseuri=url,
-            secret=secret,
-            peer_type=peer["type"],
-            relationship=relationship,
-            approved=True,
-            verified=True,
-            desc=desc,
-            established_via="trust",
-            only_if_absent=not replace_pending,
-            only_if_pending=replace_pending,
-        ):
-            logger.warning(
-                f"Trying to establish a new Reciprocal trust when peer relationship already exists ({peer['id']})"
-            )
-            return False
-
-        # Request relationship from peer async
-        new_trust = dbtrust.get()
-        params = {
-            "baseuri": (self.config.root if self.config else "") + (self.id or ""),
-            "id": self.id,
-            "type": self.config.aw_type if self.config else "",
-            "secret": secret,
-            "desc": desc,
-            "verify": new_trust["verification_token"] if new_trust else "",
-        }
-
-        requrl = url + "/trust/" + relationship
-        data = json.dumps(params)
-        # The body carries the new trust secret and verification token.
-        if logger.isEnabledFor(logging.INFO):
-            logger.info(
-                f"Requesting trust relationship async from peer at ({requrl}) with "
-                f"data({summarize_payload(params, encoded_len=len(data))})"
-            )
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    requrl,
-                    content=data,
-                    headers={"Content-Type": "application/json"},
-                )
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
-                )
-        except httpx.TimeoutException:
-            logger.debug("Timeout creating trust with peer async, deleting my trust.")
-            self._drop_failed_attempt(peer["id"], secret)
-            return False
-        except Exception as e:  # folds DbError: peer HTTP only
-            # Any failure of the request drops the attempt, as the sync twin
-            # does (3.16: an exception that was not an httpx error, an
-            # invalid URL say, left the half-made row behind).
-            logger.debug(
-                f"Not able to create trust with peer async: {e}, deleting my trust."
-            )
-            self._drop_failed_attempt(peer["id"], secret)
-            return False
-
-        if self.last_response_code == 201 or self.last_response_code == 202:
-            # Reload trust to check if approval was done
-            mod_trust = trust.Trust(
-                actor_id=self.id, peerid=peer["id"], config=self.config
-            )
-            mod_trust_data = mod_trust.get()
-            if not mod_trust_data or len(mod_trust_data) == 0:
-                logger.error(
-                    "Couldn't find trust relationship after peer POST and verification"
-                )
+                self._drop_failed_attempt(peer["id"], secret)
                 return False
-            if self.last_response_code == 201:
-                # Already approved by peer (probably auto-approved)
-                mod_trust.modify(peer_approved=True)
-            return mod_trust.get()
-        else:
-            logger.debug("Not able to create trust with peer async, deleting my trust.")
-            self._drop_failed_attempt(peer["id"], secret)
-            return False
+            except Exception as e:  # folds DbError: peer HTTP only
+                # Any failure of the request drops the attempt, as the sync twin
+                # does (3.16: an exception that was not an httpx error, an
+                # invalid URL say, left the half-made row behind).
+                logger.debug(
+                    f"Not able to create trust with peer async: {e}, deleting my trust."
+                )
+                self._drop_failed_attempt(peer["id"], secret)
+                return False
+
+            if self.last_response_code == 201 or self.last_response_code == 202:
+                # Reload trust to check if approval was done
+                mod_trust = trust.Trust(
+                    actor_id=self.id, peerid=peer["id"], config=self.config
+                )
+                mod_trust_data = mod_trust.get()
+                if not mod_trust_data or len(mod_trust_data) == 0:
+                    logger.error(
+                        "Couldn't find trust relationship after peer POST and verification"
+                    )
+                    return False
+                if self.last_response_code == 201:
+                    # Already approved by peer (probably auto-approved)
+                    mod_trust.modify(peer_approved=True)
+                return mod_trust.get()
+            else:
+                logger.debug(
+                    "Not able to create trust with peer async, deleting my trust."
+                )
+                self._drop_failed_attempt(peer["id"], secret)
+                return False
+        finally:
+            # A peer may subscribe back while this call runs (the request
+            # above lets it): the next subscription read on this instance
+            # reads the list again (3.16).
+            self.subs_list = None
 
     def reverify_pending_trust(self, peerid: str) -> bool:
         """Whether the trust row for ``peerid`` is verified, re-running the
@@ -3070,6 +3138,7 @@ class Actor:
         *,
         expected_secret: str | None = None,
         before_local_delete: Callable[[dict[str, Any]], None] | None = None,
+        _subscriptions: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Deletes a trust relationship and requests deletion of peer's relationship as well.
 
@@ -3087,6 +3156,15 @@ class Actor:
         ``before_local_delete`` (3.16): called with each row after its last
         secret check and before its local cleanup (the trust handler fires
         ``trust_deleted`` there, so a delete that loses fires nothing).
+
+        Each relationship's subscriptions are found in a list read for it
+        (``strict=False``: a fault leaves them as orphans rather than failing
+        the trust deletion), never in this instance's memo, which a
+        ``trust_deleted`` hook may just have filled. ``_subscriptions`` is
+        that list when the caller has already read it (``Actor.delete``,
+        ``purge_relationships``). Whatever happens after the subscriptions
+        are deleted, the trust row kept included, the memo is left unread
+        (3.16).
         """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
@@ -3174,15 +3252,22 @@ class Actor:
                 # already removed fires nothing, and the caller's hook can
                 # still read the row's data (the cached peer profile).
                 before_local_delete(dict(current))
-            if not self.subs_list:
-                # strict=False: a fault leaves this peer's subscriptions as
-                # orphans rather than failing the trust deletion.
-                self.subs_list = subscription.Subscriptions(
-                    actor_id=self.id, config=self.config
-                ).fetch(strict=False)
-            # Delete this peer's subscriptions
-            if self.subs_list:
-                for sub in self.subs_list:
+            try:
+                if _subscriptions is not None:
+                    rows = _subscriptions
+                else:
+                    # strict=False: a fault leaves this peer's subscriptions
+                    # as orphans rather than failing the trust deletion. Read
+                    # per relationship: a peer may subscribe while an earlier
+                    # relationship's remote delete waits.
+                    rows = (
+                        subscription.Subscriptions(
+                            actor_id=self.id, config=self.config
+                        ).fetch(strict=False)
+                        or []
+                    )
+                # Delete this peer's subscriptions
+                for sub in rows:
                     if sub["peerid"] == rel["peerid"]:
                         logger.debug(
                             "Deleting subscription("
@@ -3196,6 +3281,11 @@ class Actor:
                         )
                         if sub_obj:
                             sub_obj.delete()
+            finally:
+                # Every exit after this point (a fault in the loop, a
+                # side-store fault, the row kept by TrustReplaced or DbError,
+                # the normal one) leaves no deleted row in the memo.
+                self.subs_list = None
             # Clean up remote peer data (RemotePeerStore)
             # No config check needed - delete_all() is a no-op if no data exists
             try:
@@ -3338,13 +3428,15 @@ class Actor:
         Used when a sign-in proves the address over an actor nobody vouched
         for, so a relationship made while the actor was unvouched cannot
         outlive the adoption. All side-stores are cleaned (permissions,
-        remote-peer data, callback state, subscriptions with diffs). With
+        remote-peer data, callback state, subscriptions with diffs, every
+        subscription diff of the actor and its suspension rows). With
         ``notify_peers=False`` (the default) no request leaves the process:
         the peer URLs were chosen by whoever created the relationship.
 
         ``Trusts.delete()`` reports success whatever the backend did, so the
         lists are re-read afterwards and ``confirmed`` says whether they (the
-        peer-trustee rows too) are empty. The reads are strict: PostgreSQL
+        peer-trustee rows too) are empty and the diffs and suspensions were
+        removed. The reads are strict: PostgreSQL
         answers a caught fault with an empty list, which must not pass for
         "nothing left", so a fault
         before the wipe removes nothing and a fault after it leaves
@@ -3388,10 +3480,22 @@ class Actor:
                     peerid=rel["peerid"],
                     delete_peer=False,
                     notify_peers=notify_peers,
+                    _subscriptions=sub_rows,
                 )
         trusts.delete()
 
-        subs.delete()
+        subs.delete(wipe_diffs=False)  # the diffs go with the wipe below
+        self.subs_list = None
+        try:
+            self._wipe_diffs_and_suspensions()
+            leftovers_gone = True
+        except DbError as e:  # folds DbError: reported as confirmed False
+            # Reported as unconfirmed, as an unconfirmed list is.
+            logger.error(
+                f"Purge of actor {self.id}: subscription diffs or suspensions "
+                f"not removed: {e}"
+            )
+            leftovers_gone = False
 
         self.delete_peer_trustee(shorttype="*", notify_peers=notify_peers)
         # delete_peer_trustee("*") visits only the types in config.actors; a
@@ -3414,7 +3518,9 @@ class Actor:
             peers_left = get_peer_trustee_list(config).fetch(
                 actor_id=self.id, strict=True
             )
-            confirmed = not trusts_left and not subs_left and not peers_left
+            confirmed = (
+                leftovers_gone and not trusts_left and not subs_left and not peers_left
+            )
         except DbError:
             raise
         except Exception as e:
@@ -3443,21 +3549,21 @@ class Actor:
             callback=callback,
             config=self.config,
         )
-        new_sub.create(
-            target=target,
-            subtarget=subtarget,
-            resource=resource,
-            granularity=granularity,
-        )
-        # Invalidate the cached subscription list so register_diffs() on this
-        # instance sees the new subscription. Previously each caller had to
-        # remember this (only handlers/subscription.py did), so subscriptions
-        # created through the interface layer silently received no diffs for
-        # the rest of the instance's lifetime — unbounded where an Actor is
-        # cached across requests. NOTE: this only refreshes *this* instance;
-        # another process, or a cross-request cached Actor elsewhere, still
-        # holds its own list. See thoughts/todo/subs-list-cache-asymmetry.md.
-        self.subs_list = None
+        try:
+            new_sub.create(
+                target=target,
+                subtarget=subtarget,
+                resource=resource,
+                granularity=granularity,
+            )
+        finally:
+            # Invalidate the memoised subscription list so register_diffs() on
+            # this instance sees the new subscription; every creation path
+            # (REST, the interface layer) comes through here. In a finally: a
+            # fault may follow a write that landed. This refreshes *this*
+            # instance only: another instance keeps the list it read (3.16,
+            # see get_subscriptions()).
+            self.subs_list = None
         return new_sub.get()
 
     def create_remote_subscription(
@@ -3578,16 +3684,30 @@ class Actor:
 
         Raises:
             DbError: on a read fault (unless ``strict=False``)
+
+        One fetch per ``Actor`` instance, an empty list included (3.16): the
+        list is read on the first call and served from memory after that. It
+        is read again only after this instance's own create and delete
+        methods, a resume, and the trust calls that send a request to the
+        peer. An instance an application keeps across requests does not see
+        subscriptions created elsewhere; build a new one. A folded fault
+        (``strict=False``) is not kept, so the next call reads again.
         """
         if not self.id:
             return None
-        if not self.subs_list:
-            self.subs_list = subscription.Subscriptions(
-                actor_id=self.id, config=self.config
-            ).fetch(strict=strict)
+        if self.subs_list is None:
+            wrapper = subscription.Subscriptions(actor_id=self.id, config=self.config)
+            rows = wrapper.fetch(strict=strict)
+            if wrapper.subscriptions is None:
+                # strict=False folded a fault into []: not an answer to keep.
+                rows = rows or []
+            else:
+                self.subs_list = rows
+        else:
+            rows = self.subs_list
         ret = []
-        if self.subs_list:
-            for sub in self.subs_list:
+        if rows:
+            for sub in rows:
                 if not peerid or (peerid and sub["peerid"] == peerid):
                     if not target or (target and sub["target"] == target):
                         if not subtarget or (
@@ -3713,10 +3833,12 @@ class Actor:
             callback=callback,
             config=self.config,
         )
-        result = sub.delete()
-
-        # Clear subscription cache after deletion to ensure fresh data on next access
-        self.subs_list = None
+        try:
+            result = sub.delete()
+        finally:
+            # Clear the memo on every exit: a fault may follow a delete that
+            # landed (3.16).
+            self.subs_list = None
 
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
         # Note: should_cleanup_remote_peer_store is only True when peerid is not None
@@ -4427,7 +4549,10 @@ class Actor:
             # The resync is the only recovery for the changes made while
             # suspended (they stored no diff and moved no sequence), so read
             # the subscribers strictly before the marker goes: a fault then
-            # answers 503 with the suspension still in place.
+            # answers 503 with the suspension still in place. Read again,
+            # not from the memo: the first suspended write filled it, and a
+            # subscriber that arrived since is owed this resync (3.16).
+            self.subs_list = None
             subs = self.get_subscriptions(
                 target=target, subtarget=None, callback=False, strict=True
             )
@@ -5260,6 +5385,11 @@ class Actor:
 
         Note: Skips registration if the target/subtarget is currently suspended.
         Use suspend_subscriptions() and resume_subscriptions() to manage suspension.
+
+        The subscribers are this instance's subscription list, read once per
+        instance (an empty list included, 3.16): a subscription created
+        elsewhere after the first read gets diffs from a new instance, not
+        from this one. See :meth:`get_subscriptions`.
         """
         if blob is None or not target:
             return
@@ -5271,8 +5401,8 @@ class Actor:
         # property write. Suspension and "no subscribers" are the same outcome
         # here, so the cheaper discriminator goes first. (Costs one extra fetch
         # for an actor that is both subscribed and suspended; that fetch is
-        # memoised per actor instance and is dwarfed by the callback fan-out
-        # suspension exists to avoid.)
+        # memoised per actor instance, an empty answer too, and is dwarfed by
+        # the callback fan-out suspension exists to avoid.)
         # Strict: the write that produced the diff has committed and stays,
         # but a fault here raises DbError, so the caller answers 503 instead of
         # a lost diff no subscriber could detect (no sequence moves).

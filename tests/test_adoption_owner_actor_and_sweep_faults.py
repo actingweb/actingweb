@@ -331,9 +331,7 @@ class TestMcpBridgeCreateRace:
             return real_create(self, *a, **kw)
 
         with patch.object(Actor, "create", other_request_wins):
-            result = handler._get_or_create_actor_cached(
-                actor_id, {"email": uuid_email()}, 0.0
-            )
+            result = handler._get_or_create_actor(actor_id, {"email": uuid_email()})
 
         assert result is not None and result.id == actor_id
 

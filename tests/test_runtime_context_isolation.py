@@ -26,8 +26,10 @@ from actingweb.runtime_context import RuntimeContext, clear_all_context
 
 
 class SharedActor:
-    """Stands in for the cached ActorInterface the MCP handler hands to
-    every request for a hot actor -- the same object, requests apart."""
+    """Stands in for one ActorInterface an application holds and hands to
+    several requests -- the same object, requests apart. (The MCP handler
+    builds one per request since 3.16; the ContextVar still keeps context
+    off the object.)"""
 
     def __init__(self, actor_id: str = "actor-1") -> None:
         self.id = actor_id

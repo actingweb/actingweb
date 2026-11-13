@@ -1,12 +1,13 @@
 ---
-status: proposed
+status: done
+verified: thoughts/verifications/2026-11-13-subs-list-cache-lifetime-3.md
 ---
 
 # Implementation Plan: per-request actors on the MCP path, and a subscription list that caches empty
 
 **Date:** 2026-11-06
 **Research:** thoughts/research/2026-11-05-subs-list-cache-lifetime.md, with the cost follow-up thoughts/research/2026-11-06-actor-load-cost-and-email-as-creator.md
-**Branch:** docs/3-16-rollup-records (written here; implement on `release/3.16.0-subs-list-cache-lifetime`, one PR, one commit per phase)
+**Branch:** implement on `release/3.16.0-subs-list-cache-lifetime`, one PR, one commit per phase (drafted on `docs/3-16-rollup-records`, redrafted on `docs/3-16-subs-list-plan-redraft`)
 
 ## Update Log
 
@@ -49,6 +50,51 @@ status: proposed
   row needs a subscriber that survives (or the suspension asserted from the
   snapshot, which it already holds) when this plan re-records it. No test
   file this plan cites was retired.
+- **2026-11-12, redraft against `master` after #171, #172 and #173 merged**
+  (owner's two decisions the same day):
+  - **What moved.** `handlers/mcp.py`, `subscription.py`, `mcp/invalidation.py`
+    and `runtime_context.py` are byte-identical to the tree this plan was
+    drafted on, so Phase 1's references into them stand. `actor.py` grew by
+    about 1,700 lines and `trust.py` by 158; every reference into them is
+    refreshed. Docs references in Phase 3 are refreshed.
+  - **`rewrite_email` is not added to `Actor.__init__`** (owner). The MCP
+    loads call `Actor.get(actor_id, rewrite_email=False)`, which exists.
+  - **The memo reset in `delete_reciprocal_trust`** follows the subscription
+    block, not the trust row: since #171 the method can remove a peer's
+    subscriptions and then leave with the row kept.
+  - **The view filter exists** (`_own_rows`); it filters a list and a client
+    view owns two ids. The accessor's delegation and test say so.
+  - **A reset the draft missed**: the dead-subscription clean-up in
+    `SubscriptionManager` deletes on the core actor.
+  - **Wire rows** (owner): the "Re-recorded" and "Identical" lists are gone;
+    `rows.toml` is the list. Phase 2 re-records `WC6` and `WC7`, adds `WM2`
+    and `WM3`, and gives up `WM1`, which it does not change.
+  - **Tests the draft missed** in Phase 1 are listed.
+  - Reviewed again: see Evaluation Notes, "Redraft of 2026-11-12".
+- **2026-11-12, from that review** (three evaluators and the outside voice;
+  owner's three decisions the same day):
+  - **The memo is reset where one instance invites a subscriber**: before
+    the strict read in `resume_subscriptions`, and after the trust calls
+    that send a request to the peer (owner). Without them a subscriber that
+    arrives during a suspended bulk operation gets no resync, and a peer
+    that subscribes back during a trust approval misses the next diff.
+  - **Suspension rows are also cleared when an actor is created under an
+    explicit id** (owner): rows left by a deletion before 3.16 are otherwise
+    never cleared.
+  - **`actingweb-verify-orphans` does not see subscriptions, diffs or
+    suspensions**; the plan no longer says it does, and
+    `thoughts/todo/verify-orphans-subscription-tables.md` records the gap
+    (owner).
+  - **Resets are in a `finally`**, the clean-up's async twin is named, and
+    the sibling reads the list per relationship.
+  - One more row, `WM4` (the resume); `WM3` uses a new subscriber `B2`; the
+    `WC6`/`WC7` registry text is edited with the recordings. The
+    subscribe-back has no row: the harness cannot record it (Wire rows).
+  - The changelog names the new failure on deletion, the blocking read under
+    FastAPI and `SubscriptionInfo`.
+- **2026-11-12**: approved by the owner (`/implement_plan` on
+  `release/3.16.0-subs-list-cache-lifetime`); the redraft is this branch's
+  first commit.
 
 ## Overview
 
@@ -76,10 +122,12 @@ below.
 needs the security plan merged for the filter on
 `AuthenticatedSubscriptionManager` that the new accessor follows when it is
 reached through a peer or client view, and the baseline plan for the
-recordings that show memoising the subscription list loses no diff between
-two real actors. What
-follows it: the email plan removes the `rewrite_email` keyword Phase 1 adds
-and its three uses in `handlers/mcp.py`; the specification plan's concurrent
+recordings that show which diffs memoising the subscription list keeps and
+which it gives up between two real actors (`WM2`). What
+follows it: the email plan removes `rewrite_email` from `Actor.get` and with
+it the argument Phase 1 passes at the MCP loads in `handlers/mcp.py` (a
+shared call site, not a keyword this plan adds; the two plans could land in
+either order); the specification plan's concurrent
 sender and its receiver-side overlap rule read the subscription list this
 plan memoises per instance. `register_diffs`, `callback_subscription` and
 `handlers/subscription.py` are edited again by the `ListAttribute` and
@@ -94,12 +142,21 @@ this plan leaves.
   (four stale-able memos: the actor row, the `_internal` bucket, the per-key
   property cache, `subs_list`) and the one MCP global whose hit path has no
   `config is self.config` check.
-- **The MCP load skips the email-as-creator check**: `Actor.__init__` gains a
-  keyword-only `rewrite_email: bool = True`, and the three MCP loads pass
-  `False` (`_get_or_create_actor`, the bridge reload, and `_race_winner` at
-  `handlers/mcp.py:2442`). MCP authentication never compares the creator, so
-  the request does not need the check. The keyword is undocumented and gets no
-  changelog entry: the email plan removes it before the release.
+- **The MCP load skips the email-as-creator check** [Updated 2026-11-12,
+  owner]: `Actor.__init__` is not touched. One module helper in
+  `handlers/mcp.py`, `_load_actor(actor_id, config)`, builds `Actor(config=
+  config)` and calls `.get(actor_id=actor_id, rewrite_email=False)`
+  (`actor.py:833-835`; `get` builds the stores itself on a hit, `:855-859`,
+  so a hit is attribute for attribute what `Actor(actor_id, config)` gives.
+  On a miss `id` is `None` either way, but the three stores are `None` here
+  where the constructor leaves them built, `:586-595`; no MCP caller reads
+  them after a miss, `handlers/mcp.py:2443`, `:2483`). The helper reads
+  `actor_module.Actor` when called, as `:2478-2480` does, so a test's patch
+  of `actingweb.actor.Actor` still lands. The MCP loads
+  use it: `_get_or_create_actor`, the bridge reload, and `_race_winner` at
+  `handlers/mcp.py:2442`. MCP authentication never compares the creator, so
+  the request does not need the check. Nothing new is public; the email plan
+  removes the keyword from `get` and the argument from the helper.
 - **What this costs, accepted**: a warm MCP request goes from no storage read
   to one strongly consistent actor-row read. A hook's first read or first
   write of each property, and its first touch of `_internal` or of
@@ -130,11 +187,93 @@ this plan leaves.
   `_TRUST_CACHE_TTL = _cache_ttl`, because their only expiry today is the
   actor sweep that is being removed. For an active client nothing observable
   changes (trust is already re-resolved each time its token entry expires);
-  the TTL bounds entries whose tokens went quiet.
-- **The trust-deletion sibling**: reads into a local, lazily, and never caches
-  a folded fault; resets `subs_list` after a deletion. `Actor.delete` and
-  `purge_relationships` hand it the list they already read, extending the
-  `_pre_reads` pattern (`actor.py:1060`).
+  the TTL bounds entries whose tokens went quiet. [Added 2026-11-12] It also
+  bounds a stale trust type: since #172 a re-authorisation can re-type a
+  client's row (`interface/trust_manager.py:526-533`, `:715-727`), and a
+  worker that missed the eviction would otherwise keep the old type for as
+  long as the actor stays hot. Authorisation is not affected (the evaluator
+  reads the row from storage, `permission_evaluator.py:883`); the
+  client-info and `peer_approved` writes are (they look the row up by the
+  cached `relationship`, `actor.py:1990-1994`).
+- **The trust-deletion sibling** [Updated 2026-11-12]: when it is not handed
+  a list it reads one into a local with `fetch(strict=False)` for each
+  relationship that reaches the subscription block (today's falsy guard
+  re-reads per relationship while the list is empty, and a single read would
+  keep a folded `[]`, or miss a peer that subscribed while an earlier
+  relationship's remote delete was waiting). It never assigns the memo from
+  that read, and resets `subs_list` in a `finally` around the block, so the
+  memo is unread whatever happens inside the block or to the trust row after
+  it. Since #171 the method can leave with the row kept and
+  the subscriptions gone (`actor.py:3083-3085`; the exits are the side-store
+  faults at `:3200-3297`, `TrustReplaced` at `:3317` and `DbError` at
+  `:3330`), so "after a trust row is deleted" would leave deleted rows in the
+  memo. `Actor.delete` and `purge_relationships` hand it the list they
+  already read, extending the `_pre_reads` pattern (`actor.py:1519`).
+- **Every delete on the core actor resets the memo** [Added 2026-11-12]: the
+  dead-subscription clean-up in `SubscriptionManager`
+  (`interface/subscription_manager.py:1657-1663`) deletes through
+  `get_subscription_obj(...).delete()` and resets nothing, and so does its
+  async twin (`:2736-2750`, `await asyncio.to_thread(sub_obj.delete)`). Each
+  keeps its delete call and sets `self._core_actor.subs_list = None` in a
+  `finally` around its loop (a delete that faults mid-loop is logged and the
+  sync carries on with the instance, `:1666`, `:2752`).
+  `Actor.delete_subscription` (`actor.py:3671`) is not used there: it also
+  wipes the peer's replica when the last outbound subscription goes, which
+  this clean-up does not do today.
+- **One instance resets its memo where it invites a subscriber** [Added
+  2026-11-12, owner]: an instance reads its subscription list once, except
+  after the two things it does itself that let a subscriber arrive mid-flow.
+  `resume_subscriptions` sets the memo to unread before its strict read
+  (`actor.py:4431`): the first suspended write fills an empty memo
+  (`register_diffs` reads the list at `:5279`, before the suspension check),
+  and the resync is the only recovery for what was written while suspended
+  (`:4427-4430`). The trust methods that can send a request to the peer
+  leave the memo unread on every exit, through a `finally` around the
+  method body: `modify_trust_and_notify` (`:1959`; the request at `:2101`,
+  "notify peer so their auto-subscribe will succeed", `:2075`),
+  `create_reciprocal_trust` (`:2170`; `:2264`, `:2323`) and
+  `create_reciprocal_trust_async` (`:2363`), which has its own `httpx` path
+  (`:2457`, `:2518`) and its own approval branch (`_approve_on_create`,
+  `:2452`). `modify_trust_and_notify_async` (`:2115`) runs the sync method
+  in a thread and needs nothing. A `finally` on the method, not a reset
+  after each request, so a branch added later cannot miss it. The cost is
+  one more list read after those calls. Any other
+  subscription created elsewhere during the instance's life is still not
+  seen: that is the rule (`WM1`, `WM2`).
+- **A create under an explicit id clears that id's suspension rows** [Added
+  2026-11-12, owner]: `Actor.create(actor_id=…)` calls `delete_all()` for the
+  id once the row is persisted, beside the tombstone clear and under its
+  rule (`actor.py:1216-1245`): only when `created and actor_id`. [Updated
+  2026-11-12, verification Issue 2] Before the tombstone clear, so a clear
+  that fails leaves the deleted actor's tombstone; any error from the store
+  is a `DbError` (Iteration 1). Before the
+  row would be wrong: `create()` answers `False` for an id a live actor
+  holds, and a clear ahead of that would wipe the live actor's suspensions
+  in the middle of its import. Deletion and purge clear them from 3.16 on,
+  but a row left by a deletion on an earlier version, or by a delete that
+  faulted after the row went, would otherwise make the new actor mute; the
+  MCP bridge creates by explicit id (`handlers/mcp.py:2511-2517`). A `False`
+  from `delete_all()` is treated as the tombstone fault is: the new row is
+  removed unless the create replaced a holder, and `DbError` is raised, so no
+  actor is left over a suspension that could not be cleared. Both backends
+  answer `True` when there is nothing to delete
+  (`db/dynamodb/subscription_suspension.py:149-157`,
+  `db/postgresql/subscription_suspension.py:148-163`). Between the row and
+  the clear the new actor is suspended and has no subscriber.
+- **An override of `delete_reciprocal_trust` must take keyword arguments**
+  [Added 2026-11-12]: `Actor.delete` and `purge_relationships` pass
+  `_subscriptions` on every call, so a subclass override with a fixed
+  parameter list gets a `TypeError`. Accepted and stated in the migration
+  guide; no consumer in `../actingweb_mcp` or `../actingwebdemo` overrides
+  it. (`TrustManager` passes its two keywords only when given,
+  `interface/trust_manager.py:996`; that guard does not fit a keyword passed
+  always.)
+- **Wire rows** [Added 2026-11-12, owner]: the new rows are recorded in
+  Phase 2, in its one commit. `WM2` and `WM3` record the new behaviour; what
+  it was before is pinned by unit tests and stated in the changelog, not by
+  a recording made first. `WM4` records something Phase 2 must not change. `WM1` is
+  not this plan's: a non-empty memo that misses a subscription created
+  elsewhere is the per-instance rule this plan keeps.
 - **Deletion and purge clear what subscriptions leave behind**: the
   subscription-suspension rows (both backends define `delete_all` "for cleanup
   on actor delete" and nothing calls it,
@@ -148,26 +287,43 @@ this plan leaves.
   list fetch.
 - **A peer-indexed accessor is added**:
   `SubscriptionManager.get_subscriptions_by_peer()`. On the authenticated
-  view it is delegated and follows the filter the security plan puts on that
-  view, so a peer or client view gets at most its own key.
+  view it is delegated through the filter #171 put there (`_own_rows`,
+  `interface/authenticated_views.py:848-866`), so a peer view gets at most
+  its own key and a client view at most two: its trust's peer id and its
+  client id, where subscriptions were filed before 3.16. [Updated
+  2026-11-12]
 - **Ride-alongs**: correct the "trust list" claim in three places and the
   section references that point at the wrong register section; correct the
   outdated `strict` notes; rewrite the actor-cache documentation; drop the
-  redundant reset at `handlers/subscription.py:270`.
+  redundant reset at `handlers/subscription.py:381-382`.
 
 ## What We're NOT Doing
 
 - **Who may reach whose subscriptions** - the REST rule on
   `/subscriptions/<peerid>/…`, the `DELETE /callbacks/subscriptions/…` hole
   and the filter on `AuthenticatedSubscriptionManager` are
-  `thoughts/plans/2026-11-06-peer-authorisation-fixes.md`, which lands first.
+  `thoughts/plans/2026-11-06-peer-authorisation-fixes.md`, merged as #171.
+- **Refreshing a memo on a held instance for subscriptions created
+  elsewhere** (`WM1`, `WM2`) - an instance reads its subscription list once,
+  outside the two resets it makes itself; that is the rule, and after Phase 1
+  the library builds no instance that serves more than one request's writes
+  (the system actor of `trust_type_registry.py:94` is kept, and has no
+  subscribers).
+- **Finding rows the deletion race leaves** - `actingweb-verify-orphans`
+  sweeps properties, attributes and trusts only
+  (`maintenance/verify_orphans.py:3`); nothing reports a subscription, diff
+  or suspension row without an actor. Extending the sweep is
+  `thoughts/todo/verify-orphans-subscription-tables.md`.
+- **A recording of the empty-memo behaviour before Phase 2** - owner,
+  2026-11-12: the unit tests pin it; one commit fewer.
 - **Closing the deletion race** - the actor row is removed last and nothing on
   the subscription-create path reads the deletion tombstone
-  (`actor.py:1090-1094`), so a request already past authentication can still
+  (the row goes last, `actor.py:1601-1608`), so a request already past
+  authentication can still
   insert a subscription after the last wipe. This plan narrows the window; a
   tombstone check on create is a change to the deletion design
-  (`actingweb/deletion.py`), and a row left that way is what
-  `actingweb-verify-orphans` reports.
+  (`actingweb/deletion.py`). Nothing reports a row left that way ("Finding
+  rows the deletion race leaves", below).
 - **Cross-process invalidation of the token and trust caches** - register
   sections 1 and 8 of `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`;
   this plan removes the instance-memo half of section 1 and leaves the rest
@@ -183,9 +339,11 @@ this plan leaves.
 - **Removing the double read on a faulted subscription fetch** - fault path
   only, and the swallow in `Subscriptions.__init__` is a recorded decision
   (`subscription.py:311-314`).
-- **Reusing a memoised list across several `delete_reciprocal_trust` calls** -
-  a loop of M single-peer deletions on one instance goes from one list read
-  to M when the actor has subscriptions. Rare, and the price of the sibling
+- **Reusing one list across relationships or calls in
+  `delete_reciprocal_trust`** - M relationships, in one call or in a loop of
+  single-peer calls on one instance, go from one list read to M when the
+  actor has subscriptions (`Actor.delete` and `purge_relationships` hand
+  theirs in and are not affected). Rare, and the price of the sibling
   never trusting a memo it is about to invalidate.
 - **Policing what a consumer's hook holds** - a hook that keeps the
   `ActorInterface` in its own global recreates the old lifetime; the migration
@@ -207,15 +365,21 @@ this plan leaves.
   on a cached token, which today has no guard (`:2314`).
 - `actingweb/handlers/mcp.py:2468-2475` - the `config is self.config` check on
   the actor entry; the same test moves to the token and trust entries.
-- `actingweb/actor.py:374-378` - `Actor.get(rewrite_email=False)` exists;
-  `__init__` only needs to pass it through.
+- `actingweb/actor.py:833-835` - `Actor.get(rewrite_email=False)` exists and
+  is all the MCP load needs (`__init__`, `:564-596`, is left alone).
+- `actingweb/interface/authenticated_views.py:848-866` - `_own_rows`, the
+  filter the three listing properties pass through (`:869-881`).
+- `tests/integration/_wire.py`, the `wire_pair` fixture and
+  `wire_pair.add_subscriber` (`tests/integration/conftest.py`) - the harness
+  the two new rows are recorded on; `tests/integration/wire/rows.toml` is the
+  only list of rows and owners, and CI checks the `Wire-Phase` trailer.
 - `actingweb/subscription.py:260-278` - `Subscriptions.fetch()` leaves
   `self.subscriptions` as `None` on a fold; `get_subscriptions()` uses that to
   tell a fold from an empty read.
-- `actingweb/actor.py:1056-1066`, `:1111-1116` - `Actor.delete`'s `_pre_reads`.
+- `actingweb/actor.py:1515-1521`, `:1570-1577` - `Actor.delete`'s `_pre_reads`.
 - `actingweb/db/__init__.py:314` (`get_subscription_suspension`) and its
   `delete_all()` on both backends - exists, uncalled. `Actor` already imports
-  the factory (`actor.py:16`).
+  the factory (`actor.py:23-26`).
 - `actingweb/db/dynamodb/subscription_diff.py:163-222`,
   `actingweb/db/postgresql/subscription_diff.py:261-395` - the diff list
   already deletes by actor id alone: `fetch(actor_id=…)` with no `subid`, then
@@ -257,10 +421,11 @@ flowchart TD
 
 ### Changes
 
-- `actingweb/actor.py:113-142` - `Actor.__init__(actor_id=None, config=None,
-  *, rewrite_email: bool = True)`, passed to `self.get(...)`. No docstring
-  entry beyond one line saying it is internal.
+- `actingweb/actor.py` - no change in this phase.
 - `actingweb/handlers/mcp.py`
+  - `_load_actor(actor_id, config)` (new, module level): `Actor(config=
+    config)`, then `.get(actor_id=actor_id, rewrite_email=False)`; returns the
+    `Actor`, whose `id` is `None` when no row was found.
   - Delete `_actor_cache` (`:110`), its `global` mention (`:3006`), the
     comment block at `:2462-2467`, and the `actor_hits`/`actor_misses`
     counters (`:142-149`). Keep the periodic debug line (`:2333-2339`),
@@ -290,23 +455,31 @@ flowchart TD
     (`:2551-2557`) and the `current_time`/`generation_at_read` parameters; add
     `create: bool = True` so the cached-token branch can load without the
     bridge. Its loads (`:2480`, `:2531`, `:2534`) and `_race_winner`'s
-    (`:2442`) use `Actor(actor_id, config, rewrite_email=False)`.
-  - `_update_trust_with_client_info` (`:2791`) and `_mark_client_peer_approved`
-    (`:3091`) take the request's core actor instead of loading a second one.
+    (`:2442`) use `_load_actor`. The create at `:2511` (`Actor(` with no id)
+    is unchanged.
+  - `_update_trust_with_client_info` (`def` at `:2723`, its load at `:2791`)
+    and `_mark_client_peer_approved` (`:3041`, `:3091`) use the core actor of
+    the interface they are already handed (`actor.core_actor`) instead of
+    loading a second one; the `if core_actor.actor:` guard on the second load
+    goes with it. Those two loads ran the email
+    check; they go with the load. Neither helper approves a trust, so
+    `modify_trust_and_notify` does not write the request actor's
+    `last_response_code` (`actor.py:2104-2112`).
   - `_TRUST_CACHE_TTL: float = _cache_ttl` (`:122`, no longer `None`-able),
     comment rewritten.
   - `_cleanup_expired_cache_entries()` (`:782-815`): tokens by `cached_at`;
     trust entries by `_trust_entry_expired` over a copy of the dict; the
     actor loop goes.
   - `evict_mcp_caches_for_actor()` (`:367-413`): no actor pop. Docstring:
-    actor-wide because one revocation covers every client of the actor; the
-    register section is 1.
+    actor-wide because one revocation, or one re-typing of a client's trust
+    (`interface/trust_manager.py:526-533`), covers every client of the actor;
+    the register section is 1.
   - `clear_token_from_cache()` (`:2988-3039`) and the method docstring at
     `:2248-2261`: two caches, no actor wrapper. No alias for
     `authenticate_and_get_actor_cached`: it still caches the token and the
     trust, so the name holds.
-- `actingweb/trust.py:250-252` - the trust list was never on the cached
-  wrapper.
+- `actingweb/trust.py:302-304` (inside `_after_row_delete`, `:277`) - the
+  trust list was never on the cached wrapper.
 - `actingweb/mcp/invalidation.py:3-4`, `:23`, `:35-36`, `:63` - "actor
   wrappers" out of the prose; section 2 becomes 1.
 - `actingweb/runtime_context.py:15-18`, `:103`, `:185` - keep the reason for
@@ -318,17 +491,33 @@ flowchart TD
   named backend methods (`DbActor.get`, the subscription list's `fetch`) on
   either.
 - `tests/test_mcp_revocation_evicts_caches.py` - `:3`, `:60` prose; `_seed`
-  drops the actor entry and gives trust entries a `cached_at`; `:61`, `:99`
-  counts 4 become 3; `:70` goes; `test_the_actor_wrapper_goes_too…`
-  (`:76-86`) is deleted.
+  drops the actor entry and gives trust entries a `cached_at` (`:46-47`);
+  `:61`, `:99` counts 4 become 3; `:70` goes;
+  `test_the_actor_wrapper_goes_too…` (`:76-86`) is deleted; the
+  `_actor_cache` uses at `:34` and `:129` go.
 - `tests/test_mcp_trust_cache_key.py` - `:11`, `:117` prose; `:126-133`
   clears two caches; `:212-217` patches the two trust helpers and takes the
   new argument; `TestActorExpiryEviction` (`:268-310`) becomes a trust expiry
-  test that ages both tuples' `cached_at`; re-verify `:188` and `:246`.
+  test that ages both tuples' `cached_at`; the `_actor_cache` use at `:321`
+  goes; re-verify `:188` and `:246`.
+- `tests/test_db_fault_fifth_pass.py:447-451`, `:460-470` and
+  `tests/test_mcp_client_info_cache.py:97-107` - they patch
+  `actingweb.actor.Actor` inside the two helpers (`mock.patch.object(
+  actor_module, "Actor", return_value=core)`) and pass a bare
+  `mock.Mock(id="a1")`. The patch and the unused import go, and the helpers
+  are handed `mock.Mock(id="a1", core_actor=core)`. [Added 2026-11-12;
+  missed by the first draft.]
+- `tests/test_mcp_trust_cache_key.py:66-70`, `:97-98` - `FakeCoreActor` has
+  no `get`, and the patch is `lambda actor_id=None, config=None:
+  FakeCoreActor(actor_id, cfg)`. Under `_load_actor` every test through
+  `_auth` (`:148`) would answer `None`. The fake gains `get(actor_id=None, *,
+  rewrite_email=True)` that sets `self.id` and returns a row. [Added
+  2026-11-12; the tests review's High finding.]
 - `tests/test_mcp_fail_closed_authorization.py:659`, `:670`, `:678`, `:680` -
   the two trust helpers' new argument.
 - `tests/test_runtime_context_isolation.py:29` - docstring.
-- The renamed method and its shorter signature at
+- The renamed method and its shorter signature (callers pass `(actor_id,
+  {...}, 0.0)` today) at
   `tests/test_deletion_in_progress_answers.py:53`, `:90`,
   `tests/integration/test_unique_creator_http.py:227`, `:243`,
   `tests/test_adoption_strict_listing_and_rollback.py:257`,
@@ -379,8 +568,11 @@ real actor from `create_core_actor` with a backend-following config
   401.
 - A token entry and a trust entry filled under one `Config` are misses for a
   handler built with another `Config` holding the same actor id, and that
-  handler validates against its own token store; the first application's
-  entries are still there afterwards.
+  handler validates against its own token store. With a token the second
+  application does not know, the first application's entries are still
+  there afterwards; with one it accepts, its fill replaces the token slot
+  (one slot per token, `handlers/mcp.py:2376`) and the first application
+  then misses and validates again.
 - A cached negative trust entry (trust `None`) is a hit and yields an empty
   peer id.
 - A positive trust entry older than 300 s is a miss and is resolved again
@@ -390,6 +582,9 @@ real actor from `create_core_actor` with a backend-following config
 - `_update_trust_with_client_info` and `_mark_client_peer_approved` issue no
   second actor read; `_race_winner`'s load does not rewrite the creator of an
   actor whose stored email differs from it.
+- `_load_actor`: a hit returns an `Actor` with its three stores built and
+  the creator as stored (flag on, vouched email differing); a miss returns
+  one whose `id` is `None`; one row read either way.
 
 ### Failure Scenarios
 
@@ -400,7 +595,8 @@ real actor from `create_core_actor` with a backend-following config
   entry is dropped, validation fails (the actor's token rows went with its
   buckets): 401. Today the cached wrapper keeps being served until the token
   entry expires, up to 300 s after the row is removed. During a wipe the row
-  still resolves (`actor.py:1090-1094`), so a cached token is served until
+  still resolves (it goes last, `actor.py:1601-1608`), so a cached token is
+  served until
   the row goes, before and after this plan. Covered.
 - Cached token, row missing, tombstone write had failed - no create without a
   storage validation. Covered. This is the case the first draft got wrong.
@@ -421,9 +617,47 @@ real actor from `create_core_actor` with a backend-following config
 - [ ] Run the contract's `### Checks` fast tier verbatim
 - [ ] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time; re-run a parallel failure sequentially before trusting it
-- [ ] `grep -rnw "_actor_cache" actingweb tests` returns nothing
+- [x] `grep -rnw "_actor_cache" actingweb tests` returns nothing
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **New tests**: `tests/test_mcp_per_request_actor.py` (22). Run against
+  `master`'s `handlers/mcp.py`, 19 fail; the three that pass pin what held
+  already (the bridge create on the full path, a resolver bug answering
+  `None`, another application's unknown token left in place).
+- **One helper, `_set_mcp_runtime_context`**, holds the `RuntimeContext`
+  write both branches made; the cached branch no longer repeats it inline.
+- **`tests/_read_counters.py`** holds the DynamoDB operation counter (the
+  tombstone test imports it) and `count_reads` (actor row, subscription
+  list, PostgreSQL connections). `tests/test_adoption_bounded_reads.py`'s
+  `_counting` is left where it is: it counts `_internal` marker reads, which
+  nothing else needs. Deviation from "both are lifted".
+- **Test edits beyond the list**: none; `tests/test_mcp_revocation_evicts_caches.py`
+  gained a sibling token in the token-keyed eviction test, since the actor
+  entry it asserted on is gone.
+- **Phase review** (2026-11-12, outside voice: Codex and a fresh-context
+  reviewer, on `0f7b8f7`; fixed in the commit after it):
+  - A revocation could still land between a fill's validity check and its
+    write (the eviction popped, then bumped; the fill checked, then wrote),
+    so a revoked token or trust entry could outlive its eviction by its TTL.
+    Older than this plan (it was there with `_actor_cache`), reachable by a
+    client timing a request against a logout. Fixed: the fills check and
+    write, and the evictions pop and bump, under one re-entrant lock
+    (`_cache_generation_lock`); a test runs the eviction from inside a fill
+    and fails without the lock.
+  - No test failed without the trust cache's per-application check. Added:
+    a token entry of one application over a trust entry of another.
+  - A bridge create whose row is gone on the reload returned an interface
+    with no id. It now answers `None`; tested.
+  - Two comments in `oauth2_server/token_manager.py` named the actor
+    wrapper; rewritten.
+  - Accepted, Low: the periodic sweep pops by key and can remove an entry a
+    request refilled after the scan (a re-validation, never a bypass; the
+    token loop always did this). Accepted, already in Failure Scenarios: a
+    cached token is served while its actor is being deleted, until the row
+    goes.
 
 ---
 
@@ -432,21 +666,46 @@ real actor from `create_core_actor` with a backend-following config
 ### Changes
 
 - `actingweb/actor.py`
-  - `get_subscriptions()` (`:2440-2484`): guard `if self.subs_list is None:`.
+  - `get_subscriptions()` (`:3556-3601`; the falsy guard is at `:3584`):
+    guard `if self.subs_list is None:`.
     Build the `Subscriptions` wrapper, `fetch(strict=strict)`, and assign
     `self.subs_list` only when `wrapper.subscriptions is not None`; a folded
     fault answers the filtered `[]` and leaves the memo `None`. Docstring: one
     fetch per `Actor` instance, reset by this instance's create and delete
     methods; an instance an application keeps does not see subscriptions
     created elsewhere.
-  - `delete_reciprocal_trust()` (`:2007-2226`): keyword-only `_subscriptions:
-    list[dict[str, Any]] | None = None`. When not given, read once into a
-    local with `fetch(strict=False)`, lazily, at the first relationship that
-    reaches the subscription block (`:2084`), so a call with no relationship,
-    or one that `continue`s at `:2062`, reads nothing. Never assign
-    `self.subs_list` from it. Whenever a trust row is deleted, `self.subs_list
-    = None`.
-  - `Actor.delete()` (`:1132-1142`): pass `_subscriptions=[]` to each
+  - `delete_reciprocal_trust()` (`:3065-3333`): keyword-only `_subscriptions:
+    list[dict[str, Any]] | None = None`, beside `expected_secret` and
+    `before_local_delete` (`:3070-3072`; `TrustManager` forwards only those
+    two, `interface/trust_manager.py:999-1007`, and is not changed). When not
+    given, each relationship that reaches the subscription block
+    (`:3177-3198`) reads the list into a local with `fetch(strict=False)`, so
+    a call with no relationship, or one that `continue`s at `:3139` or
+    `:3147`, reads nothing. Never assign `self.subs_list` from it, and never
+    read `self.subs_list` there: `before_local_delete` runs the
+    `trust_deleted` hooks on this actor just before the block (`:3176`), and a
+    hook that lists subscriptions fills the memo. The block's loop sits in a
+    `try` whose `finally` sets `self.subs_list = None`, so every exit leaves
+    no deleted row in the memo: a fault inside the loop (`sub_obj.delete()`
+    at `:3198` clears diffs and deletes the row, `subscription.py:93`,
+    `:122`, neither wrapped), the side-store faults `:3200-3297`,
+    `TrustReplaced` `:3317`, `DbError` `:3330`, and the normal one.
+  - `resume_subscriptions()` (`:4423-4433`): `self.subs_list = None` before
+    the strict `get_subscriptions(...)` at `:4431`.
+  - `modify_trust_and_notify()` (`:1959`), `create_reciprocal_trust()`
+    (`:2170`) and `create_reciprocal_trust_async()` (`:2363`, its own `httpx`
+    path): the body in a `try` whose `finally` sets `self.subs_list = None`.
+    When the phase is written, `grep -n "requests\.\|httpx\|aw_proxy"
+    actingweb/actor.py` is read once more for a trust method that sends to
+    the peer and is not one of these three.
+  - `create()` (`:1057`): in the `if created and actor_id:` branch
+    (`:1222-1245`), after the tombstone clear,
+    `get_subscription_suspension(config, self.id).delete_all()`; a `False`
+    takes the same path as the tombstone's `DbError` (row removed unless
+    `replace_holder`, instance unbound, `DbError("suspension clear",
+    self.id)` raised).
+  - `Actor.delete()` (`:1515-1614`; the wipe is `:1583-1608`): pass
+    `_subscriptions=[]` to each
     `delete_reciprocal_trust` call; set `self.subs_list = None`. After
     `trusts.delete()`: one more `Subscriptions(...).delete()` (a subscription
     a peer created during the wipe, whose trust row lived until its sibling
@@ -457,54 +716,120 @@ real actor from `create_core_actor` with a backend-following config
     from `delete_all()` (both backends fold a fault to `False` with a log)
     raises `DbError`, so the resumable delete stops before the row goes and a
     repeated call finishes it.
-  - `purge_relationships()` (`:2261-2310`): pass `_subscriptions=sub_rows`;
+  - `purge_relationships()` (`:3335`; the wipe is `:3368-3427`): pass
+    `_subscriptions=sub_rows`;
     set `self.subs_list = None` after `subs.delete()`; then the same
     actor-wide diff delete and suspension `delete_all()`. A `False` there
     leaves `confirmed` False, as an unconfirmed list does.
-  - Docstrings and comments: `purge_relationships` (`:2240-2243`),
-    `register_diffs` (`:3867-3878`), `create_subscription` (`:2345-2352`),
-    `Actor.delete` (what the wipe now covers).
-- `actingweb/handlers/subscription.py:269-270` - remove the hand reset. (The
-  peer rule on the same handlers is the security plan's.)
-- `actingweb/db/protocols.py:1124-1126` - both backends raise when strict and
+  - Docstrings and comments: `purge_relationships` (`:3343-3346`),
+    `register_diffs` (`:5267-5278`), `create_subscription` (`:3452-3460`),
+    `Actor.delete` (what the wipe now covers), `delete_reciprocal_trust`
+    (`:3083-3085`: the memo is reset when the row is kept).
+- `actingweb/handlers/subscription.py:381-382` - remove the hand reset (the
+  create goes through `Actor.create_subscription`, which resets, `:3460`).
+- `actingweb/db/protocols.py:1141-1143` - both backends raise when strict and
   fold when not.
 - `actingweb/interface/subscription_manager.py`
   - `@dataclass class PeerSubscriptions: peer_id: str; outbound:
     list[SubscriptionInfo]; inbound: list[SubscriptionInfo]`, not frozen and
-    with lists, as `PeerSyncResult` is (`:162-170`).
+    with lists, as `PeerSyncResult` is (`:196-205`).
   - `get_subscriptions_by_peer() -> dict[str, PeerSubscriptions]`: one
     `get_subscriptions()` call, grouped. A peer without subscriptions has no
     key. A read fault raises `DbError`, as the other accessors do.
+  - The dead-subscription clean-up (`:1645-1668`) and its async twin
+    (`:2736-2754`): `self._core_actor.subs_list = None` in a `finally` around
+    each loop (Decisions).
+- `tests/integration/conftest.py:1370` - the teardown comment "actor deletion
+  leaves them" (suspension rows) is no longer true; reword.
 - `actingweb/interface/authenticated_views.py` - `get_subscriptions_by_peer()`
-  is delegated beside the three read-only properties and passes through the
-  filter the security plan adds there, so a view built for a trust returns at
-  most that trust's key.
+  after the three read-only properties (`:869-881`): `groups =
+  self._manager.get_subscriptions_by_peer()`, then `{g.peer_id: g for g in
+  self._own_rows(list(groups.values()))}`. `_own_rows` filters on `peer_id`,
+  which `PeerSubscriptions` carries, so the filter is reused unchanged: owner
+  mode returns every key, a peer view its own, a client view its trust's peer
+  id and its client id.
 - `actingweb/interface/__init__.py:42-46` - export `PeerSubscriptions` and
   `SubscriptionInfo`.
 
 ### Wire rows
 
-A row is one recording under `tests/integration/wire/`
-(`thoughts/plans/2026-11-06-subscription-wire-baseline.md`). "Re-recorded"
-means the file changes in this phase's commit and the diff is read in review;
-every other recording is byte-identical after the commit, and `git show
---stat HEAD -- tests/integration/wire` lists only the rows named here. The
-expectations are from reading; that plan's "Recorded outcomes" overrides
-them.
+`tests/integration/wire/rows.toml` is the only list of rows and owners; this
+section says what this phase does to it. The phase's commit carries the
+trailer `Wire-Phase: subs-list-cache-lifetime:2`, which CI checks against
+the owners as `master` has them (`verify_groups.py`).
 
-Re-recorded:
+Re-recorded (owned by this phase on `master`), each in both topologies:
 
-- `WC6` - after the publisher is deleted, no suspension row of it remains
-  (read: one does today; its diffs already go with their subscriptions).
-- `WC7` - an actor created again under the same id is not suspended and
-  registers a diff.
+- `WC6` - after the publisher is deleted, no suspension row of it remains.
+  The change is in the snapshot's suspension fields (`after.publisher.
+  suspensions` and `after.extra["A.suspensions"]`, today `[["properties",
+  "y"]]`); nothing on the wire changes.
+- `WC7` - the actor created again under the same id starts with no
+  suspension row. The same two fields in both of its steps (four values per
+  file); its scenario is not changed, and its write still sends nothing,
+  because nobody subscribes to the new actor. What a recreated actor sends
+  is `WM3`'s.
 
-Identical, and the ones to watch, because they are the memo's risk: `WC1`
-and `WC2` (a subscription created over HTTP gets the next diff), `WD13` and
-`WD14` (several subscribers on one write), `WC3` to `WC5` (a deleted
-subscription or trust gets no further diff), `WD10` (writes while suspended,
-then a resume) and `WD5` (an interface-layer write on a running loop, where
-the `Actor` outlives the call).
+Both rows' `expected` text in `rows.toml` is rewritten in the same commit
+(`WC6` says "A's suspension row for y stays", `WC7` "it starts with the old
+suspension row for y"), and each gets a dated `reason` line naming this
+phase, as the file's header asks.
+
+Added (ids from this plan's reserved range `WM2`-`WM9`; a recording that
+does not exist on `master` needs no owner there), each in both topologies,
+owners `subs-list-cache-lifetime:2`, `exposure = false` (each records a diff
+withheld from, or delivered to, a subscriber with an approved trust and a
+grant that covers the target):
+
+- `WM2` - the empty memo on a held instance. A pair with no subscription
+  (`wire_pair(..., subscribe=False)`); one `Actor` instance of A writes `x`
+  (its memo becomes `[]`, asserted); B subscribes over REST; the same
+  instance writes again and B gets no callback: B keeps the baseline value.
+  `expected` says this is the per-instance rule, that before 3.16 an empty
+  list was read again on every write so B did get this diff, and that an
+  instance the library builds lives for one request. A second instance of A
+  then writes and B gets the diff: the recording shows the bound.
+- `WM3` - a recreated publisher sends. `WC6`'s setup and delete, then A
+  created again under its id through the SDK (same creator and passphrase,
+  as `WC7` does). The scenario asserts the new A holds no trust and no
+  subscription, then adds a new subscriber with `wire_pair.add_subscriber(s,
+  "B2", …)`, which runs trust, approval and subscription (B itself cannot
+  subscribe: its trust went with the delete, and the pair's own subscribe
+  step only posts the subscription, `conftest.py:1343-1346`). A fresh
+  `a.interface()` writes `y`, the target that was suspended: the diff reaches
+  B2. On today's code the inherited suspension drops it (both backends match
+  the subtarget, DynamoDB by `target_key`, PostgreSQL by `subtarget IN (%s,
+  '')`).
+- `WM4` - a subscriber that arrives during a suspended operation gets the
+  resync. A pair with no subscription; one instance of A suspends
+  `properties`, writes `x` (the memo becomes `[]`), B subscribes over REST,
+  the same instance resumes: B gets the resync callback. Identical on
+  today's code; it pins the reset in `resume_subscriptions`. `WD10` starts
+  with a subscriber and cannot show this.
+
+No row for the subscribe-back during a trust approval: in the harness B
+subscribes as a step of its own (`conftest.py:1223-1227`), and no wire app
+subscribes from a lifecycle hook, so the subscription cannot arrive inside
+A's approval request without a hook that would change every other
+recording. The unit tests cover it.
+
+Given up: `WM1`. Its recording is not changed by this phase (a non-empty
+memo, and the subscription is created on another instance). In the same
+commit its `owners` becomes `[]` and its `expected` loses "Known wrong: the
+memo is not refreshed" for "by design: an instance reads its subscription
+list once (3.16)"; a `rows.toml` edit is not a recording change and needs no
+trailer (`verify_groups.py` checks `.json` paths only, and refuses empty
+owners for exposure rows only).
+
+Every other recording is byte-identical after the commit on both backends.
+The ones to watch, because they are the memo's risk: `WC1` and `WC2` (a
+subscription created over HTTP gets the next diff), `WD13` and `WD14`
+(several subscribers on one write), `WC3` to `WC5` (a deleted subscription or
+trust gets no further diff), `WD10` (writes while suspended, then a resume)
+and `WD5` (an interface-layer write on a running loop, where the `Actor`
+outlives the call). Gate 3 applies to the three new rows: five consecutive
+sequential wire runs per backend leave them byte-identical before the
+commit.
 
 ### New Tests, both unit and integration tests
 
@@ -533,16 +858,71 @@ are used only where the test names operations.
   memo is `None`.
 - Trust deletion under a subscription read fault: the trust row goes, the
   subscriptions stay, the memo is `None`.
+- Trust deletion that leaves with the row kept, one test per exit, each with
+  the memo primed with the peer's subscription and each asserting
+  `get_subscriptions(peerid=…) == []` on the same instance afterwards (all
+  four fail today, where the memo keeps the deleted rows):
+  - `TrustReplaced` at `:3317`: the model is
+    `tests/test_trust_conditional_delete.py:146-165` (`repair_then_delete`
+    patching `Trust.delete`, with its `Receiver`, `_subscribe` and `_subs`
+    helpers). A secret that changed earlier leaves at `:3103` or `:3170`
+    with the subscriptions kept, which is not this case.
+  - `DbError` at `:3330`: `Trust.delete` patched to answer `False` with the
+    row left.
+  - A side-store fault: `RemotePeerStore.delete_all` patched to raise
+    `DbError`.
+  - A fault inside the loop: the second of two subscriptions' delete raises;
+    the first is gone from the listing.
+- The block uses its own read, not the memo. With the memo primed
+  non-empty, a second subscription for the peer is created through another
+  instance, then the trust is deleted on the first: both go (fails today,
+  which trusts a non-empty memo). With the memo primed empty: the same, to
+  guard the `is None` code. With a `trust_deleted` hook that lists
+  subscriptions and then creates one for the peer through another instance:
+  that one goes too.
+- A call with no relationship, and one whose only relationship `continue`s,
+  issue no list fetch.
+- Several relationships in one call with no list handed in: one fetch per
+  relationship that reaches the block, and a subscription created for the
+  second peer after the first relationship's block still goes.
+- The dead-subscription clean-up, sync and async: a real actor
+  (`create_core_actor`, `tests/_adoption_helpers.py:46`) with
+  `sync_subscription` and `_peer_trust_state` patched so one subscription
+  answers 404; afterwards the same `SubscriptionManager`'s listing does not
+  hold it. With two dead subscriptions and the second delete faulting, the
+  first is still gone from the listing. (The existing tests use a
+  `MagicMock` or `FakeCoreActor` and cannot show a memo.)
+- `resume_subscriptions`: one instance of a zero-subscriber actor suspends,
+  writes, a subscription is created through another instance, the first
+  resumes: one resync callback is sent to it (fails under the `is None`
+  guard without the reset).
+- Trust approval: one instance lists subscriptions (empty), calls
+  `modify_trust_and_notify` with the peer request mocked to create the
+  peer's subscription through another instance, then `register_diffs()`:
+  the diff is stored. The same for `create_reciprocal_trust` and, with the
+  `httpx` client mocked, for `create_reciprocal_trust_async` (both its
+  request branch and its approve-on-create branch).
+- `Actor.create(actor_id=…)` over a leftover suspension row (written
+  directly, no previous actor): the new actor is not suspended. With
+  `delete_all()` answering `False`: `DbError`, and no actor row exists
+  afterwards. A create under the id of a live actor that has a suspension
+  answers `False` and the suspension is still there. A create without an
+  explicit id issues no suspension call.
+- The `WM2` behaviour at unit level: with an empty memo on one instance and
+  a subscription created through another, `register_diffs()` on the first
+  stores no diff for it; a new instance does.
 - `Actor.delete()` with three relationships and no peer-trustee rows: two
   subscription list fetches, the pre-read and the final wipe's (its
   constructor fetches, `subscription.py:315-316`), where today there are
   four. With one peer-trustee row: one more (the `delete_peer_trustee` path
-  at `:1277` reads its own).
+  at `actor.py:1736` reads its own).
 - A subscription created after `subs.delete()` and before the last sibling
   call, with a diff: both are gone when `Actor.delete()` returns.
 - A diff left with no subscription row (the state a subscription created
   between the pre-read and the first wipe leaves) is gone after
-  `Actor.delete()`, on both backends.
+  `Actor.delete()`, on both backends; the same after
+  `purge_relationships()`. A fault in the actor-wide diff delete raises
+  `DbError` from `Actor.delete()` with the row still present.
 - Suspension: an actor with a suspended target is deleted and its id created
   again with `Actor.create(actor_id=…)`; the new actor is not suspended and
   registers a diff. The same after `purge_relationships()`. A suspension
@@ -554,10 +934,11 @@ are used only where the test names operations.
 - `get_subscriptions_by_peer()`: grouping; peers without subscriptions are
   absent; with a loop of the two per-peer accessors over five peers, one list
   fetch.
-- The accessor through a view: with subscriptions for two peers, a view built
-  with `as_peer` for peer A and a view built with `as_client` for an
-  `mcp_client` trust each return at most their own key; owner mode returns
-  both. (Depends on the security plan's filter having landed.)
+- The accessor through a view: with subscriptions for three peers, a view
+  built with `as_peer` for peer A returns A's key only; a view built with
+  `as_client` for an `mcp_client` trust returns the key of its trust's peer
+  id and, when a subscription is filed under its client id, that key too,
+  and never a third peer's; owner mode returns all three.
 
 ### Failure Scenarios
 
@@ -567,7 +948,24 @@ are used only where the test names operations.
   stated as a `Behavior change` for applications that keep an instance.
 - Folded fault memoised as "no subscribers" - prevented by assigning only on
   a real read. Covered.
-- Sibling leaves deleted rows in the memo - prevented by the reset. Covered.
+- Sibling leaves deleted rows in the memo - prevented by the `finally`
+  around the block, on every exit. Covered, one test per exit.
+- A subscriber arrives while an instance has a bulk operation suspended -
+  the resume reads the list again. Covered (unit and `WM4`).
+- A peer subscribes back during a trust call on an instance whose memo is
+  empty - the memo is unread after the call. Covered (unit; no wire row, see
+  Wire rows).
+- An id deleted before 3.16 is created again - its suspension rows go at
+  create. Covered.
+- A create under a live actor's id - refused, and that actor's suspensions
+  are untouched because the clear follows a persisted row. Covered.
+- A subclass override of `delete_reciprocal_trust` with a fixed parameter
+  list - `TypeError` during a delete. Accepted (Decisions); named in the
+  migration guide.
+- A hook fills the memo just before the sibling's block - the block reads
+  its own list. Covered.
+- The dead-subscription clean-up leaves the row it deleted in the memo -
+  reset after its loop. Covered.
 - A peer subscribes while the actor is being deleted - narrowed by the final
   subscription wipe and the actor-wide diff delete, not closed (What We're NOT
   Doing). Covered up to the last wipe. Without the wipe the plan would have
@@ -586,11 +984,81 @@ are used only where the test names operations.
 - [ ] Run the contract's `### Checks` fast tier verbatim
 - [ ] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time
-- [ ] `grep -n "not self.subs_list" actingweb/actor.py` returns nothing
-- [ ] `git show --stat HEAD -- tests/integration/wire` lists `WC6` and `WC7`
-      only
+- [ ] `grep -n "not self.subs_list" actingweb/actor.py` returns nothing (a
+      tripwire for the old guard only; the read-count tests are the proof)
+- [ ] `git show --stat HEAD -- tests/integration/wire` lists `rows.toml` and
+      the `WC6`, `WC7` and `WM2` to `WM4` files only (two topologies each), and
+      the commit carries `Wire-Phase: subs-list-cache-lifetime:2`
+- [x] `poetry run python tests/integration/verify_groups.py` passes after
+      the commit (it reads commits already made)
+- [x] The wire step (`pytest tests/ -m wire -p no:rerunfailures`,
+      sequential) passes on both backends and on `.venv311`
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **New tests**: `tests/test_subscription_list_memo.py` (52). Against the
+  old `actor.py` (the rest of the phase kept), 25 fail; with the resets in
+  `resume_subscriptions` and the three trust methods removed, the six
+  resume and trust-call tests fail. The 21 others that pass on the old
+  `actor.py` pin what held already (every creation path resets, a rows
+  memo, the accessor).
+- **Wire rows**: `WC6` and `WC7` re-recorded (the suspension fields only, as
+  planned); `WM2` to `WM4` recorded; `WM1` given up in `rows.toml`. Gate 3:
+  five sequential runs per backend, byte-identical. In `WM3` B2's trust and
+  subscription are set up unrecorded, as every added peer is (an actor
+  added inside a step leaves its trust secret unnamed in the transcript);
+  the recording is the write and B2's callback.
+- **`delete_all` added to `SubscriptionSuspensionProtocol`**
+  (`db/protocols.py`): both backends had it, the protocol did not, so the
+  calls did not type-check. Read on both backends: `False` only on a fault
+  (the unverified note is answered).
+- **Two helpers on `Actor`**: `_wipe_subscription_leftovers` (the final
+  subscription wipe, then the next) and `_wipe_diffs_and_suspensions` (the
+  actor-wide diff delete and the suspension `delete_all`), shared by
+  `delete()` and `purge_relationships()`.
+- **The trust calls' tests**: the approval paths (`modify_trust_and_notify`,
+  approve-on-create in both `create_reciprocal_trust` forms) run with the
+  peer's request mocked to subscribe through another instance and then
+  assert the diff. The request branches cannot finish without a peer; their
+  tests subscribe inside the mocked request, fail it, and assert the memo is
+  unread on that exit.
+- **Other peer requests in `actor.py`** (the grep the plan asked for):
+  `_re_pair_unknown` and its async twin run inside the create methods and
+  are covered by their `finally`; `get_peer_trustee` creates an actor at
+  another service, not a trust, and `create_remote_subscription` resets
+  through `create_subscription`. No other trust method sends to the peer.
+- **`purge_relationships`** folds the leftovers' `DbError` into
+  `confirmed: False` with the `# folds DbError:` marker the guard test asks
+  for.
+- **Phase review** (2026-11-12, outside voice: Codex and a fresh-context
+  reviewer, on `011865b`; fixed in the commit after it):
+  - **Medium, reachable by a user's own delete or an MCP bridge create:** on
+    a DynamoDB deployment that never created the suspensions table (the docs
+    called it optional; auto-creation off), `delete_all()` folded the missing
+    table to `False`, so every `Actor.delete()`, every purge and every
+    `Actor.create(actor_id=…)` failed. A missing table holds no suspension:
+    the DynamoDB `delete_all()` answers `True` for it (tested). The
+    `docs/reference/database-backends.rst` note is corrected: since 3.16 a
+    suspension check that cannot read the table answers 503 for a write with
+    subscribers (older than this plan), and deletion and create treat a
+    missing table as empty. PostgreSQL creates the table in its migrations.
+  - `create_subscription` and `delete_subscription` reset the memo in a
+    `finally`: a fault after a write that landed would otherwise keep an
+    empty memo the old falsy guard would have read again (tested).
+  - The client-view accessor test builds a real client trust row (the
+    client-credentials shape `find_client_trust` resolves) instead of
+    mocking `permission_id`.
+  - `WM3`'s registry text says the create-time clear has nothing to remove
+    in that recording (the deletion already removed the row) and names the
+    unit test that pins it.
+  - Accepted, Low: the actor-wide diff wipe reads the diff bodies once more
+    with no lease step inside it (the step before it runs); a lease that
+    lapses there is taken over and the wipe, a delete by actor id, is
+    repeated. Accepted, Low: a failed suspension clear with
+    `replace_holder` keeps the new row; no library caller passes both
+    `replace_holder` and `actor_id` (the Decisions already state it).
 
 ---
 
@@ -604,16 +1072,27 @@ are used only where the test names operations.
     first read or first write of each property, the first touch of
     `_internal`, and each `actor.services` client cost a storage read per
     request; a warm MCP request reads the actor row, so a backend throttle
-    answers 503 where it used to succeed from memory; `actor.creator` is not
+    answers 503 where it used to succeed from memory, and under FastAPI that
+    read runs on the event loop for every authenticated MCP request; `actor.creator` is not
     re-synced to the stored email on an MCP request; the debug line loses
     "Actor hits". **Check:** hooks that read-modify-write a property on every
     call, that keep the actor in a global, or whose clients do not retry a
     503. Nothing in it names `rewrite_email`.
   - `CHANGED` - **Behavior change:** an `Actor` memoises an empty
     subscription list as well; code that keeps one instance across many
-    writes sees subscriptions created elsewhere only on a new instance.
+    writes sees subscriptions created elsewhere only on a new instance. The
+    entry names the two cases the instance still reads again: after a resume,
+    and after a trust request it sent to the peer.
+  - `CHANGED` - **Behavior change:** `Actor.delete()` raises `DbError`, and
+    `purge_relationships()` answers `confirmed: False`, when the actor's
+    subscription suspensions or diffs cannot be removed; a deletion also
+    issues one actor-wide diff read and delete and one suspension delete.
+    `Actor.create(actor_id=…)` clears that id's suspensions first and raises
+    `DbError` when it cannot. **Check:** code that calls `delete()` or
+    `create(actor_id=…)` without handling `DbError`.
   - `ADDED` - `SubscriptionManager.get_subscriptions_by_peer()`,
-    `PeerSubscriptions`.
+    `PeerSubscriptions`; `SubscriptionInfo` is exported from
+    `actingweb.interface`.
   - `FIXED` - on one actor instance, every subscription read of an actor with
     no subscribers went to storage again: one strongly consistent Query per
     property written, per list mutation and per per-peer accessor call. The
@@ -625,8 +1104,8 @@ are used only where the test names operations.
     diffs from a long-lived MCP actor.
   - `FIXED` - for up to 300 seconds after an actor's row was removed, a
     worker holding its token kept serving the deleted actor's cached state
-    (distinct from the existing entry at `:471`, which is about recreating
-    it).
+    (distinct from the existing `SECURITY` entry at `:825`, which is about
+    recreating it).
   - `FIXED` - a trust lookup on a cached MCP token could re-cache a trust
     revoked while it was being read.
   - `FIXED` - in a process hosting more than one application, a token or a
@@ -637,27 +1116,34 @@ are used only where the test names operations.
   - `FIXED` - deleting an actor, or purging its relationships, left its
     subscription suspensions and could leave subscription diffs; an actor
     created again under the same id started suspended and sent no diffs.
-- `docs/migration/v3.16.rst` - item 18 under "Start here" (`:16-123`) and a
-  `---` subsection "MCP actors are built per request" after "Idempotent
-  appends" (`:1135`), ending before "Cross-site requests" (`:1191`): the reads
+    Suspensions left by a deletion on an earlier version are cleared when
+    the id is created again.
+- `docs/migration/v3.16.rst` - item 23 under "Start here" (`:11-163`; 18 to
+  22 are taken) and a `---` subsection "MCP actors are built per request"
+  after "Idempotent appends" (`:1185`), ending before "Cross-site requests"
+  (`:1241`): the reads
   it costs per request and per session (about k + 2 authentications for k
   tool calls), the 503, what a hook should check, that designs premised on a
-  shared five-minute actor object can assume a per-request one, and
-  `get_subscriptions_by_peer()`. (The item number assumes the security plan
-  added none ahead of it; renumber against the guide as it stands.)
+  shared five-minute actor object can assume a per-request one,
+  `get_subscriptions_by_peer()`, and that an override of
+  `Actor.delete_reciprocal_trust` must accept keyword arguments. (Renumber against the guide as it stands
+  when the phase is written.)
 - `docs/guides/mcp-applications.rst:914-975` - the performance section: two
   caches, the log line, the per-request actor read, the "50x" claim revised.
 - `docs/guides/caching.rst` - every actor-cache mention (`:10`, `:14`,
   `:16-97`, `:137-157`, `:215-216`, `:265-285`).
-- `docs/guides/hooks.rst:304-319` - the runtime context is per request; the
-  "hot cached actor" wording goes.
-- `docs/reference/security.rst:103` - one sentence: positive MCP trust entries
+- `docs/guides/hooks.rst:312-327` - the runtime context is per request; the
+  "cached actor" wording (`:314`, `:323`) goes.
+- `docs/reference/security.rst:116` - one sentence: positive MCP trust entries
   expire 300 s after they were resolved, per process; the permission cache is
   unchanged and has no TTL.
-- `docs/guides/subscriptions.rst:41-46`, `docs/sdk/developer-api.rst:290-310`
-  - `get_subscriptions_by_peer()` and the per-instance memo.
+- `docs/guides/subscriptions.rst:60-65`, `docs/sdk/developer-api.rst:290-310`
+  - `get_subscriptions_by_peer()` (a client view may hold two keys) and the
+  per-instance memo.
+- `docs/contributing/testing.rst` and `tests/integration/README.md` - no
+  change; `rows.toml` carries the new rows.
 - `thoughts/todo/subs-list-cache-asymmetry.md` - delete, with its row in
-  `thoughts/todo/INDEX.md`.
+  `thoughts/todo/INDEX.md`; the order table's row 2 records the merge.
 - `thoughts/todo/mcp-cache-lifecycle-and-revocation.md` - the inherited
   constraint (actor-wide because a revocation covers every client); section 1
   without instance state; section 2 records the positive TTL and leaves
@@ -665,6 +1151,8 @@ are used only where the test names operations.
   the application that filled each entry.
 - `thoughts/todo/dynamodb-known-next.md:93-95` - the pointer to the deleted
   todo becomes a pointer to this plan.
+- `thoughts/todo/verify-orphans-subscription-tables.md` - stays (filed at
+  this plan's redraft); its "Origin" gains this plan's verification.
 - `thoughts/research/2026-08-15-mcp-actor-cache-holds-instance-state.md` - a
   dated correction line: the cached object did not carry the trust list.
 
@@ -680,18 +1168,35 @@ are used only where the test names operations.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` full tier verbatim (docs build included)
-- [ ] `grep -rniw "_actor_cache\|invalidate_actor_cache\|actor_hits" docs` and
+- [x] Run the contract's `### Checks` full tier verbatim (docs build included)
+- [x] `grep -rniw "_actor_cache\|invalidate_actor_cache\|actor_hits" docs` and
       `grep -rni "actor hits\|actor loading\|cached actor\|actor cache" docs`
       return nothing outside released migration guides
-- [ ] `grep -rn "rewrite_email" CHANGELOG.rst docs` returns nothing
-- [ ] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
-- [ ] Emm's suite on this branch, before the PR opens, run as
+- [x] `grep -rn "rewrite_email" CHANGELOG.rst docs` returns nothing
+- [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
+- [x] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, and the result recorded in this plan's
       verification document
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+Notes (2026-11-12):
+
+- **Measured** for the `FIXED` entry (DynamoDB Local, an actor with no
+  subscribers, `tests/_read_counters.count_reads`): three property writes on
+  one instance read the subscription list 3 times before, once after; five
+  peers' `get_subscriptions_to_peer` and `get_subscriptions_from_peer` 10
+  times before, once after.
+- **Beyond the list**: a `FIXED` entry for the fill/eviction race the Phase 1
+  review found; `docs/contributing/architecture.rst` ("Actor loading", which
+  the verification grep catches); `docs/reference/database-backends.rst`
+  went with the Phase 2 review fix. The migration guide item is 23, as
+  planned.
+- **Left for the verification**: `verify-orphans-subscription-tables.md`'s
+  "Origin" gains the verification document once it exists; Emm's suite runs
+  before the PR (the last box above).
+
 
 ---
 
@@ -759,9 +1264,9 @@ test. No existing test breaks under Phase 2.
 
 ### Outside voice
 
-Run on the previous draft by Codex (outside the command sandbox) and a
-fresh-context reviewer, 2026-11-06. It has not been re-run on this draft.
-What each finding led to:
+Run on the first draft by Codex (outside the command sandbox) and a
+fresh-context reviewer, 2026-11-06; run again on the redraft, see "Redraft
+of 2026-11-12" below. What each finding of the first run led to:
 
 - **The peer-view filter was wrong for a client view** (the accessor id of a
   client view is the client id, `interface/authenticated_views.py:49`,
@@ -810,13 +1315,526 @@ What each finding led to:
   the executor and sends before it answers. Nothing reads the memo on that
   instance again, so the stretch is harmless; WD5 pins the lifetime.
 - No rate limit was found on the `/mcp` authentication path in the library.
-- The name and shape of the filter the security plan adds to
-  `AuthenticatedSubscriptionManager`; that plan was being written alongside
-  this draft, so the accessor's delegation is stated by behaviour, not by a
-  function name.
-- Whether the PostgreSQL suspension `delete_all()` can answer `False` for a
-  reason other than a fault; it was read (`:148-163`), not run. If it cannot,
-  raising on `False` is exact.
+- [Answered 2026-11-12] The filter the security plan added to
+  `AuthenticatedSubscriptionManager` is `_own_rows`
+  (`interface/authenticated_views.py:848-866`); the accessor's delegation
+  names it.
+- [Answered 2026-11-12, Phase 2] Whether the PostgreSQL suspension
+  `delete_all()` can answer `False` for a reason other than a fault: it
+  cannot (only its `except` answers `False`, on both backends), so raising
+  on `False` is exact.
 - Whether a finisher-driven delete (`deletion_finish.py`, with `_pre_reads`)
   expects the steps this plan adds to tolerate rows that are already gone;
   each added step is a delete by actor id, which does.
+- [2026-11-12] `WM2` to `WM4` are expected to be byte-identical across runs
+  by analogy with `WM1` and `WC7`; gate 3 is the check.
+- [2026-11-12] Whether a consumer's hook authorises on
+  `mcp_context.trust_relationship.relationship`; it can be stale for up to
+  300 s on a worker that missed an eviction (unbounded today).
+- [2026-11-12] Whether trust creation refuses a peer id shaped like a client
+  id (`mcp_<hex>`, `client_registry.py:110`); a collision would show the
+  same rows through the three existing listings as through the accessor.
+- [2026-11-12] Whether Emm's tool wrapper writes `mcp_usage_count` before
+  the tool body, which decides how often the trust-approval reset matters
+  there.
+
+### Redraft of 2026-11-12
+
+Reviewed after the redraft, scaled to what it changed: the architecture,
+security and tests evaluators on the changed parts, and the outside voice
+(Codex, `codex exec -s read-only`, outside the command sandbox, and a
+fresh-context reviewer) on the whole plan. Scalability and usability were
+not re-run; nothing they judged changed.
+
+- **Architecture.** No design problem. Taken: the clean-up's async twin; the
+  resets in a `finally`; the exit inside the sibling's loop; the read per
+  relationship instead of one read per call; the wording of what
+  `_load_actor` leaves on a miss. Verified: the hit path is attribute for
+  attribute the constructor's; no other create or delete of a subscription
+  bypasses the resets; dropping the handler's hand reset is safe; the
+  accessor's delegation fits the class; no path on one instance creates a
+  subscription and then reads a stale empty memo.
+- **Security.** No High or Medium finding. Verified: authorisation reads
+  type and approval from storage on every call, so removing the cached actor
+  and keeping the trust cache opens no window #171 or #172 closed; a stale
+  cached type is only a lookup filter and cannot undo a re-typing; the
+  accessor is no wider than the three listings; `_subscriptions` skips none
+  of the checks #171 added to the sibling. Taken: the read per relationship
+  (a peer that stalls its remote delete could otherwise keep an inert
+  subscription row); `exposure = false` stated for the new rows; `WM3`
+  asserts the recreated actor holds no inherited trust.
+- **Tests.** One High, taken: `FakeCoreActor` in
+  `tests/test_mcp_trust_cache_key.py` has no `get`, so every test through
+  `_auth` would have failed under `_load_actor`. Taken: `WM3` needs a new
+  subscriber; the "own read" tests are primed so they fail today; the
+  kept-row exits name their mechanism; the clean-up test names a real
+  fixture; the helper tests' edit is spelled out; the `WC6`/`WC7` registry
+  text; the untested lazy read, diff-delete fault and purge orphan. Verified:
+  `verify_groups.py` accepts the commit as planned; `WM2` and `WM3` are
+  sensitive to the change.
+- **Outside voice.** Its verdict: the review had treated the empty memo as
+  bounded by one request and underweighted flows where one instance is long
+  or re-entered. What each finding led to:
+  - **A subscriber arriving during a suspended operation got no resync.**
+    The reset in `resume_subscriptions`, a unit test and `WM4`.
+  - **A subscribe-back during a trust approval lost the next diff.** The
+    reset in the trust methods (owner) and unit tests; no wire row, because
+    the harness subscribes as a separate step.
+  - **Suspension rows from before the upgrade were never cleared.** The
+    clear on a create under an explicit id (owner).
+  - **`actingweb-verify-orphans` does not scan these tables.** The sentence
+    is corrected and a todo filed (owner).
+  - **New failure modes on deletion were not in the changelog**, nor the
+    blocking read under FastAPI, nor `SubscriptionInfo`. Added.
+  - **The cross-application test's wording** held only when the second
+    application rejects the token. Both cases are stated.
+  - **"No instance outlives a request"** was not exact (the system actor).
+    Reworded.
+  - **An override of the sibling with a fixed signature breaks.** Accepted,
+    stated in Decisions and the migration guide.
+  - **Sections the redraft left contradicted it.** Fixed: the header, the
+    Implementation Order sentence, this section, the unverified note on the
+    filter, and `thoughts/todo/INDEX.md`'s row 4.
+  - Not taken: Codex's note that "the peer's replica" misdescribes what
+    `delete_subscription` wipes; `RemotePeerStore` is that replica.
+  - One commit per phase holds with the wire rows inside Phase 2.
+- **Added after the four reviewers had reported, and seen by none of them**:
+  the reset in `resume_subscriptions`, the `finally` on the three trust
+  methods, the suspension clear in `Actor.create`, the read per
+  relationship, the `finally` resets, and `WM4`. Each was checked against
+  the code when it was written into the plan, by reading, not by a run:
+  `Actor.create` (`actor.py:1057-1262`; the first wording cleared before the
+  row and would have wiped a live actor's suspensions on a refused create),
+  both `delete_all()` bodies, the async trust methods (`:2115`, `:2363`; the
+  second has its own `httpx` path, which the first wording missed), and the
+  harness's connect steps (`conftest.py:1184-1256`; a `WM4` row for the
+  subscribe-back was dropped as unrecordable). `/implement_plan`'s phase
+  review is the first independent look at them.
+
+
+## Implementation Summary
+
+**Completed:** 2026-11-12
+**All phases:** Complete (Emm's suite, Phase 3's last box, ran on `c738f21`
+after the PR opened; see the last Iterations batch)
+**Test status:** All passing: the Full tier on DynamoDB and PostgreSQL after
+every phase and review fix, the wire step on Python 3.11 on both backends.
+
+Commits on `release/3.16.0-subs-list-cache-lifetime`: `c9813b1` (the
+redraft), `0f7b8f7` (Phase 1), `bdcc70a` (its review), `011865b` (Phase 2,
+`Wire-Phase: subs-list-cache-lifetime:2`), the Phase 2 review commit, and
+Phase 3's.
+
+### Deviations from Plan
+- Phase 1: one helper, `_set_mcp_runtime_context`, for the two branches'
+  runtime-context write; the adoption test's counter left where it is.
+- Phase 1 review: the cache fills and evictions share one re-entrant lock
+  (a pre-existing race, reachable by a client); a bridge reload that finds
+  no row answers `None`.
+- Phase 2: `delete_all` added to `SubscriptionSuspensionProtocol`; two
+  `Actor` helpers for the leftovers wipe; `WM3`'s new subscriber set up
+  unrecorded.
+- Phase 2 review: a missing DynamoDB suspensions table counts as holding
+  none; `create_subscription` and `delete_subscription` reset in a
+  `finally`.
+- Verifications 2026-11-12 and 2026-11-13: Iterations 1-13 (store faults
+  as `DbError`, clear order, wipes by actor id, `actingweb-deletions`
+  re-reads before its clean-up, missing diff and suspension tables empty
+  for clean-up only, `Subscriptions.delete(wipe_diffs=...)`).
+
+### Learnings
+- The memo rule bit this plan's own test: a view built on an instance that
+  had already read its list did not see a subscription added afterwards.
+  The rule is easy to forget wherever an instance is kept.
+- Hardening one path (deletion now fails closed on a suspension fault) can
+  turn an optional table into a required one; the review caught it because
+  it read the docs' promises against the new failure.
+- A wire step that adds a peer leaves the peer's trust secret unnamed in
+  the transcript; peers are set up outside the recorded steps.
+- An operator command that acts on a scan must classify each item again
+  just before it changes anything: the clean-up added for a stale state
+  is what turned the stale scan into data loss.
+- "A missing table holds none" is right for clean-up and wrong for a read
+  that gates side effects; check the changelog's older entries before
+  relaxing a read (Iteration 11).
+
+
+## Iterations
+
+### 2026-11-12, after verification thoughts/verifications/2026-11-12-subs-list-cache-lifetime.md
+
+Owner: fix all ten issues, Issue 10 included.
+
+#### 1. Any error from the suspension store is a `DbError` (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: `subscription.clear_actor_suspensions(actor_id, config)`
+builds the store and calls `delete_all()`; a `DbError` passes, any other
+exception (the DynamoDB store's `ensure_table` re-raises a raw
+`create_table` error, `_ensure.py:104`) becomes `DbError`, and `False` does
+too. `Actor.create(actor_id=…)` and the deletion wipes use it, so the
+create's rollback runs and a delete answers 503.
+
+**Files affected**:
+- `actingweb/subscription.py`: `clear_actor_suspensions`,
+  `delete_actor_diffs_and_suspensions`, `delete_actor_subscription_rows`.
+- `actingweb/actor.py`: `create` and the two wipe helpers call them.
+- `tests/test_subscription_list_memo.py`:
+  `test_an_error_building_the_store_rolls_the_create_back`,
+  `test_an_error_building_the_store_stops_a_delete_with_503`.
+
+**Rationale**: the store's constructor ran inside a `try` that caught
+`DbError` only, so a first MCP sign-in on a DynamoDB deployment without the
+table (and without `CreateTable`) left an orphan row and answered 401.
+
+#### 2. The suspensions are cleared before the tombstone (Issue 2)
+
+**Category**: Verification fix (bug)
+
+**What changed**: in `create`'s `if created and actor_id:` branch the
+suspension clear runs first, then the tombstone clear; both still follow the
+persisted row, so a create under a live actor's id touches neither.
+
+**Files affected**:
+- `actingweb/actor.py`: the order and the comment.
+- `tests/test_subscription_list_memo.py`:
+  `test_a_failed_clear_keeps_the_deleted_actors_tombstone` (the tombstone
+  still reads `DELETED` after a failed clear).
+
+**Rationale**: the rollback removes the row but cannot restore a cleared
+tombstone; before this plan the tombstone clear was the last step that could
+fail. Decisions, "A create under an explicit id clears that id's suspension
+rows": [Updated 2026-11-12] before the tombstone clear.
+
+#### 3. `actingweb-deletions` finishes the subscription stores too (Issue 3)
+
+**Category**: Verification fix
+
+**What changed**: the `UNFINISHED` path (row gone) removes the actor's
+subscription rows, diffs and suspensions by actor id before it marks the
+tombstone finished; the comment says so.
+
+**Files affected**:
+- `actingweb/maintenance/deletions.py`: `_finish_one`.
+- `tests/test_deletions_command.py`:
+  `TestTheUnfinishedPath.test_what_a_late_subscriber_left_goes_too`.
+
+**Rationale**: a subscription or diff a peer created after the last wipe, or
+a suspension a faulted wipe left, stayed for ever once the tombstone was
+marked finished.
+
+#### 4. Diffs are deleted by actor id, unread (Issue 8)
+
+**Category**: Verification fix (cost)
+
+**What changed**: `delete_all_of_actor(actor_id)` on
+`DbSubscriptionDiffListProtocol` and both backends (DynamoDB: one query by
+the hash key and a delete per item; PostgreSQL: one `DELETE`).
+`Subscriptions.delete()` (whose every caller wipes the whole actor:
+deletion, purge, adoption) and the final wipe use it; the per-subscription
+diff reads are gone, and the final wipe deletes the subscription rows only
+before it.
+
+**Files affected**:
+- `actingweb/db/protocols.py`, `actingweb/db/dynamodb/subscription_diff.py`,
+  `actingweb/db/postgresql/subscription_diff.py`: the method.
+- `actingweb/subscription.py`: `Subscriptions.delete()`.
+- `tests/test_subscription_core.py`: the collection test asserts the one
+  delete by actor id and no fetch.
+- `tests/test_subscription_list_memo.py`: `test_the_diff_wipe_reads_no_diff`
+  (a fetch raises), the diff-fault test now faults `delete_all_of_actor`.
+
+**Rationale**: a deletion read every queued diff body, on DynamoDB once per
+subscription, to delete rows it could delete by actor id.
+
+#### 5. A missing PostgreSQL suspensions table holds none (Issue 10)
+
+**Category**: Verification fix
+
+**What changed**: the PostgreSQL `delete_all` answers `True` on
+`psycopg.errors.UndefinedTable`, as DynamoDB does for a missing table.
+
+**Files affected**:
+- `actingweb/db/postgresql/subscription_suspension.py`.
+- `tests/test_subscription_list_memo.py`:
+  `test_a_missing_postgresql_table_holds_no_suspension` (PostgreSQL only).
+
+**Rationale**: owner's choice; the same answer on both backends.
+
+#### 6. Changelog, migration guide and guides say what the code does (Issues 4-7)
+
+**Category**: Verification fix (docs)
+
+**What changed**: the cached-token `FIXED` entry says only a token that
+validates against storage can lead to a create; the memo entry names the
+system actor as the instance that outlives a request and says the reset
+follows every call of the three trust methods (also in the migration section
+and `docs/guides/subscriptions.rst`); the deletion entry says the diffs go
+in one delete by actor id, that a missing table counts as empty on both
+backends, and that `actingweb-deletions resume` removes the same; the
+caching guide's authentication sample caches the validation result, never
+the actor, with the generation check and lock.
+
+**Files affected**: `CHANGELOG.rst`, `docs/migration/v3.16.rst`,
+`docs/guides/subscriptions.rst`, `docs/guides/caching.rst`.
+
+**Rationale**: each sentence promised more, or less, than the code.
+
+#### 7. Type hints on the new wire tests (Issue 9)
+
+**Category**: Verification fix
+
+**What changed**: `test_wm2_empty_memo`, `test_wm3_recreated_publisher_sends`
+and `test_wm4_subscriber_during_suspension` annotated.
+
+**Files affected**: `tests/integration/test_wire_queue_and_lifecycle.py`.
+
+**Rationale**: `CLAUDE.md`, Checks: type hints on all functions. No
+recording changes.
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-subs-list-cache-lifetime.md
+
+Owner: fix all seven issues (none peer-reachable).
+
+#### 8. `actingweb-deletions resume` classifies an unfinished deletion again before wiping it (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: the UNFINISHED branch of `_finish_one` runs `scan()` for
+that one id first. If the id was created again since the run's scan (the
+create cleared the tombstone), or the deletion is no longer unfinished, it
+raises `ChangedSinceScan` and wipes nothing. `cmd_resume` prints `nothing
+left to finish, skipped` (not a failure) or `now <state>, skipped (run
+report again)` (exit 1). A store fault in the re-read is a `DbError`.
+
+**Files affected**:
+- `actingweb/maintenance/deletions.py`: `ChangedSinceScan`, the re-read,
+  the loop's handling, the cost note.
+- `docs/guides/database-maintenance.rst`: the re-read and its cost.
+- `tests/test_deletions_command.py`:
+  `test_an_id_created_again_since_the_scan_is_left_alone`.
+
+**Rationale**: the wipes added in Iteration 3 ran on the scan's stale
+"row gone". A create between the scan and the clean-up would lose the live
+actor's subscriptions, diffs, suspensions and client rows (the client-row
+delete had this shape before 3.16), and the actor would be listed for
+`actor_deleted_complete`. A create that lands between the re-read and the
+wipe is still possible; the window is now one actor's clean-up, not the
+whole run.
+
+#### 9. The subscription and diff stores are built inside the `DbError` wrapper (Issue 2)
+
+**Category**: Verification fix (bug)
+
+**What changed**: `subscription._store()` builds a store and turns any
+non-`DbError` exception (the DynamoDB table check in the constructor) into
+`DbError("subscription store")`. `delete_actor_subscription_rows`,
+`delete_actor_diffs_and_suspensions` and `Subscriptions.delete()` build
+through it.
+
+**Files affected**: `actingweb/subscription.py`;
+`tests/test_subscription_list_memo.py` (`TestReverificationFixes`:
+`test_a_raw_error_building_a_store_is_a_dberror`,
+`test_a_raw_error_building_the_diff_store_stops_a_delete`).
+
+**Rationale**: Iteration 1's fault class, on the two stores it did not
+wrap. A raw error would stop `actingweb-deletions resume` mid-run (it
+catches `DbError`) and lose its list of finished ids, and would get past
+purge's `except DbError`.
+
+#### 10. A missing diffs table holds none (Issue 3)
+
+**Category**: Verification fix
+
+**What changed**: `delete_all_of_actor` answers True on a missing table
+(DynamoDB `is_resource_not_found`, PostgreSQL `UndefinedTable`), as the
+suspension clean-up does.
+
+**Files affected**: `actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/db/postgresql/subscription_diff.py`, `actingweb/db/protocols.py`,
+`docs/reference/database-backends.rst` (a note on the diffs table);
+`test_a_missing_diff_table_holds_none`.
+
+**Rationale**: since this plan every delete and purge reaches the diffs
+table, where master reached it only for an actor with subscriptions.
+
+#### 11. The changelog's missing-table sentence says what each backend does (Issues 4 and 5)
+
+**Category**: Verification fix (wording); one option declined
+
+**What changed**: the changelog now says the clean-ups treat a missing
+diffs or suspensions table as empty, on DynamoDB when the store can be
+built (an error building it is a `DbError`), and that a suspension check
+against a missing suspensions table still raises `DbError`. A test pins
+both answers on both backends
+(`test_a_missing_suspension_table_still_fails_the_check`); the protocol
+docstring of `is_suspended` names the missing table.
+
+**Files affected**: `CHANGELOG.rst`, `actingweb/db/protocols.py`,
+`tests/test_subscription_list_memo.py`.
+
+**Rationale**: the owner chose "PostgreSQL `is_suspended` answers False on
+a missing table". Implementing it showed that 3.16 made that case loud on
+purpose (`CHANGELOG.rst`, "`SubscriptionManager.is_suspended()` raises
+`DbError` on a fault", and the older entry "A failed
+subscription-suspension check was indistinguishable from 'not
+suspended'", which names the missing table: a bulk import's `suspend()`
+silently did nothing and every callback fired). Answering False would undo
+that on the per-write path, so the read keeps raising and the wording
+carries the difference (the finding's other remedy). Reported to the owner.
+
+#### 12. The DynamoDB diff wipe reads keys only, and runs once per delete (Issue 6)
+
+**Category**: Verification fix (cost)
+
+**What changed**: the query projects `id` and `subid_seqnr`.
+`Subscriptions.delete()` takes a keyword-only `wipe_diffs=True`;
+`Actor.delete()` and `purge_relationships()` pass False, since their
+leftovers wipe deletes the diffs by actor id right after. The changelog no
+longer says "unread"; it says what each backend does.
+
+**Files affected**: `actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/subscription.py`, `actingweb/actor.py`, `CHANGELOG.rst`;
+`test_a_delete_wipes_the_diffs_once`,
+`test_the_dynamodb_wipe_reads_keys_only`.
+
+**Rationale**: the bodies were still read as query capacity, and a delete
+of an actor with subscriptions queried the diffs twice.
+
+#### 13. The diff wipe leaves another actor's diffs (Issue 7)
+
+**Category**: Verification fix (test coverage)
+
+**What changed**: `test_another_actors_diffs_stay`, real storage, both
+backends.
+
+**Files affected**: `tests/test_subscription_list_memo.py`.
+
+**Rationale**: the wipe deletes by actor id with no subscription filter; a
+wrong key or WHERE clause would remove neighbours.
+
+### 2026-11-13, after verification thoughts/verifications/2026-11-13-subs-list-cache-lifetime-2.md
+
+Owner: fix Issues 1, 2, 3, 5, 6 and 7; Issue 4 accepted (below).
+
+#### 14. The unfinished clean-up works from the tombstone it re-read (Issue 1)
+
+**Category**: Verification fix (bug)
+
+**What changed**: after the re-scan, `_finish_one` replaces the scan's
+finding with the one it just read, so the client ids it deletes are the
+standing tombstone's.
+
+**Files affected**: `actingweb/maintenance/deletions.py`;
+`tests/test_deletions_command.py` (`test_the_clean_up_uses_the_tombstone_read_now`).
+
+**Rationale**: an id created and deleted again between the scans left the
+new tombstone's client index rows behind and marked it finished.
+
+#### 15. "id in use again" instead of "nothing left to finish" (Issue 2)
+
+**Category**: Verification fix (wording, operator output)
+
+**What changed**: when the re-scan finds no unfinished tombstone, resume
+reads the actor row; a live row is reported as `id in use again, skipped;
+what the old deletion left … was not removed` (exit 0: nothing for this
+command to do). The changelog and the maintenance guide say so; the
+verify-orphans todo records the create-side case.
+
+**Files affected**: `actingweb/maintenance/deletions.py` (`IN_USE_AGAIN`),
+`CHANGELOG.rst`, `docs/guides/database-maintenance.rst`,
+`thoughts/todo/verify-orphans-subscription-tables.md`;
+`test_an_id_created_again_since_the_scan_is_left_alone` asserts the message.
+
+**Rationale**: "nothing left" was not true: a create clears the tombstone
+and its client ids, not what the old deletion left under the id.
+
+#### 16. The "now <state>" message names the report to run (Issue 3)
+
+**Category**: Verification fix (wording)
+
+**What changed**: `now <state>, skipped (run: actingweb-deletions report <id>)`.
+
+**Files affected**: `actingweb/maintenance/deletions.py`;
+`test_a_deletion_stalled_again_since_the_scan_exits_1`.
+
+**Rationale**: a plain `report` skips a finished tombstone whose row is
+live; the named form classifies it.
+
+#### 17. Two changelog phrases made exact (Issue 5)
+
+**Category**: Verification fix (wording)
+
+**What changed**: "a key-only query (paged)"; a suspension check against a
+missing table raises "on DynamoDB when auto-creation is off".
+
+**Files affected**: `CHANGELOG.rst`.
+
+#### 18. Tests say and check one thing each (Issue 6)
+
+**Category**: Verification fix (tests)
+
+**What changed**: the raw-store-error test split in two, each asserting the
+`RuntimeError` cause; the once-per-delete test records the order (trusts,
+then diffs); the missing-table patch raises what the backend raises
+(`QueryError` with `ResourceNotFoundException` on DynamoDB; `UndefinedTable`
+from the statement on PostgreSQL, other statements run); a test for
+resume's exit-1 branch.
+
+**Files affected**: `tests/test_subscription_list_memo.py`,
+`tests/test_deletions_command.py`.
+
+#### 19. The clean-ups' "missing table" goes by the response code (Issue 7)
+
+**Category**: Verification fix
+
+**What changed**: `property_lookup.is_table_missing()` matches the
+`ResourceNotFoundException` code or the `TableDoesNotExist` type, no text;
+the diff and suspension clean-ups use it. `is_resource_not_found` (text
+fallback) stays for its existing callers.
+
+**Files affected**: `actingweb/db/dynamodb/property_lookup.py`,
+`actingweb/db/dynamodb/subscription_diff.py`,
+`actingweb/db/dynamodb/subscription_suspension.py`;
+`test_a_dynamodb_error_that_only_reads_like_a_missing_table_fails`.
+
+**Rationale**: on these paths "missing" turns a fault into success.
+
+#### Accepted: Issue 4 (diffs outlive a delete or purge that fails after the rows)
+
+Owner: accepted without code. `delete()` is resumable and its next call
+runs the diff wipe; `purge_relationships()` raises the `DbError` before its
+`try`, and a repeated purge wipes them.
+
+### 2026-11-13, Emm's suite on `c738f21` and the PR review
+
+Emm's suite on `c738f21` (environment 9, its adoption worktree unchanged;
+run after PR #175 opened, not before as Phase 3 asked): PostgreSQL 2 failed
+/ 7406 passed / 14 skipped / 179 deselected, DynamoDB lane 3 failed / 54
+passed, the `master` baseline's failures by name
+(`thoughts/research/2026-11-07-emm-suite-against-master.md`). The IAM
+coverage test names the same two actions as the baseline
+(`TransactWriteItems`, `BatchGetItem`): the key-only diff query and the
+wipes need no new IAM action. The environment 9 server was stopped
+afterwards.
+
+The PR's automated review (one comment, no inline findings) asked five
+things; none needs code:
+
+1. A `DbError` from the per-request `_load_actor` answers 503, not 401:
+   `authenticate_and_get_actor_cached` re-raises it as
+   `TokenStoreUnavailable` before its `except Exception`
+   (`actingweb/handlers/mcp.py`), pinned by
+   `test_an_actor_read_fault_on_a_cached_token_answers_503`.
+2. The FastAPI event-loop read and 3. the changed debug-line totals are
+   already in the changelog entry.
+4. The 300-second trust TTL is tested
+   (`test_a_positive_entry_past_its_ttl_is_resolved_again`,
+   `test_the_sweep_removes_entries_by_their_own_ttl`).
+5. Emm reads `actor.creator` in its MCP hooks as the account email
+   (`hooks/mcp/resources.py`, `hooks/mcp/tools/guide.py`) and runs
+   `with_email_as_creator(enable=True)`. The rewrite an MCP load now skips
+   is persisted by any other load of the actor, so only an actor reached
+   solely over MCP after its stored email changed shows its old creator.
+   Documented in the changelog; accepted.

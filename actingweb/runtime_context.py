@@ -12,10 +12,10 @@ Architecture Problem:
 - Multiple clients can access the same actor (MCP clients, web users, API clients)
 - Each request needs context about the current client/request for proper handling
 - Can't modify hook signatures without breaking framework compatibility
-- The actor object handed to hooks is frequently the *same* cached object
-  reused across many requests (MCP's per-actor cache is the primary example),
-  so context cannot live as mutable state on the actor without leaking
-  between requests and, under concurrency, between callers.
+- The library builds the actor handed to hooks per request, but an
+  application may still hold one object and reuse it across requests, so
+  context cannot live as mutable state on the actor without leaking between
+  requests and, under concurrency, between callers.
 
 Solution:
 
@@ -100,8 +100,8 @@ def _actor_key(actor: Any) -> str:
     through the other wrapper.
 
     Every production call site constructs ``RuntimeContext`` on an actor
-    already resolved by id (post-authentication, from the actor cache or a
-    direct ``CoreActor(actor_id, ...)`` lookup), so ``actor.id`` is never
+    already resolved by id (post-authentication, by a direct
+    ``CoreActor(actor_id, ...)`` lookup or an ``Actor.get``), so ``actor.id`` is never
     falsy there. The ``_no_id_`` fallback below exists only so lightweight
     test doubles with no ``id`` attribute at all (see
     ``tests/test_runtime_context_unit.py``'s ``_Bag``) still get an object
@@ -182,7 +182,7 @@ class RuntimeContext:
     ``ContextVar`` keyed by actor id rather than as state on the actor
     object. This solves the architectural constraint where hook functions
     can't receive additional parameters, without letting context leak across
-    requests that happen to share a cached actor object.
+    requests that happen to share an actor object an application holds.
 
     The context is request-scoped (task-local under asyncio, thread-local
     under a plain worker thread) and is cleared by the framework integration

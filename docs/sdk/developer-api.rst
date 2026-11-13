@@ -302,6 +302,10 @@ Listing Subscriptions
     # Get inbound subscriptions (they subscribed to us)
     inbound = actor.subscriptions.get_subscriptions_from_peer("peer123")
 
+    # Every subscription grouped by peer, from one read (3.16)
+    for peer_id, group in actor.subscriptions.get_subscriptions_by_peer().items():
+        print(peer_id, len(group.outbound), len(group.inbound))
+
     # Get subscription with pending diffs
     sub_with_diffs = actor.subscriptions.get_subscription_with_diffs(
         peer_id="peer123",

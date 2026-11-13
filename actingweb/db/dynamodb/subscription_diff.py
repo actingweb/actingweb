@@ -222,6 +222,25 @@ class DbSubscriptionDiffList:
         self.handle = None
         return True
 
+    def delete_all_of_actor(self, actor_id: str) -> bool:
+        """Delete every diff of ``actor_id`` (one query by the hash key for
+        the keys only, then a delete per item). A missing table holds none:
+        ``True``. Any other fault raises ``DbError``."""
+        try:
+            for p in SubscriptionDiff.query(
+                actor_id,
+                consistent_read=True,
+                attributes_to_get=["id", "subid_seqnr"],
+            ):
+                p.delete()
+        except Exception as e:
+            from .property_lookup import is_table_missing
+
+            if is_table_missing(e):
+                return True
+            raise DbError("subscription diff list delete") from e
+        return True
+
     def __init__(self):
         self.handle = None
         self.diffs = []

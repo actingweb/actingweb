@@ -440,8 +440,14 @@ Notes:
 
 - ``<prefix>_subscription_suspensions`` is easy to miss: before 3.13 its
   accessor had no auto-create guard, so long-lived deployments may never have
-  created it. A missing suspensions table does not crash — it makes every
-  target read as un-suspended (an ERROR is now logged on each failed check).
+  created it. Since 3.16 a suspension check that cannot read the table is
+  not taken for "not suspended": a write that has subscribers answers 503
+  until the table exists. Deleting an actor, purging its relationships and
+  creating one under an explicit id treat a missing table as holding no
+  suspensions. Create it (leave auto-creation on, or create it with the
+  others).
+- ``<prefix>_subscriptiondiffs`` is read and written by every actor
+  deletion and purge since 3.16; a missing table holds no diffs.
 - ``<prefix>_property_lookup`` (v1, no ``_v2``) and the ``property-index``
   GSI on ``<prefix>_properties`` are no longer read (the legacy reverse
   lookup was removed in 3.16). Neither is created or required; drop them once

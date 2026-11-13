@@ -218,7 +218,7 @@ Common handler functionality:
 
 - Authentication (basic, bearer, passphrase)
 - Response formatting (JSON, HTML)
-- Actor loading
+- Loading the request's actor (built per request; no handler keeps one)
 - Error responses
 
 Specialized Handlers

@@ -7,11 +7,18 @@ Overview
 
 **Audience**: contributors extending ActingWeb's internal caching, not
 application developers. The module-level structures shown below
-(``_token_cache``, ``_actor_cache``, ``_trust_cache``) are library internals
+(``_token_cache``, ``_trust_cache``) are library internals
 in ``actingweb/handlers/mcp.py``, not a public API — an application built on
 ``pip install actingweb`` cannot import or configure them.
 
-This document provides guidance for implementing intelligent caching in ActingWeb endpoints to improve performance. Based on the successful MCP endpoint optimization that achieved 50x performance improvement (50ms → 1ms), this pattern can be applied to other endpoints and the code can possibly be generalized and reused.
+This document provides guidance for implementing caching in ActingWeb
+endpoints. It is based on the MCP endpoint, which caches what authentication
+resolves (the validated token and the client's trust relationship) and
+nothing of the actor: since 3.16 every MCP request loads its own actor (one
+strongly consistent row read), because a shared actor object carried stale
+state between requests (its row, ``_internal``, properties and subscription
+list). Cache what a request *resolves*, never an object a request mutates
+or reads state through.
 
 Cache Architecture
 ===================
@@ -23,15 +30,21 @@ Core Components
 
     # Global cache structure (as implemented in handlers/mcp.py)
     _token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
-    _actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, last_accessed}
     _trust_cache: dict[tuple[str, str], dict[str, Any]] = {}  # (actor_id, client_id)
     _cache_ttl = 300  # 5 minutes
+    _TRUST_CACHE_TTL = _cache_ttl  # a resolved trust
+    _TRUST_CACHE_NEGATIVE_TTL = 10.0  # a cached "no trust"
 
     # Trust cache entry structure
     cache_entry = {
         'trust': trust_relationship_or_none,
         'cached_at': time.time(),
+        'config': config,  # the application that filled it
     }
+
+Every entry records the ``Config`` of the application that filled it, and an
+entry another application filled is a miss: the caches are module globals,
+and two applications in one process may hold the same actor id.
 
 Cache Key Strategy
 -------------------
@@ -48,9 +61,6 @@ bypass, fixed in v3.13.0rc3).
     # Token cache: the token itself (opaque, unique per client)
     token_key = token
 
-    # Actor cache: actor id (one shared actor instance per actor)
-    actor_key = actor_id
-
     # Trust cache: (actor_id, client_id) tuple — one trust row per client.
     # Tuples avoid delimiter-escaping problems that f"{a}:{b}" string keys have.
     trust_key = (actor_id, client_id)
@@ -63,38 +73,42 @@ Implementation Pattern
 
 .. code-block:: python
 
-    def authenticate_and_get_actor_cached(self) -> Any:
-        """Cached version of authentication with ~1ms response time"""
-
-        # Extract and validate token
+    def authenticate(self) -> Any:
+        """Cache what validation resolved, never the actor (3.16)."""
         token = self.extract_token()
         if not token:
             return None
 
-        # Check token cache first
-        token_key = f"{hashlib.sha256(token.encode()).hexdigest()[:16]}:{self.actor_id}"
+        generation = _current_cache_generation()  # before any storage read
+        entry = _token_cache.get(token)
+        if (
+            entry is not None
+            and time.time() - entry["cached_at"] < _cache_ttl
+            and entry["config"] is self.config  # this application's entry
+        ):
+            actor = load_actor(entry["actor_id"])  # one row read per request
+            if actor is not None:
+                return actor
+            _token_cache.pop(token, None)  # the actor is gone: validate again
 
-        if token_key in _token_cache:
-            entry = _token_cache[token_key]
-            if time.time() - entry['timestamp'] < entry['ttl']:
-                # Cache hit - return cached data
-                return entry['data']
-            else:
-                # Cache expired - remove entry
-                del _token_cache[token_key]
+        validated = self.validate_token_in_storage(token)
+        if not validated:
+            return None
+        actor = load_actor(validated.actor_id)
+        if actor is None:
+            return None
 
-        # Cache miss - perform full authentication
-        result = self.authenticate_and_get_actor_uncached()
-
-        # Store in cache if successful
-        if result:
-            _token_cache[token_key] = {
-                'data': result,
-                'timestamp': time.time(),
-                'ttl': _cache_ttl
-            }
-
-        return result
+        # Only what validation resolved, and only if no revocation landed
+        # while it was being read (check and write under the eviction's lock).
+        with _cache_generation_lock:
+            if _cache_fill_still_valid(generation):
+                _token_cache[token] = {
+                    "actor_id": validated.actor_id,
+                    "client_id": validated.client_id,
+                    "cached_at": time.time(),
+                    "config": self.config,
+                }
+        return actor
 
 2. Cached Database Queries
 ----------------------------
@@ -138,11 +152,16 @@ Implementation Pattern
 ------------------------
 
 Invalidate actor-wide by scanning for every key whose actor component
-matches. Always iterate a **snapshot** of the keys (``list(cache)``): module
-caches are mutated from concurrent worker threads with no lock, and
-scanning the live dict while another thread inserts raises
+matches. Always iterate a **snapshot** of the keys (``cache.copy()``): module
+caches are mutated from concurrent worker threads, and scanning the live
+dict while another thread inserts raises
 ``RuntimeError: dictionary changed size during iteration``. Use
 ``pop(key, None)`` rather than ``del`` so a concurrent delete cannot raise.
+
+A fill that read storage before a revocation must not write after it: take
+a generation snapshot before the read, and check it and write under the
+same lock the eviction holds while it pops and bumps the generation
+(``_cache_generation_lock`` in ``handlers/mcp.py``).
 
 .. code-block:: python
 
@@ -151,10 +170,12 @@ scanning the live dict while another thread inserts raises
         for key in [k for k in list(_trust_cache) if k[0] == actor_id]:
             _trust_cache.pop(key, None)
 
-    def invalidate_actor_cache(self, actor_id: str) -> None:
-        """Invalidate all cache entries for a specific actor"""
-        _actor_cache.pop(actor_id, None)
-        _evict_trust_entries_for_actor(actor_id)
+    def evict_mcp_caches_for_actor(actor_id: str) -> int:
+        """Drop every token and trust entry of the actor (one revocation
+        covers every client of the actor)."""
+        with _cache_generation_lock:
+            ...  # pop the actor's tokens and trust entries
+            _bump_cache_generation()
 
 Endpoints to Optimize
 ======================
@@ -180,7 +201,8 @@ High Priority (Frequent Access)
 
 4. **Base Handler Authentication** (``base_handler.py``)
 
-   - Token validation and actor loading
+   - Token validation (not the actor itself: an actor object is built
+     per request)
    - Permission checks
 
 Medium Priority
@@ -211,9 +233,6 @@ TTL Guidelines
 
     # Authentication and tokens (short TTL for security)
     AUTH_CACHE_TTL = 300  # 5 minutes
-
-    # Actor basic info (medium TTL)
-    ACTOR_CACHE_TTL = 900  # 15 minutes
 
     # Properties (longer TTL, less frequent changes)
     PROPERTY_CACHE_TTL = 1800  # 30 minutes
@@ -267,8 +286,6 @@ Cache Hit Rate Tracking
     _cache_stats = {
         'token_hits': 0,
         'token_misses': 0,
-        'actor_hits': 0,
-        'actor_misses': 0,
         'trust_hits': 0,
         'trust_misses': 0,
     }

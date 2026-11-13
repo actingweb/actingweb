@@ -176,3 +176,76 @@ def test_wm1_memo(wire_pair, topology):
     )
     s.step("write through the same instance (SDK)", lambda: write(2))
     check("WM1", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wm2_empty_memo(wire_pair: Any, topology: str) -> None:
+    """WM2: one ``Actor`` instance of A writes with no subscriber (its memo
+    becomes ``[]``, asserted); B subscribes over REST; the same instance
+    writes again; then a second instance writes."""
+    s = wire_pair(topology, grant=["*"], subscribe=False)
+    a, b = s.publisher, s.subscribers[0]
+    one = a.interface()
+
+    def write(actor: Any, value: int) -> None:
+        actor.properties["x"] = {"v": value}
+
+    s.step("write through one instance (SDK)", lambda: write(one, 1))
+    assert one.core_actor.subs_list == [], one.core_actor.subs_list
+    s.step("B subscribes", lambda: wire_pair.subscribe(s, b))
+    s.step("write through the same instance (SDK)", lambda: write(one, 2))
+    s.step("write through a second instance (SDK)", lambda: write(a.interface(), 3))
+    check("WM2", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wm3_recreated_publisher_sends(wire_pair: Any, topology: str) -> None:
+    """WM3: WC6's setup and delete, A created again under its id through the
+    SDK, a new subscriber B2 (set up, not recorded), a write of ``y`` (the
+    target that was suspended)."""
+    from actingweb.actor import Actor
+
+    s = wire_pair(topology, grant=["*"])
+    s.snapshot_stores = True
+    a = s.publisher
+    _wc6_setup(s)
+    response = requests.delete(f"{a.url}", auth=a.basic)
+    assert response.status_code == 204, response.text
+    s.extra_snapshot = lambda: {"A.suspensions": _suspensions(a)}
+    core = Actor(config=a.host.config)
+    assert core.create(
+        url=a.host.url, creator=a.creator, passphrase=a.passphrase, actor_id=a.id
+    )
+    assert core.get_trust_relationships() == []
+    assert Actor(a.id, a.host.config).get_subscriptions() == []
+    # Set up, not recorded (as every added peer is): B2 trusts the new A,
+    # both approve, A grants, B2 subscribes.
+    wire_pair.add_subscriber(s, "B2", host="app" if topology == "same_host" else "peer")
+
+    def write() -> None:
+        a.interface().properties["y"] = {"v": 1}
+
+    s.step("put y (SDK)", write)
+    check("WM3", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wm4_subscriber_during_suspension(wire_pair: Any, topology: str) -> None:
+    """WM4: one instance of A suspends ``properties`` and writes (its memo
+    becomes ``[]``); B subscribes over REST; the same instance resumes."""
+    s = wire_pair(topology, grant=["*"], subscribe=False)
+    a, b = s.publisher, s.subscribers[0]
+    one = a.interface()
+
+    def suspend_and_write() -> None:
+        assert one.subscriptions.suspend("properties")
+        one.properties["x"] = {"v": 1}
+
+    s.step("suspend and write through one instance (SDK)", suspend_and_write)
+    assert one.core_actor.subs_list == [], one.core_actor.subs_list
+    s.step("B subscribes", lambda: wire_pair.subscribe(s, b))
+    s.step(
+        "resume through the same instance (SDK)",
+        lambda: one.subscriptions.resume("properties"),
+    )
+    check("WM4", s.recording(), variant=topology)

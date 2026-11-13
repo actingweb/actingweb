@@ -147,11 +147,18 @@ class DbSubscriptionSuspension:
         return results
 
     def delete_all(self) -> bool:
-        """Delete all suspensions for this actor (cleanup on actor delete)."""
+        """Delete all suspensions for this actor (actor deletion, purge, a
+        create under an explicit id). A missing table holds none: ``True``,
+        so a deployment that never created it can still delete and create
+        actors (3.16)."""
         try:
             for item in SubscriptionSuspension.query(self._actor_id):
                 item.delete()
             return True
         except Exception as e:
+            from .property_lookup import is_table_missing
+
+            if is_table_missing(e):
+                return True
             logger.error(f"Error deleting suspensions for {self._actor_id}: {e}")
             return False

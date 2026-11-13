@@ -40,7 +40,9 @@ from .hooks import (
 )
 from .property_store import PropertyStore
 from .subscription_manager import (
+    PeerSubscriptions,
     PeerSyncResult,
+    SubscriptionInfo,
     SubscriptionManager,
     SubscriptionSyncResult,
 )
@@ -86,5 +88,7 @@ __all__ = [
     "SubscriptionProcessingConfig",
     # Sync API types
     "SubscriptionSyncResult",
+    "PeerSubscriptions",
     "PeerSyncResult",
+    "SubscriptionInfo",
 ]

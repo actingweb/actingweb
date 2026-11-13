@@ -434,7 +434,6 @@ class TestJ4PostCommitFolds:
         core.delete_reciprocal_trust.assert_not_called()
 
     def test_mcp_peer_approval_bookkeeping_does_not_fail_the_request(self) -> None:
-        from actingweb import actor as actor_module
         from tests.mcp_helpers import make_mcp_handler
 
         handler = make_mcp_handler()
@@ -446,12 +445,12 @@ class TestJ4PostCommitFolds:
         )
         core = mock.Mock(actor={"id": "a1"})
         core.modify_trust_and_notify.side_effect = _raise
-        with mock.patch.object(actor_module, "Actor", return_value=core):
-            handler._mark_client_peer_approved(mock.Mock(id="a1"), "client-1", trust)
+        handler._mark_client_peer_approved(
+            mock.Mock(id="a1", core_actor=core), "client-1", trust
+        )
         core.modify_trust_and_notify.assert_called_once()
 
     def test_mcp_client_info_write_does_not_fail_the_request(self) -> None:
-        from actingweb import actor as actor_module
         from actingweb.handlers import mcp as mcp_module
         from tests.mcp_helpers import make_mcp_handler
 
@@ -459,12 +458,9 @@ class TestJ4PostCommitFolds:
         context = mock.Mock(peer_id="peer-1", trust_relationship=None)
         core = mock.Mock(actor={"id": "a1"})
         core.modify_trust_and_notify.side_effect = _raise
-        with (
-            mock.patch.object(mcp_module, "RuntimeContext") as runtime,
-            mock.patch.object(actor_module, "Actor", return_value=core),
-        ):
+        with mock.patch.object(mcp_module, "RuntimeContext") as runtime:
             runtime.return_value.get_mcp_context.return_value = context
             handler._update_trust_with_client_info(
-                mock.Mock(id="a1"), {"name": "Claude", "version": "1"}
+                mock.Mock(id="a1", core_actor=core), {"name": "Claude", "version": "1"}
             )
         core.modify_trust_and_notify.assert_called_once()

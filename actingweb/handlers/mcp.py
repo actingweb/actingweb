@@ -106,20 +106,32 @@ class _UnparseableBody:
 UNPARSEABLE_BODY = _UnparseableBody()
 
 # Global caches for MCP performance optimization
-_token_cache: dict[str, dict[str, Any]] = {}  # token -> validation data
-_actor_cache: dict[str, dict[str, Any]] = {}  # actor_id -> {actor, last_accessed}
-# (actor_id, client_id) -> {"trust": relationship-or-None, "cached_at": float}.
-# Keyed per actor/client pair: one trust row exists per client, and an
-# actor-only key let one client's resolved trust serve another client on the
-# same actor (authorization bypass). The value wraps the relationship so the
-# entry carries its own timestamp; "trust" may be None (cached negative).
+# token -> {"actor_id", "client_id", "token_data", "cached_at", "config"}.
+# No actor is cached: every request loads its own ``Actor``, so nothing a hook
+# reads through it (the row, ``_internal``, properties, the subscription list)
+# outlives the request.
+_token_cache: dict[str, dict[str, Any]] = {}
+# (actor_id, client_id) -> {"trust": relationship-or-None, "cached_at": float,
+# "config": Config}. Keyed per actor/client pair: one trust row exists per
+# client, and an actor-only key let one client's resolved trust serve another
+# client on the same actor (authorization bypass). The value wraps the
+# relationship so the entry carries its own timestamp; "trust" may be None
+# (cached negative).
+#
+# Both caches are module globals keyed without the application, so each entry
+# records the ``Config`` that filled it and an entry filled by another
+# application in the same process is a miss: otherwise one application would
+# accept a token or a trust another one validated whenever both hold the
+# actor id.
 _trust_cache: dict[tuple[str, str], dict[str, Any]] = {}
 _cache_ttl = 300  # 5 minutes cache TTL
 
-# Per-entry TTLs for the trust cache, checked against each entry's
-# "cached_at". None means no per-entry bound: entries live until evicted by
-# actor expiry or logout.
-_TRUST_CACHE_TTL: float | None = None
+# Per-entry TTL of a resolved (positive) trust entry, checked against its
+# "cached_at". The token entry expires on the same clock, and an active
+# client re-resolves its trust each time its token entry does; this bounds
+# the entries whose tokens went quiet, and a trust type re-typed on another
+# worker (whose eviction this process never saw).
+_TRUST_CACHE_TTL: float = _cache_ttl
 # Cached-None ("negative") entries get their own, short, knob. Under
 # fail-closed authorization, a cached None pins a denial for the entry's
 # TTL -- without a short bound here, a transient lookup miss (notably
@@ -142,8 +154,6 @@ _next_cleanup_at = 0.0
 _cache_stats = {
     "token_hits": 0,
     "token_misses": 0,
-    "actor_hits": 0,
-    "actor_misses": 0,
     "trust_hits": 0,
     "trust_misses": 0,
 }
@@ -158,26 +168,56 @@ def _trust_cache_key(actor_id: str, client_id: str) -> tuple[str, str]:
     return (actor_id, client_id)
 
 
-def _trust_cache_get(trust_key: tuple[str, str]) -> tuple[bool, Any]:
+def _load_actor(actor_id: str, config: Any) -> Any:
+    """Load ``actor_id`` for an MCP request, without the email-as-creator check.
+
+    MCP authentication never compares the creator, so the load skips the
+    ``force_email_prop_as_creator`` rewrite (``Actor.get(rewrite_email=False)``)
+    and its ``_internal`` read. A hit is attribute for attribute what
+    ``Actor(actor_id, config)`` gives; on a miss ``id`` is ``None``.
+    ``actingweb.actor.Actor`` is read when called, so a test's patch of it
+    lands here.
+    """
+    from .. import actor as actor_module
+
+    core_actor = actor_module.Actor(config=config)
+    core_actor.get(actor_id=actor_id, rewrite_email=False)
+    return core_actor
+
+
+def _trust_entry_expired(entry: dict[str, Any], now: float) -> bool:
+    """Whether a trust entry is past its TTL: negative and positive differ."""
+    ttl = _TRUST_CACHE_NEGATIVE_TTL if entry.get("trust") is None else _TRUST_CACHE_TTL
+    return ttl is not None and now - entry.get("cached_at", 0.0) > ttl
+
+
+def _trust_cache_get(trust_key: tuple[str, str], config: Any) -> tuple[bool, Any]:
     """Look up a trust entry, honoring per-entry TTLs. Returns ``(hit, trust)``.
 
     A hit with ``trust=None`` is a valid cached negative result, so callers
     must branch on the hit flag, never on the truthiness of the trust value.
+    An entry filled by another application (``config``) is a miss and is left
+    in place.
     """
     entry = _trust_cache.get(trust_key)
-    if entry is None:
+    if entry is None or entry.get("config") is not config:
         return False, None
-    trust = entry.get("trust")
-    ttl = _TRUST_CACHE_NEGATIVE_TTL if trust is None else _TRUST_CACHE_TTL
-    if ttl is not None and time.time() - entry.get("cached_at", 0.0) > ttl:
+    if _trust_entry_expired(entry, time.time()):
         _trust_cache.pop(trust_key, None)
         return False, None
-    return True, trust
+    return True, entry.get("trust")
 
 
-def _trust_cache_put(trust_key: tuple[str, str], trust_relationship: Any) -> None:
-    """Store a resolved trust (or None) with its resolution timestamp."""
-    _trust_cache[trust_key] = {"trust": trust_relationship, "cached_at": time.time()}
+def _trust_cache_put(
+    trust_key: tuple[str, str], trust_relationship: Any, config: Any
+) -> None:
+    """Store a resolved trust (or None) with its resolution timestamp and the
+    application that resolved it."""
+    _trust_cache[trust_key] = {
+        "trust": trust_relationship,
+        "cached_at": time.time(),
+        "config": config,
+    }
 
 
 def _evict_trust_entries_for_actor(actor_id: str) -> None:
@@ -296,7 +336,10 @@ def _reset_unsupported_version_telemetry() -> None:
 # still succeeds, it just pays full price. Revocations are rare and cache
 # misses are cheap; a resurrected credential is neither.
 _cache_generation = 0
-_cache_generation_lock = threading.Lock()
+# Re-entrant: an eviction holds it across its pops and its bump (which takes
+# it again), and a fill holds it across its validity check and its write, so
+# no fill can check before an eviction's bump and write after its pops.
+_cache_generation_lock = threading.RLock()
 
 
 def _current_cache_generation() -> int:
@@ -373,40 +416,41 @@ def evict_mcp_caches_for_actor(actor_id: str) -> int:
     :meth:`MCPHandler.clear_token_from_cache` is the token-keyed counterpart and
     ends up doing the same actor-wide work once it has resolved the actor.
 
-    **Actor-wide is not overreach, it is required.** ``_actor_cache`` holds a
-    live ``ActorInterface`` — and therefore the core ``Actor`` and every memo on
-    it, ``subs_list`` among them — shared across requests *and across users of
-    that container* on a sliding TTL. Evicting only the ``_trust_cache`` tuple
-    for one client would leave that shared wrapper in place with the stale trust
-    list still on it. Any narrower eviction has to be re-derived from what the
-    wrapper actually caches, which is not a stable surface.
+    **Actor-wide is not overreach, it is required.** One revocation (a
+    revoked-all, a deleted trust, a downgraded permission), or one re-typing of
+    a client's trust on re-authorisation
+    (:mod:`actingweb.interface.trust_manager`), covers every client of the
+    actor, so every token and every ``(actor, client)`` trust entry of the
+    actor goes.
 
     Only closes the window in the process that runs it. Other workers keep
-    serving their own entries until TTL — see §2 of
+    serving their own entries until TTL — see §1 of
     ``thoughts/todo/mcp-cache-lifecycle-and-revocation.md``, deliberately out of
     scope here.
     """
     evicted = 0
 
-    for token in [
-        token
-        for token, data in _token_cache.copy().items()
-        if data.get("actor_id") == actor_id
-    ]:
-        _token_cache.pop(token, None)
-        evicted += 1
+    # Under the lock fills take for their check and write: otherwise a fill
+    # that checked before the bump could write after the pops, and the
+    # revoked entry would live for its TTL.
+    with _cache_generation_lock:
+        for token in [
+            token
+            for token, data in _token_cache.copy().items()
+            if data.get("actor_id") == actor_id
+        ]:
+            _token_cache.pop(token, None)
+            evicted += 1
 
-    if _actor_cache.pop(actor_id, None) is not None:
-        evicted += 1
+        trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
+        _evict_trust_entries_for_actor(actor_id)
+        evicted += len(trust_keys)
 
-    trust_keys = [k for k in _trust_cache.copy() if k[0] == actor_id]
-    _evict_trust_entries_for_actor(actor_id)
-    evicted += len(trust_keys)
-
-    # Bumped unconditionally, not only when something was evicted: an
-    # in-flight request may be about to insert an entry that did not exist yet
-    # when this ran, which is exactly the race the counter exists to stop.
-    _bump_cache_generation()
+        # Bumped unconditionally, not only when something was evicted: an
+        # in-flight request may be about to insert an entry that did not exist
+        # yet when this ran, which is exactly the race the counter exists to
+        # stop.
+        _bump_cache_generation()
 
     if evicted:
         logger.debug("Evicted %d MCP cache entries for actor %s", evicted, actor_id)
@@ -799,19 +843,18 @@ class MCPHandler(BaseHandler):
         for token in expired_tokens:
             _token_cache.pop(token, None)
 
-        # Clean actor cache, and every trust entry for each expired actor
-        expired_actors = [
-            actor_id
-            for actor_id, data in _actor_cache.copy().items()
-            if current_time - data.get("last_accessed", 0) > _cache_ttl
+        # Clean trust cache, each entry by its own TTL
+        expired_trusts = [
+            key
+            for key, entry in _trust_cache.copy().items()
+            if _trust_entry_expired(entry, current_time)
         ]
-        for actor_id in expired_actors:
-            _actor_cache.pop(actor_id, None)
-            _evict_trust_entries_for_actor(actor_id)
+        for key in expired_trusts:
+            _trust_cache.pop(key, None)
 
-        if expired_tokens or expired_actors:
+        if expired_tokens or expired_trusts:
             logger.debug(
-                f"Cleaned up {len(expired_tokens)} expired tokens and {len(expired_actors)} expired actors from MCP cache"
+                f"Cleaned up {len(expired_tokens)} expired tokens and {len(expired_trusts)} expired trust entries from MCP cache"
             )
 
     def _mcp_disabled_response(self) -> dict[str, Any]:
@@ -2246,18 +2289,21 @@ class MCPHandler(BaseHandler):
 
     def authenticate_and_get_actor_cached(self) -> Any:
         """
-        Optimized authenticate request and get actor with caching.
+        Authenticate the request and return an actor built for it.
 
-        This method provides authentication with intelligent caching:
-        1. Token validation results are cached for 5 minutes
-        2. Actor instances are cached to avoid repeated DynamoDB loads
-        3. Trust relationship lookups are cached per (actor, client) pair
-        4. Automatic cache cleanup removes expired entries
+        Two caches, both per process and bound to this application's config:
 
-        Cache keys: token validation is keyed by token, actors by actor ID,
-        and trust relationships by the (actor_id, client_id) tuple, providing
-        significant performance improvements for repeated requests from the
-        same clients.
+        1. Token validation results, keyed by token, for 5 minutes. A hit skips
+           the two token-store reads, never the actor-row read.
+        2. Trust relationships per ``(actor_id, client_id)`` pair; positive
+           entries for 5 minutes, negative ones for 10 seconds.
+
+        No actor is cached: every call loads the actor row and returns a fresh
+        ``ActorInterface``, so a hook never sees state another request left on
+        a shared object. A cached token whose actor row is gone is dropped and
+        the request takes the full path; only that path, after the token has
+        been validated against storage, may create the actor (the OAuth2
+        bridge). Expired entries are swept periodically.
         """
         # Clean up expired cache entries periodically. A racing double-run of
         # this check across concurrent worker threads is harmless (cleanup is
@@ -2276,90 +2322,87 @@ class MCPHandler(BaseHandler):
         bearer_token = auth_header[7:]  # Remove "Bearer " prefix
         current_time = time.time()
 
-        # Check token cache first
-        if bearer_token in _token_cache:
-            cached_data = _token_cache[bearer_token]
-            if current_time - cached_data.get("cached_at", 0) < _cache_ttl:
+        try:
+            # Snapshot before the storage reads that feed the caches below,
+            # the token-cache read included. If a revocation lands while we
+            # are reading, none of what we read gets cached — see the comment
+            # on _cache_generation.
+            generation_at_read = _current_cache_generation()
+            token_seq_at_read = _current_token_eviction_seq()
+
+            cached_data = _token_cache.get(bearer_token)
+            if (
+                cached_data is not None
+                and current_time - cached_data.get("cached_at", 0) < _cache_ttl
+                and cached_data.get("config") is self.config
+            ):
                 _cache_stats["token_hits"] += 1
                 actor_id = cached_data["actor_id"]
                 client_id = cached_data["client_id"]
                 token_data = cached_data["token_data"]
 
-                # Check actor cache
-                if actor_id in _actor_cache:
-                    cached_actor_data = _actor_cache[actor_id]
-                    if (
-                        current_time - cached_actor_data.get("last_accessed", 0)
-                        < _cache_ttl
-                    ):
-                        _cache_stats["actor_hits"] += 1
-                        # Update last accessed time
-                        cached_actor_data["last_accessed"] = current_time
-                        actor_interface = cached_actor_data["actor"]
-
-                        # Refresh trust context from cache or lookup, keyed
-                        # per (actor, client) pair so one client's trust can
-                        # never serve another client on the same actor. A hit
-                        # may carry trust=None (cached negative), which must
-                        # still yield an empty peer_id below.
-                        trust_key = _trust_cache_key(actor_id, client_id)
-                        trust_hit, trust_relationship = _trust_cache_get(trust_key)
-                        if trust_hit:
-                            _cache_stats["trust_hits"] += 1
-                        else:
-                            _cache_stats["trust_misses"] += 1
-                            trust_relationship = self._lookup_mcp_trust_relationship(
-                                actor_interface, client_id, token_data
-                            )
-                            _trust_cache_put(trust_key, trust_relationship)
-                        self._check_trust_client_invariant(
-                            actor_id, client_id, trust_relationship
-                        )
-
-                        # Update runtime context with MCP authentication info
-                        runtime_context = RuntimeContext(actor_interface)
-                        runtime_context.set_mcp_context(
-                            client_id=client_id,
-                            trust_relationship=trust_relationship,
-                            peer_id=trust_relationship.peerid
-                            if trust_relationship
-                            else "",
-                            token_data=token_data,
-                            transport_session_id=self._resolve_transport_session_id(),
-                            client_info=self._resolve_live_client_info(actor_id),
-                        )
-
-                        # Log cache performance periodically
-                        total_requests = sum(_cache_stats.values())
-                        if (
-                            total_requests > 0 and total_requests % 10 == 0
-                        ):  # Every 10 requests
-                            logger.debug(
-                                f"MCP cache stats - Token hits: {_cache_stats['token_hits']}, Actor hits: {_cache_stats['actor_hits']}, Trust hits: {_cache_stats['trust_hits']}"
-                            )
-
-                        # Serving cached MCP authentication (no logging needed for routine operation)
-                        return actor_interface
+                # A cached token never creates an actor.
+                actor_interface = self._get_or_create_actor(
+                    actor_id, token_data, create=False
+                )
+                if actor_interface is not None:
+                    # Trust from cache or lookup, keyed per (actor, client)
+                    # pair so one client's trust can never serve another
+                    # client on the same actor. A hit may carry trust=None
+                    # (cached negative), which must still yield an empty
+                    # peer_id below.
+                    trust_key = _trust_cache_key(actor_id, client_id)
+                    trust_hit, trust_relationship = _trust_cache_get(
+                        trust_key, self.config
+                    )
+                    if trust_hit:
+                        _cache_stats["trust_hits"] += 1
                     else:
-                        _cache_stats["actor_misses"] += 1
-                else:
-                    _cache_stats["actor_misses"] += 1
+                        _cache_stats["trust_misses"] += 1
+                        trust_relationship = self._lookup_mcp_trust_relationship(
+                            actor_interface, client_id, token_data
+                        )
+                        with _cache_generation_lock:
+                            if _cache_fill_still_valid(generation_at_read):
+                                _trust_cache_put(
+                                    trust_key, trust_relationship, self.config
+                                )
+                    self._check_trust_client_invariant(
+                        actor_id, client_id, trust_relationship
+                    )
+
+                    # Log cache performance periodically
+                    total_requests = sum(_cache_stats.values())
+                    if total_requests > 0 and total_requests % 10 == 0:
+                        logger.debug(
+                            f"MCP cache stats - Token hits: {_cache_stats['token_hits']}, Trust hits: {_cache_stats['trust_hits']}"
+                        )
+
+                    self._set_mcp_runtime_context(
+                        actor_interface,
+                        actor_id,
+                        client_id,
+                        token_data,
+                        trust_relationship,
+                    )
+                    return actor_interface
+
+                # The row is gone (deleted elsewhere, or never created): drop
+                # this token's entry and validate against storage. The drop
+                # records an eviction of this token, which would refuse this
+                # request's own fill below, so snapshot again after it.
+                logger.debug(
+                    f"Cached MCP token for actor {actor_id} has no actor row; "
+                    "validating it again"
+                )
+                self.clear_token_from_cache(bearer_token, actor_wide=False)
+                token_seq_at_read = _current_token_eviction_seq()
             else:
                 _cache_stats["token_misses"] += 1
-        else:
-            _cache_stats["token_misses"] += 1
 
-        # Cache miss - perform full authentication flow
-        try:
             from ..oauth2_server.oauth2_server import get_actingweb_oauth2_server
 
             oauth2_server = get_actingweb_oauth2_server(self.config)
-
-            # Snapshot before the storage reads that feed the caches below.
-            # If a revocation lands while we are reading, none of what we read
-            # gets cached — see the comment on _cache_generation.
-            generation_at_read = _current_cache_generation()
-            token_seq_at_read = _current_token_eviction_seq()
 
             # Validate ActingWeb token (not Google token)
             token_validation = oauth2_server.validate_mcp_token(bearer_token)
@@ -2369,32 +2412,35 @@ class MCPHandler(BaseHandler):
 
             actor_id, client_id, token_data = token_validation
 
-            # Cache token validation result
-            if _cache_fill_still_valid(generation_at_read) and _token_fill_still_valid(
-                bearer_token, token_seq_at_read
-            ):
-                _token_cache[bearer_token] = {
-                    "actor_id": actor_id,
-                    "client_id": client_id,
-                    "token_data": token_data,
-                    "cached_at": current_time,
-                }
-
-            # Get or create actor (with caching)
-            actor_interface = self._get_or_create_actor_cached(
-                actor_id, token_data, current_time, generation_at_read
-            )
+            # Get or create actor (the bridge create runs only here)
+            actor_interface = self._get_or_create_actor(actor_id, token_data)
             if not actor_interface:
                 return None
+
+            # Cache the token validation result, now that it has an actor
+            with _cache_generation_lock:
+                if _cache_fill_still_valid(
+                    generation_at_read
+                ) and _token_fill_still_valid(bearer_token, token_seq_at_read):
+                    _token_cache[bearer_token] = {
+                        "actor_id": actor_id,
+                        "client_id": client_id,
+                        "token_data": token_data,
+                        "cached_at": current_time,
+                        "config": self.config,
+                    }
 
             # Lookup and cache trust relationship per (actor, client) pair
             trust_relationship = self._lookup_mcp_trust_relationship(
                 actor_interface, client_id, token_data
             )
-            if _cache_fill_still_valid(generation_at_read):
-                _trust_cache_put(
-                    _trust_cache_key(actor_id, client_id), trust_relationship
-                )
+            with _cache_generation_lock:
+                if _cache_fill_still_valid(generation_at_read):
+                    _trust_cache_put(
+                        _trust_cache_key(actor_id, client_id),
+                        trust_relationship,
+                        self.config,
+                    )
             self._check_trust_client_invariant(actor_id, client_id, trust_relationship)
 
             # Mark client as peer_approved on successful authentication (if not already)
@@ -2402,15 +2448,8 @@ class MCPHandler(BaseHandler):
                 actor_interface, client_id, trust_relationship
             )
 
-            # Store runtime context for permission checking and client identification
-            runtime_context = RuntimeContext(actor_interface)
-            runtime_context.set_mcp_context(
-                client_id=client_id,
-                trust_relationship=trust_relationship,
-                peer_id=trust_relationship.peerid if trust_relationship else "",
-                token_data=token_data,
-                transport_session_id=self._resolve_transport_session_id(),
-                client_info=self._resolve_live_client_info(actor_id),
+            self._set_mcp_runtime_context(
+                actor_interface, actor_id, client_id, token_data, trust_relationship
             )
 
             logger.debug(
@@ -2431,15 +2470,34 @@ class MCPHandler(BaseHandler):
             logger.error(f"Error during ActingWeb token authentication: {e}")
             return None
 
+    def _set_mcp_runtime_context(
+        self,
+        actor_interface: ActorInterface,
+        actor_id: str,
+        client_id: str,
+        token_data: dict[str, Any],
+        trust_relationship: Any,
+    ) -> None:
+        """Store the MCP authentication on the request's actor, for permission
+        checking and client identification."""
+        runtime_context = RuntimeContext(actor_interface)
+        runtime_context.set_mcp_context(
+            client_id=client_id,
+            trust_relationship=trust_relationship,
+            peer_id=trust_relationship.peerid if trust_relationship else "",
+            token_data=token_data,
+            transport_session_id=self._resolve_transport_session_id(),
+            client_info=self._resolve_live_client_info(actor_id),
+        )
+
     def _race_winner(self, actor_id: str) -> bool:
         """Whether a concurrent request finished creating ``actor_id``: the
         row exists, carries its marker, and is not being deleted. An unmarked
         row is a create whose marker write failed and whose rollback did too;
         a tombstoned one is mid-deletion."""
-        from .. import actor as actor_module
         from ..deletion import DeletionStatus, read_tombstone
 
-        winner = actor_module.Actor(actor_id, self.config)
+        winner = _load_actor(actor_id, self.config)
         if not winner.id or winner.store is None or not winner.store.loaded:
             return False
         if not winner.store.auth_method:
@@ -2450,38 +2508,24 @@ class MCPHandler(BaseHandler):
         status, _ = read_tombstone(actor_id, self.config)
         return status != DeletionStatus.DELETED
 
-    def _get_or_create_actor_cached(
+    def _get_or_create_actor(
         self,
         actor_id: str,
         token_data: dict[str, Any],
-        current_time: float,
-        generation_at_read: int | None = None,
+        create: bool = True,
     ) -> ActorInterface | None:
-        """Get or create actor with caching."""
-        # Check actor cache first
-        # The entry must have been built by *this* application's config:
-        # _actor_cache is a module global keyed by actor id alone, so in a
-        # process hosting more than one ActingWeb app the same actor id --
-        # notably the shared "_actingweb_oauth2" system actor -- would
-        # otherwise be served an ActorInterface wrapping the other app's
-        # config, and therefore that app's database backend.
-        if actor_id in _actor_cache:
-            cached_data = _actor_cache[actor_id]
-            if (
-                current_time - cached_data.get("last_accessed", 0) < _cache_ttl
-                and cached_data.get("config") is self.config
-            ):
-                cached_data["last_accessed"] = current_time
-                return cached_data["actor"]
-
-        # Cache miss - create/load actor
+        """Load the request's actor; with ``create``, bridge-create it when the
+        row is missing (only after the token was validated against storage).
+        """
         from .. import actor as actor_module
 
-        core_actor = actor_module.Actor(actor_id, self.config)
+        core_actor = _load_actor(actor_id, self.config)
 
-        # CRITICAL FIX: Check if actor actually exists in storage, not just if property store is initialized
+        # Check the row exists in storage, not just that a store was built
         if core_actor.actor and len(core_actor.actor) > 0:
             logger.debug(f"Successfully loaded core actor {actor_id} from storage")
+        elif not create:
+            return None
         else:
             logger.warning(
                 f"Actor {actor_id} not found in ActingWeb storage - creating actor to bridge OAuth2 authentication"
@@ -2528,11 +2572,13 @@ class MCPHandler(BaseHandler):
                     logger.info(
                         f"Successfully created ActingWeb actor {actor_id} for OAuth2 user {user_email}"
                     )
-                    core_actor = actor_module.Actor(actor_id, self.config)
+                    core_actor = _load_actor(actor_id, self.config)
                 elif self._race_winner(actor_id):
                     # A concurrent request created it first.
-                    core_actor = actor_module.Actor(actor_id, self.config)
+                    core_actor = _load_actor(actor_id, self.config)
                 else:
+                    core_actor = None
+                if core_actor is None or not core_actor.id:
                     logger.error(f"Failed to create ActingWeb actor {actor_id}")
                     return None
 
@@ -2543,20 +2589,7 @@ class MCPHandler(BaseHandler):
                 return None
 
         registry = getattr(self.config, "service_registry", None)
-        actor_interface = ActorInterface(
-            core_actor=core_actor, service_registry=registry
-        )
-
-        # Cache the actor, unless a revocation landed while we were loading it.
-        if _cache_fill_still_valid(generation_at_read):
-            _actor_cache[actor_id] = {
-                "actor": actor_interface,
-                "last_accessed": current_time,
-                # Which application's config built this wrapper -- see above.
-                "config": self.config,
-            }
-
-        return actor_interface
+        return ActorInterface(core_actor=core_actor, service_registry=registry)
 
     def _lookup_mcp_trust_relationship(
         self, actor: ActorInterface, client_id: str, token_data: dict[str, Any]
@@ -2785,42 +2818,37 @@ class MCPHandler(BaseHandler):
             # Update the trust relationship with client metadata and connection timestamp
             from datetime import datetime
 
-            from .. import actor as actor_module
             from ..trust import canonical_connection_method
 
-            core_actor = actor_module.Actor(actor.id, config=self.config)
-            if core_actor.actor:
-                # Get the relationship type from the trust relationship
-                relationship = getattr(
-                    mcp_context.trust_relationship, "relationship", "mcp_client"
-                )
-                established_via = getattr(
-                    mcp_context.trust_relationship, "established_via", "oauth2_client"
-                )
+            # The request's own core actor: a second load would cost a read.
+            core_actor = actor.core_actor
+            # Get the relationship type from the trust relationship
+            relationship = getattr(
+                mcp_context.trust_relationship, "relationship", "mcp_client"
+            )
+            established_via = getattr(
+                mcp_context.trust_relationship, "established_via", "oauth2_client"
+            )
 
-                # Update last connection timestamp
-                now_iso = datetime.utcnow().isoformat()
+            # Update last connection timestamp
+            now_iso = datetime.utcnow().isoformat()
 
-                success = core_actor.modify_trust_and_notify(
-                    relationship=relationship,
-                    peerid=peer_id,
-                    client_name=client_name,
-                    client_version=client_version,
-                    client_platform=client_platform,
-                    last_accessed=now_iso,
-                    last_connected_via=canonical_connection_method(established_via),
+            success = core_actor.modify_trust_and_notify(
+                relationship=relationship,
+                peerid=peer_id,
+                client_name=client_name,
+                client_version=client_version,
+                client_platform=client_platform,
+                last_accessed=now_iso,
+                last_connected_via=canonical_connection_method(established_via),
+            )
+            if success:
+                logger.info(
+                    f"Updated trust relationship {peer_id} with client info: {client_name}"
                 )
-                if success:
-                    logger.info(
-                        f"Updated trust relationship {peer_id} with client info: {client_name}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to update trust relationship {peer_id} with client info"
-                    )
             else:
-                logger.error(
-                    f"Could not load actor {actor.id} to update trust with client info"
+                logger.warning(
+                    f"Failed to update trust relationship {peer_id} with client info"
                 )
 
         except Exception as e:  # folds DbError: non-critical metadata write
@@ -2994,27 +3022,38 @@ class MCPHandler(BaseHandler):
 
         Args:
             token: The token to remove from cache
-            actor_wide: When True (revocation, logout), also evict the owning
-                actor's wrapper and trust entries. Refresh-token rotation
-                passes False: the actor's authorization did not change, only
-                one access token was replaced, and evicting the actor would
-                make every hourly refresh a cold path for every client on it.
+            actor_wide: When True (revocation, logout), also evict every
+                token and trust entry of the owning actor. Refresh-token
+                rotation passes False: the actor's authorization did not
+                change, only one access token was replaced, and evicting the
+                actor would make every hourly refresh a cold path for every
+                client on it.
 
         Returns:
             True if token was found and removed, False if not found in cache
         """
-        global _token_cache, _actor_cache, _trust_cache
+        global _token_cache, _trust_cache
 
         token_found = False
 
         if not actor_wide:
-            token_found = _token_cache.pop(token, None) is not None
-            # An in-flight authentication must not re-cache what it read just
-            # before the delete; only a fill of this token is refused.
-            _record_token_eviction(token)
+            # Under the fills' lock, as evict_mcp_caches_for_actor() is.
+            with _cache_generation_lock:
+                token_found = _token_cache.pop(token, None) is not None
+                # An in-flight authentication must not re-cache what it read
+                # just before the delete; only a fill of this token is refused.
+                _record_token_eviction(token)
             return token_found
 
         # Remove token from cache
+        with _cache_generation_lock:
+            return cls._clear_token_actor_wide(token)
+
+    @classmethod
+    def _clear_token_actor_wide(cls, token: str) -> bool:
+        """The actor-wide half of :meth:`clear_token_from_cache`, run under
+        the cache lock."""
+        token_found = False
         if token in _token_cache:
             # Get actor_id before removing token data to clean associated caches
             cached_data = _token_cache[token]
@@ -3023,11 +3062,10 @@ class MCPHandler(BaseHandler):
             del _token_cache[token]
             token_found = True
 
-            # Also clear associated actor and trust caches to force
-            # re-authentication. Actor-wide by design: evicting the shared
-            # actor wrapper already affects every client on the actor, so
-            # every (actor, client) trust entry goes with it. Delegated rather
-            # than repeated, so the two cannot drift.
+            # Also clear the actor's other tokens and its trust entries to
+            # force re-authentication. Actor-wide by design: a revocation
+            # covers every client on the actor. Delegated rather than
+            # repeated, so the two cannot drift.
             if actor_id:
                 evict_mcp_caches_for_actor(actor_id)
         else:
@@ -3085,29 +3123,21 @@ class MCPHandler(BaseHandler):
                 logger.debug(f"OAuth2 client {client_id} already peer_approved")
                 return
 
-            # Mark as peer_approved since authentication was successful
-            from .. import actor as actor_module
-
-            core_actor = actor_module.Actor(actor_interface.id, config=self.config)
-            if core_actor.actor:
-                success = core_actor.modify_trust_and_notify(
-                    peerid=peer_id,
-                    relationship=getattr(
-                        trust_relationship, "relationship", "mcp_client"
-                    ),
-                    peer_approved=True,
+            # Mark as peer_approved since authentication was successful, on
+            # the request's own core actor (a second load would cost a read).
+            core_actor = actor_interface.core_actor
+            success = core_actor.modify_trust_and_notify(
+                peerid=peer_id,
+                relationship=getattr(trust_relationship, "relationship", "mcp_client"),
+                peer_approved=True,
+            )
+            if success:
+                logger.info(
+                    f"Marked OAuth2 client {client_id} as peer_approved after successful authentication"
                 )
-                if success:
-                    logger.info(
-                        f"Marked OAuth2 client {client_id} as peer_approved after successful authentication"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to mark OAuth2 client {client_id} as peer_approved"
-                    )
             else:
-                logger.error(
-                    f"Could not load actor {actor_interface.id} to mark client peer_approved"
+                logger.warning(
+                    f"Failed to mark OAuth2 client {client_id} as peer_approved"
                 )
 
         except Exception as e:  # folds DbError: non-critical; next auth retries

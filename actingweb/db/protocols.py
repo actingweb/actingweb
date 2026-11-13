@@ -1138,9 +1138,9 @@ class DbSubscriptionListProtocol(Protocol):
 
         Args:
             actor_id: The actor ID
-            strict: Raise on a backend read fault instead of answering with
-                an empty list (PostgreSQL catches faults; DynamoDB raises
-                either way).
+            strict: Raise ``DbError`` on a backend read fault; with
+                ``strict=False`` both backends answer the fault with an
+                empty list.
 
         Returns:
             List of subscription dicts, or empty list
@@ -1255,6 +1255,17 @@ class DbSubscriptionDiffListProtocol(Protocol):
         Returns:
             True on success; False only without a handle or arguments.
             A fault raises ``DbError``.
+        """
+        ...
+
+    def delete_all_of_actor(self, actor_id: str) -> bool:
+        """
+        Delete every subscription diff of an actor, by actor id, without
+        reading the diffs first (actor deletion and purge, 3.16).
+
+        Returns:
+            True when none is left; a missing table holds none (True). Any
+            other fault raises ``DbError``.
         """
         ...
 
@@ -1634,7 +1645,8 @@ class SubscriptionSuspensionProtocol(Protocol):
 
         Raises:
             DbError: on a read fault (3.16). Do not answer False for
-                "could not tell".
+                "could not tell", a missing table included: a suspend() that
+                failed against it would otherwise go unnoticed.
         """
         ...
 
@@ -1667,5 +1679,15 @@ class SubscriptionSuspensionProtocol(Protocol):
 
         Returns:
             List of (target, subtarget) tuples
+        """
+        ...
+
+    def delete_all(self) -> bool:
+        """Delete every suspension of this actor (actor deletion, relationship
+        purge, a create under an explicit id).
+
+        Returns:
+            True when none is left, also when there were none; False on a
+            backend fault (logged)
         """
         ...

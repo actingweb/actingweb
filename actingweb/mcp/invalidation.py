@@ -1,7 +1,7 @@
 """Cache invalidation hooks for code that revokes MCP credentials.
 
-The MCP handler keeps in-process caches of validated tokens, actor wrappers and
-trust relationships, all on a five-minute TTL. Anything that revokes a
+The MCP handler keeps in-process caches of validated tokens and trust
+relationships, both on a five-minute TTL. Anything that revokes a
 credential or narrows an authorization has to say so, or the change is honoured
 from a warm process until that TTL expires — a *staleness* window, not an
 authorization bypass, but a real one:
@@ -20,7 +20,7 @@ cache could not be told about it.
 the process that served the revocation and nothing else. In a multi-worker or
 multi-container deployment, other processes keep serving their own entries
 until their TTL expires. Closing that needs a shared invalidation channel and
-is deliberately out of scope — §2 of the same todo.
+is deliberately out of scope — §1 of the same todo.
 """
 
 import logging
@@ -32,7 +32,7 @@ def evict_caches_for_token(token: str, actor_wide: bool = True) -> bool:
     """Drop MCP cache state keyed by ``token``. True if something was cached.
 
     ``actor_wide=False`` pops only the token entry (refresh-token rotation);
-    the default also evicts the owning actor's cached wrapper and trust
+    the default also evicts the owning actor's other tokens and its trust
     entries, which revocation needs.
     """
     if not token:

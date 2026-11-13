@@ -880,6 +880,13 @@ class AuthenticatedSubscriptionManager:
         """Get inbound subscriptions this view may see."""
         return self._own_rows(self._manager.inbound_subscriptions)
 
+    def get_subscriptions_by_peer(self) -> dict[str, Any]:
+        """The manager's map, limited to the keys this view may see: every
+        key in owner mode, a peer view its own, a client view its trust's
+        peer id and its client id."""
+        groups = self._manager.get_subscriptions_by_peer()
+        return {g.peer_id: g for g in self._own_rows(list(groups.values()))}
+
 
 class AuthenticatedActorView:
     """A view of an actor with enforced permission checks.

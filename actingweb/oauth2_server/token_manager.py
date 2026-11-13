@@ -1775,7 +1775,8 @@ class ActingWebTokenManager:
                 # Evict whatever the delete did, raise included: a token of a
                 # deleted client must not keep authenticating from this
                 # process's cache (per process; see revoke_token). Only the
-                # token's entry here; the actor's wrapper goes once, below.
+                # token's entry here; the actor's other entries go once,
+                # below.
                 evict_caches_for_token(name, actor_wide=False)
 
         def remove_refresh(name: str, _data: dict[str, Any]) -> bool:
@@ -1862,8 +1863,8 @@ class ActingWebTokenManager:
                 revoked_count += 1
                 logger.debug(f"Revoked {kind} token {_mask_token(token_name)} {scope}")
 
-        # Once per client, not once per token: the process-wide generation
-        # bump this triggers is what invalidates the actor's wrapper.
+        # Once per client, not once per token: it drops the actor's token and
+        # trust entries, and its generation bump refuses any fill in flight.
         evict_caches_for_actor(actor_id)
 
         if revoked_count > 0:

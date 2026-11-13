@@ -14,6 +14,12 @@ Evaluation Notes say how.
 
 ## Update Log
 
+- **2026-11-12, from the `subs_list` plan's redraft** (owner): that plan
+  adds no `rewrite_email` keyword to `Actor.__init__`; its MCP loads pass the
+  one `Actor.get` already has, through `_load_actor`. This plan removes the
+  keyword from `get` and the argument from that helper; the order between
+  the two plans is no longer hard. "This plan", Decisions and the Phase's
+  `actor.py` item say so; nothing else here is redrafted.
 - **2026-11-06**: Six plans, not five: the wire baseline
   (`2026-11-06-subscription-wire-baseline.md`) lands between the security
   plan and the `subs_list` plan (owner). This plan re-records no wire
@@ -67,9 +73,12 @@ on both backends, and `git show --stat HEAD -- tests/integration/wire` is
 empty for each commit; a changed recording in this plan's PR is a regression
 to explain.
 
-**This plan: fifth.** It needs the `subs_list` plan merged, because it
-removes the `rewrite_email` keyword that plan adds to `Actor.__init__` and
-passes at the MCP loads in `handlers/mcp.py`, `_race_winner` included. It
+**This plan: fifth.** It follows the `subs_list` plan, whose MCP loads pass
+`rewrite_email=False` to `Actor.get` through one helper
+(`handlers/mcp.py`, `_load_actor`); this plan removes the keyword from `get`
+and the argument from that helper. [Updated 2026-11-12: that plan no longer
+adds the keyword to `Actor.__init__`, so the dependency is a shared call
+site, not a hard order.] It
 needs nothing from the `ListAttribute` plan and could swap places with it.
 Nothing in the specification plan depends on it.
 
@@ -126,9 +135,9 @@ Deduced from those and from the review; confirm at approval:
 - **The sweep is `actingweb-unique-creators creator-to-email`**: the wording
   of the existing `resolve --default-creator-to-email`, which says the
   direction. It prints actor ids, not addresses, unless asked.
-- **`rewrite_email` is removed** from `Actor.__init__` (added by the
-  `subs_list` plan), from `Actor.get` (`actor.py:374-379`), and from the MCP
-  loads. Neither keyword is released or documented.
+- **`rewrite_email` is removed** from `Actor.get` and from the MCP load
+  helper `_load_actor` (the `subs_list` plan's; [Updated 2026-11-12] it adds
+  nothing to `Actor.__init__`). Neither keyword is released or documented.
 
 ## What We're NOT Doing
 
@@ -389,8 +398,8 @@ changes.
     table.
 - `actingweb/actor.py`
   - `get()` (`:374-425`): the email check and `_email_held_elsewhere`
-    (`:356-372`) are removed, with the `rewrite_email` keyword here and on
-    `__init__`. A load is the row read.
+    (`:356-372`) are removed, with the `rewrite_email` keyword here. A load
+    is the row read.
   - `get_from_creator`: the call at `:522` loses its argument. The enforced
     branch still reads the row at `:507` and again inside `get()`; that is
     left as it is.

@@ -50,9 +50,7 @@ class TestMcpBridge:
         actor_id = f"mcp{uuid.uuid4().hex}"
         deletion.mark_actor_deleted(actor_id, config)
         try:
-            result = handler._get_or_create_actor_cached(
-                actor_id, {"email": uuid_email()}, 0.0
-            )
+            result = handler._get_or_create_actor(actor_id, {"email": uuid_email()})
             assert result is None
             assert Actor(actor_id=actor_id, config=config).id is None
             assert deletion.get_deletion_status(actor_id, config) == (
@@ -87,7 +85,7 @@ class TestMcpBridge:
             patch.object(Actor, "create", other_request_wins),
             pytest.raises(DbError),
         ):
-            handler._get_or_create_actor_cached(actor_id, {"email": uuid_email()}, 0.0)
+            handler._get_or_create_actor(actor_id, {"email": uuid_email()})
 
 
 class TestSignInRoutes:

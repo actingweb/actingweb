@@ -92,6 +92,15 @@ def is_resource_not_found(e: BaseException) -> bool:
     return "ResourceNotFound" in text or "Requested resource not found" in text
 
 
+def is_table_missing(e: BaseException) -> bool:
+    """Whether a PynamoDB error says the table does not exist, by its
+    response code or type only (no text match): for paths where a "missing"
+    answer turns a fault into success (the clean-ups' "holds none")."""
+    if getattr(e, "cause_response_code", None) == "ResourceNotFoundException":
+        return True
+    return type(e).__name__ == "TableDoesNotExist"
+
+
 LOOKUP_BACKFILL_PREFIX = "#meta#backfill#"
 LOOKUP_CONFIGURED_KEY = "#meta#configured"
 LOOKUP_META_ACTOR = "#meta"

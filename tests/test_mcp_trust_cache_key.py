@@ -8,7 +8,7 @@ client's trust on the same actor -- a demonstrated authorization bypass,
 not a display bug (see thoughts/research/2026-07-30-mcp-trust-cache-crosses-clients.md).
 
 These tests exercise the real module-global caches, the real
-`authenticate_and_get_actor_cached()` / `_get_or_create_actor_cached()` /
+`authenticate_and_get_actor_cached()` / `_get_or_create_actor()` /
 `_lookup_mcp_trust_relationship()`, and the real `RuntimeContext`. Only the
 storage and OAuth2 boundaries are mocked, matching the research document's
 independent reproduction (R1).
@@ -67,7 +67,15 @@ class FakeCoreActor:
     def __init__(self, actor_id=None, config=None):
         self.id = actor_id
         self.config = config
-        self.actor = {"id": actor_id, "creator": "user@example.com"}
+        self.actor = (
+            {"id": actor_id, "creator": "user@example.com"} if actor_id else None
+        )
+
+    def get(self, actor_id=None, *, rewrite_email=True):
+        """What ``_load_actor`` calls: every actor id has a row."""
+        self.id = actor_id or self.id
+        self.actor = {"id": self.id, "creator": "user@example.com"}
+        return self.actor
 
 
 TOKENS = {
@@ -114,7 +122,7 @@ def _patches(cfg):
 
 
 class TrustCacheTestCase(unittest.TestCase):
-    """Base class: clears all three module-global MCP caches around every test."""
+    """Base class: clears both module-global MCP caches around every test."""
 
     def setUp(self) -> None:
         self._clear_caches()
@@ -126,7 +134,6 @@ class TrustCacheTestCase(unittest.TestCase):
     @staticmethod
     def _clear_caches() -> None:
         mcp_mod._token_cache.clear()
-        mcp_mod._actor_cache.clear()
         mcp_mod._trust_cache.clear()
         for key in mcp_mod._cache_stats:
             mcp_mod._cache_stats[key] = 0
@@ -210,12 +217,14 @@ class TestIdentitySequence(TrustCacheTestCase):
             mock.patch.object(
                 mcp_mod,
                 "_trust_cache_get",
-                side_effect=lambda key: legacy_get(key[0], key[1]),
+                side_effect=lambda key, config: legacy_get(key[0], key[1]),
             ),
             mock.patch.object(
                 mcp_mod,
                 "_trust_cache_put",
-                side_effect=lambda key, trust: legacy_put(key[0], key[1], trust),
+                side_effect=lambda key, trust, config: legacy_put(
+                    key[0], key[1], trust
+                ),
             ),
         ):
             for token in ["token-A", "token-B", "token-A"]:
@@ -265,8 +274,14 @@ class TestCachedNoneIsPerClient(TrustCacheTestCase):
         self.assertEqual(ctx_none2.peer_id, "")
 
 
-class TestActorExpiryEviction(TrustCacheTestCase):
-    def test_actor_expiry_evicts_only_that_actors_tuples(self) -> None:
+class TestTrustExpiryEviction(TrustCacheTestCase):
+    @staticmethod
+    def _age(key: tuple[str, str]) -> None:
+        mcp_mod._trust_cache[key]["cached_at"] = (
+            time.time() - mcp_mod._TRUST_CACHE_TTL - 1
+        )
+
+    def test_trust_expiry_evicts_only_the_expired_tuples(self) -> None:
         self.run_request("token-A")
         self.run_request("token-B")
         self.run_request("token-other-actor")
@@ -280,10 +295,9 @@ class TestActorExpiryEviction(TrustCacheTestCase):
             },
         )
 
-        # Force actor-1's actor-cache entry to look expired.
-        mcp_mod._actor_cache[ACTOR_ID]["last_accessed"] = (
-            time.time() - mcp_mod._cache_ttl - 1
-        )
+        # Positive entries expire by their own TTL; age both of actor-1's.
+        self._age((ACTOR_ID, "client-A"))
+        self._age((ACTOR_ID, "client-B"))
 
         handler = make_mcp_handler(cfg=self.cfg)
         handler._cleanup_expired_cache_entries()
@@ -292,19 +306,16 @@ class TestActorExpiryEviction(TrustCacheTestCase):
         self.assertNotIn((ACTOR_ID, "client-A"), remaining)
         self.assertNotIn((ACTOR_ID, "client-B"), remaining)
         self.assertIn((OTHER_ACTOR_ID, "client-A"), remaining)
-        self.assertNotIn(ACTOR_ID, mcp_mod._actor_cache)
 
     def test_scheduler_trigger_fires_cleanup(self) -> None:
         self.run_request("token-A")
-        mcp_mod._actor_cache[ACTOR_ID]["last_accessed"] = (
-            time.time() - mcp_mod._cache_ttl - 1
-        )
+        self._age((ACTOR_ID, "client-A"))
         # Force the monotonic cleanup deadline to be in the past so the next
         # request trips it.
         mcp_mod._next_cleanup_at = 0.0
 
         # One more authenticated request should trip the scheduler and
-        # evict the now-stale actor before doing its own fresh lookup.
+        # evict the stale entry before doing its own fresh lookup.
         self.run_request("token-B")
 
         self.assertNotIn((ACTOR_ID, "client-A"), mcp_mod._trust_cache)
@@ -318,7 +329,7 @@ class TestClearTokenFromCache(TrustCacheTestCase):
         found = mcp_mod.MCPHandler.clear_token_from_cache("token-A")
         self.assertTrue(found)
         self.assertEqual(mcp_mod._trust_cache, {})
-        self.assertNotIn(ACTOR_ID, mcp_mod._actor_cache)
+        self.assertNotIn("token-B", mcp_mod._token_cache)
 
         not_found = mcp_mod.MCPHandler.clear_token_from_cache("token-A")
         self.assertFalse(not_found)

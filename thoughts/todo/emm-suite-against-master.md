@@ -30,40 +30,23 @@ no library regression; five failing tests, all documented 3.16 changes Emm
 adopts on its branch, plus the pin guard deselected by design. **That list
 is the baseline** for the runs below until Emm's branch adopts them. The
 two worktrees exist and stay; the research note says how to re-point them
-at a plan's commit. The section below is what was known before it ran,
-kept because the run confirmed both points.
+at a plan's commit. What was known before it ran (Emm does not start
+until `with_legacy_property_index` goes; a fresh store stops at
+readiness) is confirmed there.
 
 ## Per-plan runs
 
-- **`peer-authorisation-fixes`, 2026-11-08:** the library worktree at
-  `0ce0112`, Emm's adoption worktree with the plan's two `subscriber` rows
-  (uncommitted, owner decision), environment 9. PostgreSQL 2 failed / 7406
-  passed, DynamoDB 3 failed / 54 passed: the baseline's failures by name.
-  Recorded in `verifications/2026-11-07-peer-authorisation-fixes.md`, with
-  Emm's adoption items (one new: Emm's connect flow subscribes twice after
-  a re-pair answering 201). Re-run on 2026-11-08 after that plan's
-  iteration (`d836bd0`), on `a8007e5` after the second, on `dca966f` after the third, on `376b71c` after the whole-branch review's fixes, on `d3fd713` after the audit's fixes on `244ccb9` after reverify-7's on `20abc3a` after reverify-8's on `16f5972` after reverify-9's on `09890b6` after reverify-10's on `03a0d8c` after reverify-11's on `ad95c79` after reverify-12's on `409adeb` after reverify-13's and on `999f3b6` after reverify-14's (environment 9): the same counts and failures.
+Recorded in each plan (verification or Iterations); all so far showed the
+baseline's failures by name and nothing else:
 
-## What was known before the first run
+- `peer-authorisation-fixes` (environment 9, last on `999f3b6`), with the
+  plan's two `subscriber` rows in Emm's adoption worktree (owner decision).
+- `grant-enforcement-per-route` (on `8adb9d6`).
+- `subs-list-cache-lifetime` (on `c738f21`); no new IAM action.
+- Not run for `subscription-wire-baseline` (no library change).
 
-Read on 2026-11-06, not run:
-
-- **Emm does not start on `master`.** `../actingweb_mcp/application.py:566`
-  calls `.with_legacy_property_index(enable=False)`, and that method now
-  always raises `RuntimeError` (`actingweb/interface/app.py:485-502`). No
-  test runs until the call is removed.
-- **A fresh test database probably stops at readiness.** Emm turns creator
-  uniqueness on (`application.py:561`), and 3.16 raises
-  `UniqueCreatorNotReady` until `actingweb-unique-creators enable --apply`
-  has run (`docs/migration/v3.16.rst`, the opening note). Nothing in Emm's
-  code or scripts names the command or the exception.
-- **Emm's own todo for the pin predates both.**
-  `../actingweb_mcp/thoughts/todo/actingweb-3-16-pin.md` (filed 2026-10-29)
-  covers the account marking and the fault contract, not the removed call or
-  the readiness step.
-
-So the first run is Emm's 3.16 adoption, done on a branch in Emm, not a
-plain test run. That branch is what every later run uses.
+Still to run: `attribute-list-v2-port`, `email-as-creator-at-write-time`,
+`spec-1-5`.
 
 ## How a run is done
 
@@ -109,9 +92,9 @@ main checkout moves and Emm's working environment stays on 3.15.1 (owner,
   on branch `actingweb-3-16-adoption` in Emm, uncommitted adoption edits
   in it). A run on a plan's branch re-points the library worktree and
   reinstalls, per the research note.
-- Emm's preview environment and Docker free; environment 8 is the one the
-  runs use.
+- Emm's preview environment and Docker free; environment 9 is the one the
+  runs use (8 was the `master` run's).
 
-Delete this file when the last of the six plans has merged with its run
+Delete this file when the last of the 3.16 plans has merged with its run
 recorded. The order and the rule that each plan waits on its run are in
 [`INDEX.md`](INDEX.md), "Planned for 3.16".

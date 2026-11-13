@@ -357,3 +357,63 @@ class TestVerification2:
     ) -> None:
         _, _, written = TestRequestResync()._run(actor, missed_ids={"s1", "s3"})
         assert written == [["p3:s3"]]
+
+
+class TestVerification3:
+    """Verification re-run 3 (OV8, OV9, CR6)."""
+
+    def test_a_scalar_shaped_like_an_itemless_diff_with_an_object_is_filtered(
+        self, actor
+    ) -> None:
+        actor.property_lists.exists.side_effect = lambda name: False
+        rules = {
+            "patterns": ["*"],
+            "operations": ["read"],
+            "excluded_patterns": ["profile/operation/secret"],
+        }
+        value = {"list": "x", "operation": {"secret": 1, "ok": 2}}
+        with mock.patch.object(
+            type(actor), "grant_for", return_value=_grant("p1", rules)
+        ):
+            out = actor.filter_subscription_blob(
+                "p1", WHOLE, json.dumps({"profile": value})
+            )
+        assert json.loads(out) == {"profile": {"list": "x", "operation": {"ok": 2}}}
+
+    def test_a_whole_target_record_stays(self, actor) -> None:
+        test = TestRequestResync()
+        written: list[list[str]] = []
+        subs = test._subs()
+
+        def send(target, subtarget, batch, suspension, *, missed, fold_faults, widen):  # noqa: ANN001
+            return len(batch)
+
+        actor.subs_list = None
+        with (
+            mock.patch.object(actor, "get_subscriptions", return_value=subs),
+            mock.patch.object(actor, "_send_resync_callbacks", side_effect=send),
+            mock.patch.object(actor, "grant_for", side_effect=lambda p: _grant(p)),
+            mock.patch.object(actor, "_resync_pending", return_value=["p1:s1"]),
+            mock.patch.object(
+                actor,
+                "_write_resync_pending",
+                side_effect=lambda t, s, m: written.append(list(m)),
+            ),
+        ):
+            actor.request_resync("properties", "notes")
+        assert written == [["p1:s1"]]
+
+    def test_repair_keys_announces_a_reference(self) -> None:
+        from actingweb.interface.property_store import NotifyingListProperty
+
+        core = mock.Mock()
+        core.get_metadata.return_value = {"length": 2}
+        core.config = mock.Mock(list_item_span_threshold=100)
+        core.repair_keys.return_value = {}
+        core.sweep_span_orphans.return_value = {}
+        actor_ = mock.Mock()
+        lst = NotifyingListProperty(core, "notes", actor_)
+        lst.repair_keys()
+        lst.sweep_span_orphans()
+        for call in actor_.register_diffs.call_args_list:
+            assert json.loads(call.kwargs["blob"])["spanned"] is True

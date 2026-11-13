@@ -1011,6 +1011,14 @@ CHANGED
   rebuild warnings for one subscription
   (``docs/guides/troubleshooting.rst``).
 
+- **Behavior change: one subscription per name writes a replica.** A peer
+  subscribed to both on its whole ``properties`` target and on a subtarget
+  delivered every change twice, and the replica applied both (an append was
+  held twice). The subtarget subscription's diffs and baselines are no longer
+  stored when a whole-target subscription to the same peer exists
+  (``ReplicaApplyResult.skipped``); its subscription data hooks still run.
+  **Check:** a hook that relied on the subtarget subscription's storage.
+
 - **Behavior change: a write below a property merges at a resource-level
   subscriber, and a subtarget-level diff is stored under the subtarget.**
   A resource-level value was stored as top-level scalars; it is now merged
@@ -1059,8 +1067,10 @@ CHANGED
   computed from the stored grant.** It deletes what the new grant no longer
   lets the subscriber read, by the publisher's own matcher: scalars and
   lists, an added exclusion and a dropped ``read`` included, for a peer
-  subscribed to the whole target, and rewrites an object without its
-  excluded parts. A grant it cannot evaluate deletes nothing.
+  subscribed to its ``properties`` target at any level, and rewrites an
+  object without its excluded parts; when another target of the same peer
+  is also subscribed (stored in the same replica), only names matching a
+  dropped pattern go. A grant it cannot evaluate deletes nothing.
   ``permission_changes`` gains ``deleted_names`` (what was deleted; an
   exclusion-based deletion is there, not in ``revoked_patterns``) and
   ``not_evaluated`` (why nothing was evaluated, else ``None``);

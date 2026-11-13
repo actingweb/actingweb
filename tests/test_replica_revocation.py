@@ -113,9 +113,7 @@ class TestEarlyExits:
         return config
 
     def test_the_flag_off_reads_nothing(self, remote):
-        with patch(
-            "actingweb.replica_revocation.subscribes_to_whole_properties"
-        ) as sub:
+        with patch("actingweb.replica_revocation.subscribes_to_properties") as sub:
             assert (
                 plan_cleanup(self._config(False), ACTOR, remote, None, _grant()) is None
             )
@@ -124,7 +122,7 @@ class TestEarlyExits:
     def test_no_whole_target_subscription_reads_no_replica(self, remote):
         with (
             patch(
-                "actingweb.replica_revocation.subscribes_to_whole_properties",
+                "actingweb.replica_revocation.subscribes_to_properties",
                 return_value=False,
             ),
             patch.object(remote, "list_scalar_names") as names,
@@ -138,7 +136,7 @@ class TestEarlyExits:
         grant = _grant(patterns=["*"], operations=["read"])
         with (
             patch(
-                "actingweb.replica_revocation.subscribes_to_whole_properties",
+                "actingweb.replica_revocation.subscribes_to_properties",
                 return_value=True,
             ),
             patch.object(remote, "list_scalar_names") as names,
@@ -228,3 +226,39 @@ class TestRestoreByName:
         ):
             assert glob_match(name, pattern)
         assert not glob_match("aXb", escaped[0])
+
+
+class TestVerification3:
+    """Verification re-run 3 (CR3, OV6)."""
+
+    def test_a_subtarget_only_subscription_is_cleaned(self, remote):
+        from actingweb.replica_revocation import subscribes_to_properties
+
+        listing = MagicMock()
+        listing.fetch.return_value = [
+            {"peerid": PEER, "callback": True, "target": "properties", "subtarget": "x"}
+        ]
+        with patch("actingweb.db.get_subscription_list", return_value=listing):
+            assert subscribes_to_properties(MagicMock(), ACTOR, PEER) is True
+
+    def test_a_shared_bucket_loses_only_names_of_a_dropped_pattern(self, remote):
+        from actingweb.replica_revocation import plan_cleanup
+
+        old = _grant(patterns=["notes", "private*", "color"], operations=["read"])
+        new = _grant(patterns=["notes", "color"], operations=["read"])
+        config = remote._actor.config  # noqa: SLF001
+        with (
+            patch(
+                "actingweb.replica_revocation.subscribes_to_properties",
+                return_value=True,
+            ),
+            patch(
+                "actingweb.replica_revocation.stores_another_target",
+                return_value=True,
+            ),
+        ):
+            plan = plan_cleanup(config, ACTOR, remote, old, new)
+        assert isinstance(plan, RevokedNames)
+        # settings is not readable under the new grant either, but no dropped
+        # pattern names it: another target may have stored it.
+        assert sorted(plan.names) == ["private", "private_list"]

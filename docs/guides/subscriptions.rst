@@ -608,10 +608,10 @@ skips the interval, never a rebuild already running.
 
 A diff in the middle of a list (``insert``, ``update``, ``delete``,
 ``pop``, ``remove``) reads the replica's list, which costs O(n); appends do
-not. Two subscriptions to one peer that overlap (a whole-target and a
-subtarget subscription) both deliver every change: a ``remove`` or a
-value-addressed ``update`` delivered twice is a no-op the second time, but
-an ``append`` is held twice until the specification binds the two.
+not. When a peer is subscribed to both on its whole ``properties`` target
+and on a subtarget, only the whole-target subscription writes the replica
+(``ReplicaApplyResult.skipped`` for the other); the subtarget
+subscription's hooks still run.
 
 **What a hook receives.** A subscription data hook (and a
 ``callback_hook("subscription")``, in ``data["data"]``) receives the

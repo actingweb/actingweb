@@ -1818,10 +1818,11 @@ diffs cleared up to that sequence; what the baseline no longer carries is
 deleted. At most one attempt a minute per subscription; an owed rebuild runs
 on the next callback or ``sync_subscription()`` after that. A diff in the
 middle of a list reads the replica's list (O(n)); appends do not. A
-resource-level diff is merged at its path. Two subscriptions of one peer
-that overlap (a whole-target and a subtarget subscription) both deliver an
-append, and the replica holds it twice until the specification change that
-binds them.
+resource-level diff is merged at its path. When a peer is subscribed to
+both on its whole ``properties`` target and on a subtarget, only the
+whole-target subscription writes the replica: the subtarget subscription's
+diffs and baselines are not stored (its hooks still run), so no change is
+applied twice.
 
 **What to check in your application.**
 

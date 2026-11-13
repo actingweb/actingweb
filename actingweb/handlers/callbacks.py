@@ -960,6 +960,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     level = {
                         "subtarget": subscription.get("subtarget") or None,
                         "resource": subscription.get("resource") or None,
+                        "target": subscription.get("target") or "properties",
                     }
                     if cb.callback_type == CallbackType.RESYNC:
                         applied = store.apply_resync_data(cb.data, **level)
@@ -971,7 +972,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                             "lists"
                         ]
                         missing = [n for n in owed if n not in applied]
-                        if applied.failed or missing:
+                        if not applied.skipped and (applied.failed or missing):
                             out_of_step = {
                                 "list": (applied.failed or missing)[0],
                                 "operation": "resync",

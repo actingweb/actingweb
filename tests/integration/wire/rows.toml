@@ -1079,8 +1079,8 @@ test = "test_wire_delivery.py::test_wd15_target_and_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "B subscribed to the target and to the subtarget notes, one SDK append: two callbacks, each its own sequence 1; each is applied to B's list notes, which holds the item twice (the overlap the specification plan ends)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "B subscribed to the target and to the subtarget notes, one SDK append: two callbacks, each its own sequence 1; the whole-target subscription stores it and the subtarget subscription, which that one covers, stores nothing, so B's list notes holds the item once."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a subtarget subscription covered by a whole-target one stores nothing: one subscription per name writes the replica (attribute-list-v2-port:4)"]
 
 [rows."WD16"]
 test = "test_wire_delivery.py::test_wd16_callback_row_removed"

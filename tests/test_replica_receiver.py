@@ -207,7 +207,7 @@ class TestOutOfStep:
         [
             (_diff("n", "delete", index=9), "out of range"),
             (_diff("n", "update", index=9, item=1), "out of range"),
-            (_diff("n", "insert", index=9, item=1), "out of range"),
+            (_diff("n", "insert", index=True, item=1), "not an index"),
             (_diff("n", "pop", index=9), "out of range"),
             (_diff("n", "append", spanned=True, bytes=9, length=2), "spanned"),
         ],
@@ -385,7 +385,6 @@ class TestVerification2Findings:
         [
             (["a", "b", "c"], _diff("n", "update", old_item="x", item="y", index=1)),
             (["x", "q", "x"], _diff("n", "update", old_item="x", item="y", index=1)),
-            (["x", "x"], _diff("n", "update", old_item="x", item="y")),
         ],
     )
     def test_an_update_whose_item_is_not_held_once_is_out_of_step(
@@ -403,3 +402,71 @@ class TestVerification2Findings:
             {"notes": {"_list": True, "items": [1]}}, subtarget="notes"
         )
         assert remote.list_all_lists() == []
+
+
+class TestVerification3Findings:
+    """Verification re-run 3 (OV5, OV11, CR1, CR2)."""
+
+    def test_a_subtarget_subscription_covered_by_a_whole_one_stores_nothing(self, env):
+        from unittest.mock import patch
+
+        remote, store, _ = env
+        with patch(
+            "actingweb.replica_revocation.subscribes_to_whole_properties",
+            return_value=True,
+        ):
+            r = remote.apply_callback_data(
+                _diff("n", "append", item=1), subtarget="n", target="properties"
+            )
+            b = remote.apply_resync_data([1, 2], subtarget="n", target="properties")
+        assert r.skipped and b.skipped
+        assert not store.names(ACTOR, remote.bucket)
+
+    def test_a_whole_target_or_other_target_subscription_is_not_skipped(self, env):
+        from unittest.mock import patch
+
+        remote, _, _ = env
+        with patch(
+            "actingweb.replica_revocation.subscribes_to_whole_properties",
+            return_value=True,
+        ):
+            r = remote.apply_callback_data({"a": {"v": 1}}, target="properties")
+            o = remote.apply_callback_data({"v": 2}, subtarget="x", target="meta")
+        assert not r.skipped and not o.skipped
+        assert remote.get_value("a") == {"v": 1}
+
+    def test_equal_rows_without_a_position_take_the_first(self, env):
+        remote, _, _ = env
+        remote.set_list("n", ["x", "x", "z"])
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "update", old_item="x", item="y")}
+        )
+        assert r.out_of_step is None
+        assert remote.get_list("n") == ["y", "x", "z"]
+        r = remote.apply_callback_data({"n": _diff("n", "delete", old_item="x")})
+        assert r.out_of_step is None
+        assert remote.get_list("n") == ["y", "z"]
+
+    @pytest.mark.parametrize(
+        ("diff", "after"),
+        [
+            (_diff("n", "insert", index=-1, item="i"), ["a", "b", "i", "c"]),
+            (_diff("n", "insert", index=9, item="i"), ["a", "b", "c", "i"]),
+            (_diff("n", "insert", index=-9, item="i"), ["i", "a", "b", "c"]),
+            (_diff("n", "update", index=-1, item="u"), ["a", "b", "u"]),
+            (_diff("n", "delete", index=-1), ["a", "b"]),
+        ],
+    )
+    def test_indices_are_read_as_python_reads_them(self, env, diff, after):
+        remote, _, _ = env
+        remote.set_list("n", ["a", "b", "c"])
+        r = remote.apply_callback_data({"n": diff})
+        assert r.out_of_step is None
+        assert remote.get_list("n") == after
+
+    def test_a_subtarget_baseline_that_is_an_array_is_a_list(self, env):
+        remote, _, _ = env
+        r = remote.apply_resync_data([1, 2], subtarget="notes")
+        assert r.failed == []
+        assert remote.get_list("notes") == [1, 2]
+        assert remote.get_value("notes") is None

@@ -73,12 +73,16 @@ class ReplicaApplyResult(dict[str, Any]):
     - ``failed``: the names whose entry could not be stored (not refused
       names: those are the peer's own), for a baseline that must not count
       as a rebuild.
+    - ``skipped``: nothing was stored because a subscription to the peer's
+      whole ``properties`` target stores the same names (one subscription
+      per name writes the replica).
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.out_of_step: dict[str, Any] | None = None
         self.failed: list[str] = []
+        self.skipped = False
 
 
 # The longest DynamoDB sort key is 1,024 bytes: "{bucket}:list:{name}-#"
@@ -438,6 +442,7 @@ class RemotePeerStore:
         *,
         subtarget: str | None = None,
         resource: str | None = None,
+        target: str | None = None,
     ) -> ReplicaApplyResult:
         """Apply a subscription callback's data to the replica.
 
@@ -477,6 +482,8 @@ class RemotePeerStore:
         """
         from .db.utils import sanitize_json_data
 
+        if self._covered(target, subtarget):
+            return self._skipped()
         data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:callback")
         results = ReplicaApplyResult()
         out_of_step: dict[str, Any] | None = None
@@ -546,6 +553,26 @@ class RemotePeerStore:
             )
             results.out_of_step = out_of_step
         return results
+
+    def _covered(self, target: str | None, subtarget: str | None) -> bool:
+        """Whether a subtarget-level ``properties`` subscription's data is
+        stored by a subscription to the peer's whole ``properties`` target
+        too: then only that one writes the replica, so no diff is applied
+        twice (3.16; overlapping subscriptions doubled every append). Only
+        when ``target`` is given; one subscription read, a fault raises."""
+        if not subtarget or target != "properties":
+            return False
+        from .replica_revocation import subscribes_to_whole_properties
+
+        return subscribes_to_whole_properties(
+            self._actor.config, str(self._actor.id), self._peer_id
+        )
+
+    @staticmethod
+    def _skipped() -> ReplicaApplyResult:
+        result = ReplicaApplyResult()
+        result.skipped = True
+        return result
 
     def _guarded(self, key: str, apply: Any) -> dict[str, Any]:
         """Run one key's application: out of step and refused keys become
@@ -729,8 +756,13 @@ class RemotePeerStore:
 
         if operation == "insert" and "item" in data and "index" in data:
             idx = data["index"]
-            if not isinstance(idx, int) or not 0 <= idx <= len(list_attr):
-                raise ReplicaOutOfStep(list_name, f"insert index {idx!r} out of range")
+            if not isinstance(idx, int) or isinstance(idx, bool):
+                raise ReplicaOutOfStep(list_name, f"insert index {idx!r} not an index")
+            # As ``list.insert`` (and the publisher's SDK, which sends the
+            # caller's index): a negative index counts from the end, and one
+            # past either end clamps.
+            length = len(list_attr)
+            idx = max(0, length + idx) if idx < 0 else min(idx, length)
             list_attr.insert(idx, data["item"])
             return {"operation": "insert", "index": idx, "success": True}
 
@@ -756,6 +788,11 @@ class RemotePeerStore:
                 if matches and isinstance(idx, int) and idx in matches:
                     list_attr[idx] = data["item"]
                     return {"operation": "update", "index": idx, "success": True}
+                if matches and idx is None:
+                    # Equal rows and no position (``update_by_handle``,
+                    # ``update_where``): any of them gives the same list.
+                    list_attr[matches[0]] = data["item"]
+                    return {"operation": "update", "index": matches[0], "success": True}
                 if not matches and data["item"] in values:
                     return {"operation": "update", "success": True, "noop": True}
                 raise ReplicaOutOfStep(
@@ -763,6 +800,8 @@ class RemotePeerStore:
                     "update of an item the replica does not hold once"
                     + (f" at index {idx!r}" if idx is not None else ""),
                 )
+            if isinstance(idx, int) and not isinstance(idx, bool) and idx < 0:
+                idx += len(list_attr)  # a negative index counts from the end
             if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
                 raise ReplicaOutOfStep(list_name, f"update index {idx!r} out of range")
             list_attr[idx] = data["item"]
@@ -814,9 +853,16 @@ class RemotePeerStore:
                 if isinstance(idx, int) and idx in matches:
                     del list_attr[idx]
                     return {"operation": "delete", "index": idx, "success": True}
+                if idx is None:
+                    # Equal rows and no position: any of them gives the
+                    # same list.
+                    del list_attr[matches[0]]
+                    return {"operation": "delete", "index": matches[0], "success": True}
                 raise ReplicaOutOfStep(
                     list_name, f"delete of a duplicated item at index {idx!r}"
                 )
+            if isinstance(idx, int) and not isinstance(idx, bool) and idx < 0:
+                idx += len(list_attr)  # a negative index counts from the end
             if not isinstance(idx, int) or not 0 <= idx < len(list_attr):
                 raise ReplicaOutOfStep(list_name, f"delete index {idx!r} out of range")
             del list_attr[idx]
@@ -858,10 +904,11 @@ class RemotePeerStore:
 
     def apply_resync_data(
         self,
-        data: dict[str, Any],
+        data: dict[str, Any] | list[Any],
         *,
         subtarget: str | None = None,
         resource: str | None = None,
+        target: str | None = None,
     ) -> ReplicaApplyResult:
         """Apply a baseline, replacing only the properties it carries (other
         subscriptions' data in the same bucket stays).
@@ -880,6 +927,8 @@ class RemotePeerStore:
         """
         from .db.utils import sanitize_json_data
 
+        if self._covered(target, subtarget):
+            return self._skipped()
         data = sanitize_json_data(data, log_source=f"peer:{self._peer_id}:resync")
         results = ReplicaApplyResult()
         if subtarget and resource:
@@ -893,6 +942,10 @@ class RemotePeerStore:
             return results
         entries: Any = data
         if subtarget:
+            if isinstance(data, list):
+                # A list's baseline at subtarget level is its items array
+                # (``GET /properties/<list>``).
+                data = {subtarget: {"_list": True, "items": data}}
             own = _wraps_list(data, subtarget, baseline=True)
             entries = data if own else {subtarget: data}
         for key, value in entries.items():

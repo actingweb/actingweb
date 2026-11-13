@@ -1908,3 +1908,91 @@ reports it); 17 (old-layout read cost, filed in
 fallback through a stale capability cache stores a scalar's keyed state as
 an object until the next change; a 3.15 receiver applies `delete` by index
 (it received REST deletes as scalars before).
+
+### 2026-11-14, after verification thoughts/verifications/2026-11-14-attribute-list-v2-port-3.md
+
+#### 14. One subscription per name writes the replica (OV5, OV1, OV2)
+
+**Category**: Decision changed (the plan accepted the doubling until the
+specification plan; WD15)
+
+**What changed**: `RemotePeerStore.apply_callback_data` and
+`apply_resync_data` take the subscription's `target`; a `properties`
+subscription at subtarget or resource level stores nothing when the actor
+also subscribes to the peer's whole `properties` target
+(`ReplicaApplyResult.skipped`; its hooks still run, the processor still
+sequences it). Every call site passes the target; a skipped apply neither
+owes nor settles a rebuild, and a skipped rebuild sweeps nothing.
+
+**Files affected**: `actingweb/remote_storage.py`,
+`actingweb/handlers/callbacks.py`, `actingweb/interface/subscription_manager.py`;
+`tests/test_replica_receiver.py`. `WD15` re-recorded (owned by `:4`): the
+item is held once.
+
+**Rationale**: per-operation second-delivery rules cannot cover `append`,
+`insert`, `extend` and `pop`, and the ones added in iteration 2 were defeated
+by traffic between the two deliveries.
+
+#### 15. The rebuild after a dropped batch (OV3, OV4, CR4)
+
+**Category**: Verification fix
+
+**What changed**: the names a dropped batch deleted (empty values,
+`delete_all`) are owed, so the rebuild deletes them even where it cannot
+sweep the bucket; the rebuild stays owed when the recorded sequence changed
+at all while it ran (not only above the baseline's); the sync paths' resync
+handler settles an owed rebuild only when the baseline stored everything and
+carried each owed list, as the callback handler does.
+
+**Files affected**: `actingweb/callback_processor.py` (`_deleted_names`),
+`actingweb/interface/subscription_manager.py`; `tests/test_replica_rebuild.py`.
+
+#### 16. Receiver shapes (OV11, CR1, CR2)
+
+**Category**: Verification fix
+
+**What changed**: a value-addressed update or delete without an index takes
+the first of equal rows (equal values give the same list); an insert index
+is read as `list.insert` reads it (negative from the end, clamped), and a
+negative update or delete index counts from the end; a subtarget-level
+baseline that is a JSON array is the list.
+
+**Files affected**: `actingweb/remote_storage.py`;
+`tests/test_replica_receiver.py`, `tests/test_remote_storage.py`.
+
+#### 17. Revocation scope (CR3, OV6)
+
+**Category**: Verification fix
+
+**What changed**: the cleanup covers a `properties` subscription at any level
+(`subscribes_to_properties`); where another target's subscription shares the
+bucket it deletes only names matching a pattern the grant dropped and that
+the new grant does not let the subscriber read (`revoked_by_patterns`, what
+pre-3.16 deleted), instead of nothing. Documented in the configuration guide
+and the CHANGELOG.
+
+**Files affected**: `actingweb/replica_revocation.py`,
+`docs/quickstart/configuration.rst`, `CHANGELOG.rst`;
+`tests/test_replica_revocation.py`, `tests/test_replica_rebuild.py`.
+
+#### 18. Smaller ones (OV8, OV9, CR6, CR10, the claim note)
+
+**Category**: Verification fix
+
+**What changed**: `request_resync` keeps a whole-target subscriber's miss
+record a resume wrote; an item-less list diff passes whole only for
+`delete_all`, `clear`, `pop` and `delete` with scalar values (and a
+non-string `operation` no longer raises inside the filter);
+`repair_keys()` and `sweep_span_orphans()` announce a reference (the
+replica rebuilds); the PostgreSQL batch-create docstring says the batch is
+rolled back; the lost-mark fallback ends only the claim its batch held.
+
+**Files affected**: `actingweb/actor.py`, `actingweb/interface/property_store.py`,
+`actingweb/db/postgresql/attribute.py`, `actingweb/callback_processor.py`;
+`tests/test_list_diff_resync_and_filter.py`, `tests/test_replica_rebuild.py`.
+
+**Accepted with a record**: OV7 (under steady traffic a rebuild is owed again
+each minute: throttled, cost and bounded staleness); OV10 (concurrent v2
+writers make a length wrong: a rebuild, no corruption); CR5 (a held
+`ListAttribute` instance keeps a settled old layout; owner-only, the store
+hands out an instance per access); CR7, CR8, CR9 (read cost).

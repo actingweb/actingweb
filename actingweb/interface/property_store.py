@@ -557,7 +557,9 @@ class NotifyingListProperty:
         ListProperty.repair_keys(). Registers a "metadata" diff, as
         compact() does, since a removed duplicate changes the list."""
         report = self._list_prop.repair_keys()
-        self._register_diff("metadata")
+        # Items may be gone: a reference, so subscribers rebuild (3.16; a
+        # plain metadata diff left them holding the removed duplicates).
+        self._register_diff("metadata", spanned_bytes=0)
         return report
 
     def sweep_span_orphans(self) -> dict[str, Any]:
@@ -566,7 +568,9 @@ class NotifyingListProperty:
         compact() does, since a removed broken or malformed head changes
         the list."""
         report = self._list_prop.sweep_span_orphans()
-        self._register_diff("metadata")
+        # A removed broken head changes the list: a reference (see
+        # repair_keys()).
+        self._register_diff("metadata", spanned_bytes=0)
         return report
 
     def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:

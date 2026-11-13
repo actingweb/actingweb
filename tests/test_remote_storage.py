@@ -354,29 +354,17 @@ class TestRemotePeerStoreCallbackData:
         )
         assert remote.get_list("items") == ["dup", "new", "z"]
 
-    def test_apply_list_update_with_ambiguous_old_item_and_no_index_is_out_of_step(
-        self,
-    ):
-        """3.16 verification re-run 2: dropped silently before; the replica
-        cannot tell which row, so it is rebuilt."""
+    def test_apply_list_update_of_equal_rows_without_index_takes_the_first(self):
+        """3.16 (verification re-run 3): equal rows give the same list
+        whichever is updated (``update_by_handle`` and ``update_where`` send
+        no position)."""
         remote, _ = _replica()
         remote.set_list("items", ["dup", "dup"])
         result = remote.apply_callback_data(
             _diff("items", "update", old_item="dup", item="new")
         )
-        assert result.out_of_step is not None
-        assert remote.get_list("items") == ["dup", "dup"]
-
-    def test_apply_list_update_with_ambiguous_old_item_and_no_index_logs_a_warning(
-        self, caplog
-    ):
-        remote, _ = _replica()
-        remote.set_list("items", ["dup", "dup"])
-        with caplog.at_level("WARNING"):
-            remote.apply_callback_data(
-                _diff("items", "update", old_item="dup", item="n")
-            )
-        assert "out of step" in caplog.text
+        assert result.out_of_step is None
+        assert remote.get_list("items") == ["new", "dup"]
 
     def test_apply_list_update_with_null_old_item_applies_by_value(self):
         remote, _ = _replica()

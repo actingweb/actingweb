@@ -227,9 +227,9 @@ class TestVerification2:
             env.rebuild()
         assert env.replica.get_value("from_resources") == {"v": 1}
 
-    def test_revocation_is_not_evaluated_for_a_shared_bucket(self, env):
+    def test_revocation_of_a_shared_bucket_needs_a_dropped_pattern(self, env):
         from actingweb.peer_permissions import PeerPermissions
-        from actingweb.replica_revocation import NotEvaluated, plan_cleanup
+        from actingweb.replica_revocation import RevokedNames, plan_cleanup
 
         env.config.auto_delete_on_revocation = True
         grant = PeerPermissions(
@@ -239,7 +239,7 @@ class TestVerification2:
         )
         with (
             patch(
-                "actingweb.replica_revocation.subscribes_to_whole_properties",
+                "actingweb.replica_revocation.subscribes_to_properties",
                 return_value=True,
             ),
             patch(
@@ -247,13 +247,21 @@ class TestVerification2:
             ),
         ):
             plan = plan_cleanup(env.config, ACTOR, env.replica, None, grant)
-        assert isinstance(plan, NotEvaluated)
+        # No old grant, so no dropped pattern: nothing of the shared bucket goes
+        # (the full evaluation would have deleted every unreadable name).
+        assert isinstance(plan, RevokedNames) and plan.names == []
 
-    def test_a_callback_processed_during_the_rebuild_leaves_it_owed(self, env):
+    @pytest.mark.parametrize("meanwhile", [9, 5, 3])
+    def test_a_callback_processed_during_the_rebuild_leaves_it_owed(
+        self, env, meanwhile
+    ):
+        """Above, at or below the baseline's sequence (5): any callback
+        recorded while the rebuild ran may be applied twice or overwritten."""
         env.owe()
+        env.recorded["sequence"] = 1
 
         def bump(**_: Any) -> Any:
-            env.recorded["sequence"] = 9  # a callback recorded 9 meanwhile
+            env.recorded["sequence"] = meanwhile
             return {}
 
         env.baselines = [{}]
@@ -279,9 +287,51 @@ class TestVerification2:
         core.id = ACTOR
         core.config = config
         processor = CallbackProcessor(actor=ActorInterface(core))
+        processor.settle_rebuild(PEER, SUB, rebuilt=False)
+        row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
+        assert row is not None
+        processor._cas_state(PEER, SUB, row, {**row, "claimed_seq": 10, "version": 50})  # noqa: SLF001
         with patch.object(processor, "_mark_out_of_step", return_value=None):
             processor._mark_or_owe(  # noqa: SLF001
                 PEER, SUB, {"version": 0, "claimed_seq": 10}, 7, ["n"]
             )
         row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
         assert row is not None and row["claimed_seq"] == 7
+
+
+class TestVerification3:
+    """Verification re-run 3 (OV3, the claim note)."""
+
+    def test_a_dropped_batch_owes_what_it_deleted(self):
+        from actingweb.callback_processor import _deleted_names
+
+        assert sorted(
+            _deleted_names(
+                {
+                    "foo": "",
+                    "bar": None,
+                    "keep": {"v": 1},
+                    "notes": {"list": "notes", "operation": "delete_all"},
+                    "list:old": "",
+                }
+            )
+        ) == ["bar", "foo", "notes", "old"]
+        assert _deleted_names("not a dict") == []
+
+    def test_a_lost_mark_leaves_another_deliverys_claim_alone(self):
+        config, _store = make_config()
+        core = MagicMock()
+        core.id = ACTOR
+        core.config = config
+        processor = CallbackProcessor(actor=ActorInterface(core))
+        # Another delivery claimed through 20 after this batch's claim (10).
+        processor.settle_rebuild(PEER, SUB, rebuilt=False)
+        row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
+        assert row is not None
+        processor._cas_state(PEER, SUB, row, {**row, "claimed_seq": 20, "version": 99})  # noqa: SLF001
+        with patch.object(processor, "_mark_out_of_step", return_value=None):
+            processor._mark_or_owe(  # noqa: SLF001
+                PEER, SUB, {"version": 0, "claimed_seq": 10}, 7, ["n"]
+            )
+        row = processor._read_state_row(PEER, SUB)  # noqa: SLF001
+        assert row is not None and row["claimed_seq"] == 20

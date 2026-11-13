@@ -179,6 +179,56 @@ def stores_another_target(config: Any, actor_id: str, peer_id: str) -> bool:
     )
 
 
+def subscribes_to_properties(config: Any, actor_id: str, peer_id: str) -> bool:
+    """Whether ``actor_id`` holds a callback subscription to ``peer_id``'s
+    ``properties`` target at any level. One read; a fault raises."""
+    from .db import get_subscription_list
+
+    subscriptions = get_subscription_list(config).fetch(actor_id, strict=True) or []
+    return any(
+        s.get("peerid") == peer_id
+        and s.get("callback")
+        and s.get("target") == "properties"
+        for s in subscriptions
+        if isinstance(s, dict)
+    )
+
+
+def _patterns(grant: PeerPermissions | None) -> set[str]:
+    props = grant.properties if grant is not None else None
+    if not isinstance(props, dict):
+        return set()
+    patterns = props.get("patterns")
+    return {str(p) for p in patterns} if isinstance(patterns, list) else set()
+
+
+def revoked_by_patterns(
+    store: RemotePeerStore,
+    old_grant: PeerPermissions | None,
+    new_grant: PeerPermissions | None,
+) -> RevokedNames:
+    """For a replica bucket another target also stores into: only the names
+    matching a pattern the grant dropped, and that the new grant does not
+    let the subscriber read (what pre-3.16 deleted); names nothing of the
+    property grant decides are kept."""
+    gone = _patterns(old_grant) - _patterns(new_grant)
+    if not gone:
+        return RevokedNames()
+    rules = _property_rules(new_grant)
+
+    def revoked(name: str) -> bool:
+        if not any(glob_match(name, p) for p in gone):
+            return False
+        return isinstance(rules, NotEvaluated) or not readable(rules, name)
+
+    scalars = [n for n in store.list_scalar_names() if not n.startswith("list:")]
+    lists = store.list_all_lists(strict=True)
+    return RevokedNames(
+        scalars=[n for n in scalars if revoked(n)],
+        lists=[n for n in lists if revoked(n)],
+    )
+
+
 def plan_cleanup(
     config: Any,
     actor_id: str,
@@ -190,18 +240,17 @@ def plan_cleanup(
     nothing to evaluate. In order, each ending the work: the flag off (no
     read); no subscription to the peer's whole ``properties`` target; the
     grant's property rules unchanged (no replica read). A replica that also
-    holds another target's data (``stores_another_target``) is not evaluated:
-    the property grant does not decide those names."""
+    holds another target's data (``stores_another_target``) loses only the
+    names matching a dropped pattern (``revoked_by_patterns``): the property
+    grant does not decide the other target's names."""
     if not getattr(config, "auto_delete_on_revocation", False):
         return None
-    if not subscribes_to_whole_properties(config, actor_id, store._peer_id):  # noqa: SLF001
+    if not subscribes_to_properties(config, actor_id, store._peer_id):  # noqa: SLF001
         return None
     if old_grant is not None and old_grant.properties == new_grant.properties:
         return None
     if stores_another_target(config, actor_id, store._peer_id):  # noqa: SLF001
-        return NotEvaluated(
-            "the replica also holds data of a subscription to another target"
-        )
+        return revoked_by_patterns(store, old_grant, new_grant)
     return revoked_replica_names(store, new_grant)
 
 

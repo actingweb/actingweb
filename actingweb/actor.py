@@ -482,14 +482,25 @@ def _list_diff_shaped(value: Any) -> bool:
 
 
 _ITEMLESS_DIFF_KEYS = frozenset({"list", "operation", "length", "index"})
+_ITEMLESS_OPERATIONS = frozenset({"delete_all", "clear", "pop", "delete"})
 
 
 def _carries_no_items(value: Any) -> bool:
     """A list diff with no item data (``delete_all``, ``clear``, ``pop``, an
     index-only ``delete``): nothing in it an exclusion could protect, so it
     passes whole once its name may be read, list or not (a deleted list's
-    ``delete_all`` is served after the list is gone)."""
-    return _list_diff_shaped(value) and set(value) <= _ITEMLESS_DIFF_KEYS
+    ``delete_all`` is served after the list is gone). Only those
+    operations, and only scalar values: a scalar shaped like one with an
+    object inside is filtered as an object."""
+    return (
+        _list_diff_shaped(value)
+        and set(value) <= _ITEMLESS_DIFF_KEYS
+        and isinstance(value.get("operation"), str)
+        and value["operation"] in _ITEMLESS_OPERATIONS
+        and all(
+            v is None or isinstance(v, str | int | float | bool) for v in value.values()
+        )
+    )
 
 
 def _prune_emptied(original: Any, kept: Any) -> Any:
@@ -4709,7 +4720,11 @@ class Actor:
         whole = {
             _resync_id(s) for s in readable if subtarget and not s.get("subtarget")
         }
-        missed = [m for m in missed if m not in whole]
+        # A record ``resume_subscriptions`` wrote for one stays: this call
+        # neither re-sends it a subtarget resync nor erases its record.
+        missed = [m for m in missed if m not in whole] + [
+            p for p in (pending or []) if p in whole
+        ]
         if pending is not None or missed:
             self._write_resync_pending(target, subtarget, missed)
         return count

@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _deleted_names(data: Any) -> list[str]:
+    """The names a target-level diff deletes: a key whose value is empty,
+    or a list's ``delete_all``."""
+    if not isinstance(data, dict):
+        return []
+    names: list[str] = []
+    for key, value in data.items():
+        name = key[5:] if isinstance(key, str) and key.startswith("list:") else key
+        if value == "" or value is None:
+            names.append(str(name))
+        elif isinstance(value, dict) and value.get("operation") == "delete_all":
+            names.append(str(name))
+    return names
+
+
 class ProcessResult(Enum):
     """Result of processing a callback."""
 
@@ -439,6 +454,7 @@ class CallbackProcessor:
                 rebuilt=False,
                 lists=lists,
                 claimed_seq=through_seq,
+                held_claim=claimed_row.get("claimed_seq"),
             )
             return self._rebuild_due(
                 self._read_state_row(peer_id, subscription_id) or {}
@@ -494,18 +510,22 @@ class CallbackProcessor:
         restart_interval: bool = True,
         lists: list[str] | None = None,
         claimed_seq: int | None = None,
+        held_claim: int | None = None,
     ) -> bool:
         """After a rebuild (or a resync): ``rebuilt`` clears the owed rebuild
         and, with ``restart_interval``, sets ``rebuilt_at``; otherwise it is
         marked owed (``lists`` join the owed ones). ``claimed_seq`` ends a
-        claim there (a batch stopped for the rebuild). Retries a lost
+        claim there (a batch stopped for the rebuild) when the row still holds
+        ``held_claim``, the claim that batch took. Retries a lost
         compare-and-swap a few times. Raises ``DbError`` on a fault."""
         for _ in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
             state: dict[str, Any] = dict(row or {"version": 0, "resync_pending": False})
             state.pop("nonce", None)
             state["version"] = int(state.get("version", 0) or 0) + 1
-            if claimed_seq is not None:
+            if claimed_seq is not None and (row or {}).get("claimed_seq") == held_claim:
+                # Only the claim this batch held (another delivery's claim is
+                # not this one's to end).
                 state["claimed_seq"] = claimed_seq
             if rebuilt:
                 state["rebuild_owed"] = False
@@ -874,6 +894,13 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
+            if stop_at is not None:
+                # The rest of the batch is dropped (the rebuild supersedes
+                # it): what it deleted is owed too, so the rebuild deletes it
+                # even where it cannot sweep the bucket.
+                for dropped in callbacks_to_process:
+                    if dropped.sequence > stop_at:
+                        out_of_step_lists.extend(_deleted_names(dropped.data))
             if out_of_step_lists:
                 if self._mark_or_owe(
                     peer_id,
@@ -1297,6 +1324,13 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
+            if stop_at is not None:
+                # The rest of the batch is dropped (the rebuild supersedes
+                # it): what it deleted is owed too, so the rebuild deletes it
+                # even where it cannot sweep the bucket.
+                for dropped in callbacks_to_process:
+                    if dropped.sequence > stop_at:
+                        out_of_step_lists.extend(_deleted_names(dropped.data))
             if out_of_step_lists:
                 if self._mark_or_owe(
                     peer_id,

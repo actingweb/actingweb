@@ -882,8 +882,9 @@ class DbAttribute:
     ) -> set[str]:
         """Create each row that does not exist, in one statement: the names
         this call created. A name whose key another bucket owns raises
-        ``AttributeKeyCollision`` (after the statement, which creates the
-        others)."""
+        ``AttributeKeyCollision``, and the statement is rolled back: none of
+        the batch is created (DynamoDB creates row by row and may have
+        created some before it raises)."""
         if not rows:
             return set()
         values = []

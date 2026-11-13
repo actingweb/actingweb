@@ -413,7 +413,10 @@ class SubscriptionManager:
                 validate_peer_id=False,
             )
             store.apply_resync_data(
-                transformed_data, subtarget=subtarget or None, resource=resource or None
+                transformed_data,
+                subtarget=subtarget or None,
+                resource=resource or None,
+                target=target,
             )
             logger.info(f"Stored initial baseline for {peer_id} from {target}")
 
@@ -514,7 +517,10 @@ class SubscriptionManager:
                 validate_peer_id=False,
             )
             store.apply_resync_data(
-                transformed_data, subtarget=subtarget or None, resource=resource or None
+                transformed_data,
+                subtarget=subtarget or None,
+                resource=resource or None,
+                target=target,
             )
             logger.info(f"Stored initial baseline for {peer_id} from {target}")
 
@@ -1119,6 +1125,7 @@ class SubscriptionManager:
                 store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
+                    target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
@@ -1205,15 +1212,30 @@ class SubscriptionManager:
                     applied = store.apply_resync_data(
                         cb.data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
+                    # As the callback handler: a baseline settles an owed
+                    # rebuild only when it stored everything and carried each
+                    # owed list.
+                    owed = CallbackProcessor(actor=actor_interface).rebuild_state(
+                        peer_id, subscription_id
+                    )["lists"]
+                    missing = [n for n in owed if n not in applied]
+                    if not applied.skipped and (applied.failed or missing):
+                        cb.out_of_step = {
+                            "list": (applied.failed or missing)[0],
+                            "operation": "resync",
+                            "why": "the baseline did not settle the replica",
+                        }
                 else:
                     applied = store.apply_callback_data(
                         cb.data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
-                cb.out_of_step = applied.out_of_step
+                    cb.out_of_step = applied.out_of_step
 
         # Create callback processor if sequence tracking is enabled
         if config.auto_sequence:
@@ -1273,6 +1295,7 @@ class SubscriptionManager:
                     applied = store.apply_callback_data(
                         data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
                     if applied.out_of_step:
@@ -1334,6 +1357,7 @@ class SubscriptionManager:
                 store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
+                    target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(
@@ -2031,6 +2055,7 @@ class SubscriptionManager:
                 store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
+                    target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
@@ -2114,15 +2139,30 @@ class SubscriptionManager:
                     applied = store.apply_resync_data(
                         cb.data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
+                    # As the callback handler: a baseline settles an owed
+                    # rebuild only when it stored everything and carried each
+                    # owed list.
+                    owed = CallbackProcessor(actor=actor_interface).rebuild_state(
+                        peer_id, subscription_id
+                    )["lists"]
+                    missing = [n for n in owed if n not in applied]
+                    if not applied.skipped and (applied.failed or missing):
+                        cb.out_of_step = {
+                            "list": (applied.failed or missing)[0],
+                            "operation": "resync",
+                            "why": "the baseline did not settle the replica",
+                        }
                 else:
                     applied = store.apply_callback_data(
                         cb.data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
-                cb.out_of_step = applied.out_of_step
+                    cb.out_of_step = applied.out_of_step
 
         if config.auto_sequence:
             processor = CallbackProcessor(
@@ -2179,6 +2219,7 @@ class SubscriptionManager:
                     applied = store.apply_callback_data(
                         data,
                         subtarget=sub.subtarget or None,
+                        target=sub.target,
                         resource=sub.resource or None,
                     )
                     if applied.out_of_step:
@@ -2244,6 +2285,7 @@ class SubscriptionManager:
                 store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
+                    target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(
@@ -2429,9 +2471,21 @@ class SubscriptionManager:
                 return None
             return sequence
 
-        # The lists owed before the baseline is read: one marked while it is
-        # read leaves the rebuild owed.
+        # The lists owed and the recorded sequence before the baseline is
+        # read: a list marked, or any callback recorded, while it is read and
+        # applied leaves the rebuild owed (that callback's change may be in
+        # the baseline and applied again, or overwritten by it).
         owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
+        sub_obj = Subscription(
+            actor_id=self._core_actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._core_actor.config,
+        )
+        recorded_before = (
+            (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+        )
         settled = True
         baseline: Any = None
         sequence: int | None = None
@@ -2475,6 +2529,7 @@ class SubscriptionManager:
             applied = store.apply_resync_data(
                 baseline_data,
                 subtarget=sub.subtarget or None,
+                target=sub.target,
                 resource=sub.resource or None,
             )
             if applied.failed:
@@ -2484,9 +2539,14 @@ class SubscriptionManager:
                 )
                 settled = False
             carried = set(applied)
-            stale: set[str] = {name for name in owed if name not in carried}
+            stale: set[str] = (
+                set()
+                if applied.skipped
+                else {name for name in owed if name not in carried}
+            )
             if (
-                sub.target == "properties"
+                not applied.skipped
+                and sub.target == "properties"
                 and not sub.subtarget
                 and isinstance(baseline, dict)
                 and not stores_another_target(
@@ -2511,23 +2571,19 @@ class SubscriptionManager:
                     store.delete_list(name)
                 else:
                     store.delete_value(name)
-        sub_obj = Subscription(
-            actor_id=self._core_actor.id,
-            peerid=peer_id,
-            subid=subscription_id,
-            callback=True,
-            config=self._core_actor.config,
-        )
         if sub_obj.handle:
             current = sub_obj.get() or {}
             recorded = current.get("sequence", 0)
+            if recorded != recorded_before:
+                # A callback was processed while this ran: its change may
+                # be in the baseline and applied again, or overwritten by
+                # it. Owed again.
+                settled = False
             if not isinstance(recorded, int) or recorded < sequence:
                 # Never backwards: a callback processed while this ran may
                 # have recorded a later sequence.
                 sub_obj.handle.modify(seqnr=sequence)
-            elif recorded > sequence:
-                # A callback was processed while this ran: its change may
-                # have been overwritten by this older baseline. Owed again.
+            if recorded != recorded_before:
                 logger.warning(
                     f"Rebuild of {peer_id}:{subscription_id}: a callback "
                     f"(sequence {recorded}) was processed during it; the "

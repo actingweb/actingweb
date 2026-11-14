@@ -70,7 +70,9 @@ class ProcessedCallback:
     subscription_id: str
     sequence: int
     callback_type: CallbackType
-    data: dict[str, Any]
+    # An object at target level; a subtarget's value as sent (text, a
+    # number, a boolean or "" as well) at subtarget level.
+    data: Any
     timestamp: str
     # Set by the handler when the replica could not apply a list diff in
     # this callback (RemotePeerStore's ``out_of_step`` result).
@@ -796,7 +798,9 @@ class CallbackProcessor:
                         sequence=next_seq,
                         callback_type=CallbackType.DIFF,
                         data=next_callback["data"],
-                        timestamp=next_callback["data"].get("timestamp", ""),
+                        timestamp=next_callback["data"].get("timestamp", "")
+                        if isinstance(next_callback["data"], dict)
+                        else "",
                     )
                 )
                 drained.append(next_seq)
@@ -1229,7 +1233,9 @@ class CallbackProcessor:
                         sequence=next_seq,
                         callback_type=CallbackType.DIFF,
                         data=next_callback["data"],
-                        timestamp=next_callback["data"].get("timestamp", ""),
+                        timestamp=next_callback["data"].get("timestamp", "")
+                        if isinstance(next_callback["data"], dict)
+                        else "",
                     )
                 )
                 drained.append(next_seq)

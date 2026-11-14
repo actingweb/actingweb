@@ -483,6 +483,7 @@ class TestVerification4Fetch:
     )
     def test_list_scalar_or_failure(self, env, meta, code, expected):
         proxy = MagicMock()
+        proxy.last_response_redirected = False
 
         def get(path: str) -> Any:
             if path.endswith("/metadata"):
@@ -580,6 +581,7 @@ class TestRealSubscription:
 def test_a_subtarget_answering_404_is_gone() -> None:
     env = _Env()
     proxy = MagicMock()
+    proxy.last_response_redirected = False
 
     def get(path: str) -> Any:
         proxy.last_response_code = 404
@@ -609,6 +611,11 @@ def test_a_subtarget_answering_404_is_gone() -> None:
         # iteration 26): a redirect followed, or not the publisher's JSON.
         ({}, b"<html>sign in</html>", 200, "text/html", True, None),
         ({}, b"<html>sign in</html>", 200, "text/html", False, None),
+        # Outside voice, iteration 27: the media type exactly, any case,
+        # parameters ignored.
+        ({}, b"blue", 200, "Application/JSON; charset=utf-8", False, "blue"),
+        ({}, b"blue", 200, "application/jsonx", False, None),
+        ({}, b"blue", 200, "", False, None),
     ],
 )
 def test_a_single_propertys_baseline_is_what_the_wire_says(
@@ -629,3 +636,48 @@ def test_a_single_propertys_baseline_is_what_the_wire_says(
             PEER, "properties", subtarget="notes"
         )
     assert got == expected
+
+
+class TestIteration27OutsideVoice:
+    """Outside voice on iteration 27: a redirect never decides gone or a
+    list."""
+
+    def test_a_404_reached_through_a_redirect_is_a_failed_fetch(self, env):
+        proxy = MagicMock()
+        proxy.last_response_redirected = True
+
+        def get(path: str) -> Any:
+            proxy.last_response_code = 404
+            return {"error": {"code": 404}}
+
+        proxy.get_resource.side_effect = get
+        with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+            got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+                PEER, "properties", subtarget="notes"
+            )
+        assert got is None
+
+    @pytest.mark.parametrize(
+        ("meta", "redirected"),
+        [({}, False), ({"description": ""}, True)],
+    )
+    def test_a_metadata_answer_that_is_not_the_publishers_confirms_nothing(
+        self, env, meta, redirected
+    ):
+        proxy = MagicMock()
+        proxy.last_response_redirected = False
+
+        def get(path: str) -> Any:
+            if path.endswith("/metadata"):
+                proxy.last_response_code = 200
+                proxy.last_response_redirected = redirected
+                return meta
+            proxy.last_response_code = 200
+            return [1]
+
+        proxy.get_resource.side_effect = get
+        with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+            got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+                PEER, "properties", subtarget="notes"
+            )
+        assert got is None

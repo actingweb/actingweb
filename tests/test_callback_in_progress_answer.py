@@ -199,3 +199,107 @@ def test_a_low_granularity_callback_with_a_bad_sequence_is_refused(
         handler.post(aid(actor), "subscriptions/peer1/sub1")
     client.assert_not_called()
     assert webobj.response.status_code == 400
+
+
+def _high_granularity_handler(
+    body: dict[str, Any], subtarget: str = "", granularity: str = "high"
+) -> tuple[Any, Any, Any]:
+    config = make_config()
+    config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
+        enabled=True, auto_sequence=True, auto_storage=False
+    )
+    actor = create_core_actor(config, uuid_email())
+    assert Subscription(
+        actor_id=aid(actor), peerid="peer1", subid="sub1", callback=True, config=config
+    ).create(target="properties", subtarget=subtarget, granularity=granularity)
+    webobj = AWWebObj(url="https://test.example.com/x", body=json.dumps(body))
+    handler = CallbacksHandler(webobj, config)
+    check = mock.Mock()
+    check.check_authorisation.return_value = True
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
+    handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
+        return_value=mock.Mock(actor=actor, auth_obj=check)
+    )
+    return handler, webobj, actor
+
+
+class TestIteration27OutsideVoice:
+    """Outside voice on iteration 27: a subtarget's falsy value is its value
+    on the push path, and a target-level body that is not an object is
+    refused, not acknowledged and lost."""
+
+    @pytest.mark.parametrize("value", [0, False, ""])
+    def test_a_pushed_falsy_value_reaches_the_processor(self, value: Any) -> None:
+        handler, webobj, actor = _high_granularity_handler(
+            {"sequence": 1, "data": value}, subtarget="color"
+        )
+        with mock.patch.object(
+            CallbackProcessor,
+            "process_callback_sync",
+            return_value=ProcessResult.PROCESSED,
+        ) as process:
+            handler.post(aid(actor), "subscriptions/peer1/sub1")
+        assert process.call_args.kwargs["data"] == value
+        assert type(process.call_args.kwargs["data"]) is type(value)
+        assert webobj.response.status_code == 204
+
+    @pytest.mark.parametrize("value", ["", 0, []])
+    def test_a_target_level_empty_body_is_no_keys(self, value: Any) -> None:
+        """A whole-target subscriber gets "" for DELETE /properties: an empty
+        set of keys, answered 204 as before (advisor on iteration 28)."""
+        handler, webobj, actor = _high_granularity_handler(
+            {"sequence": 1, "data": value}
+        )
+        with mock.patch.object(
+            CallbackProcessor,
+            "process_callback_sync",
+            return_value=ProcessResult.PROCESSED,
+        ) as process:
+            handler.post(aid(actor), "subscriptions/peer1/sub1")
+        assert process.call_args.kwargs["data"] == {}
+        assert webobj.response.status_code == 204
+
+    @pytest.mark.parametrize("value", ["blue", 7, [1]])
+    def test_a_target_level_body_that_is_not_an_object_is_refused(
+        self, value: Any
+    ) -> None:
+        handler, webobj, actor = _high_granularity_handler(
+            {"sequence": 1, "data": value}
+        )
+        with mock.patch.object(CallbackProcessor, "process_callback_sync") as process:
+            handler.post(aid(actor), "subscriptions/peer1/sub1")
+        process.assert_not_called()
+        assert webobj.response.status_code == 400
+
+    @pytest.mark.parametrize("value", [0, True])
+    def test_a_low_granularity_number_is_processed(self, value: Any) -> None:
+        handler, webobj, actor = _high_granularity_handler(
+            {"sequence": 1, "url": "https://peer.example.com/diff/1"},
+            subtarget="count",
+            granularity="low",
+        )
+        fetched = mock.Mock(status_code=200)
+        fetched.json.return_value = {"data": value, "sequence": 1}
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = fetched
+        with (
+            mock.patch("httpx.Client", return_value=client),
+            mock.patch("actingweb.trust.Trust") as trust,
+            mock.patch.object(
+                CallbackProcessor, "precheck", return_value=ProcessResult.PROCESSED
+            ),
+            mock.patch.object(
+                CallbackProcessor,
+                "process_callback_sync",
+                return_value=ProcessResult.PROCESSED,
+            ) as process,
+        ):
+            trust.return_value.get.return_value = {
+                "secret": "s",
+                "baseuri": "https://peer.example.com/peer1",
+            }
+            handler.post(aid(actor), "subscriptions/peer1/sub1")
+        process.assert_called_once()
+        assert process.call_args.kwargs["data"] == value
+        assert webobj.response.status_code != 503

@@ -2216,3 +2216,62 @@ GET is stored once as an array value.
   the processor read the timestamp from it as from an object; it is applied
   now. `WS1.subtarget`, `WS2.subtarget`, `WS9.subtarget` re-recorded (owned
   by `:4`).
+
+### 2026-11-14, after the outside voice on iteration 27 (`cd4bda3..dbbc776`, codex and a fresh-context reviewer)
+
+#### 28. The paths next to iteration 27's, on the same contract
+
+**Category**: Verification fix (1 High, 3 Medium peer-reachable; 3 Medium
+an intermediary or configuration can reach; 3 Low)
+
+**What changed**:
+- High: the pending queue's drain (both the async and sync processors) read
+  the timestamp from a string callback as from an object, so a text value
+  that arrived out of order raised on every later delivery and wedged the
+  subscription until the gap timeout. It reads only from a dict now.
+- The push path kept `callback_data or {}`, so a subtarget's `0`, `false`
+  and `""` (deleted) became `{}`; only a missing body is empty now.
+- The low-granularity fetch's log line took `len()` of a number (503 for
+  ever); it uses the same safe length as the resync line.
+- A target-level callback whose `data` is not an object reached
+  `data.items()` inside the processor, which logs a handler error and moves
+  the sequence on (acknowledged and lost). It is refused (400) before the
+  processor.
+- A 404 reached through a redirect, and a metadata answer through a redirect
+  or as an empty object (a login page parses as `{}`), no longer decide
+  "gone" or "a list": both are failed fetches.
+- The content type is compared as a media type (any case, parameters
+  ignored; `application/jsonx` is not JSON).
+- `sync_subscription()` (and the async version) report `success=False`, store
+  nothing and leave the sequence when a subtarget's baseline could not be
+  fetched, instead of reporting success.
+- `ProcessedCallback.data` is typed `Any`; the migration guide's checklist
+  and the CHANGELOG say a subtarget hook's `data` may be text, a number or a
+  boolean.
+
+**Files affected**: `actingweb/callback_processor.py`,
+`actingweb/handlers/callbacks.py`, `actingweb/interface/subscription_manager.py`,
+`CHANGELOG.rst`, `docs/migration/v3.16.rst`;
+`tests/test_callback_processor.py`, `tests/test_callback_in_progress_answer.py`,
+`tests/test_replica_rebuild.py`, `tests/test_subscription_baseline_fetch.py`
+(each new test fails on `dbbc776`; two older proxy doubles set
+`last_response_redirected = False`, which the real proxy always sets).
+
+**Accepted**:
+- Low: the async proxy (httpx) does not follow redirects and the sync one
+  (requests) does, so a publisher that redirects gives the async path a
+  failed fetch and the sync path a JSON value; both fail safe (no value is
+  stored from a redirected text answer). One redirect policy for both
+  clients changes every proxy call and belongs to its own change.
+- Low: subscribe skips the peer metadata refresh when a subtarget baseline
+  is falsy (`if transformed_data:`); changing it moves recordings other plans
+  own, and nothing is lost (the refresh runs on the next subscribe or sync).
+- A same-origin redirect (http to https) on the sync path is a failed fetch
+  for a text value; it is reported now (`success=False`), and the remedy is
+  the trust's base URI.
+- Narrowed before the commit (advisor): a target-level `""` (what
+  `DELETE /properties` sends a whole-target subscriber), `0` or `[]` is an
+  empty set of keys and answered 204, as on `dbbc776`; only a truthy body
+  that is not an object is refused. The sync failure applies only to a
+  single property's baseline (`properties`, a subtarget, no resource): a
+  resource-level or another target's empty answer still succeeds.

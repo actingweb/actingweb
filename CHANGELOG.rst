@@ -1023,8 +1023,17 @@ CHANGED
   subscriber, and a subtarget-level diff is stored under the subtarget.**
   A resource-level value was stored as top-level scalars; it is now merged
   at the resource's path in the stored property. A subtarget-level value
-  or baseline is stored under the subtarget's name. **Check:** code that
-  read the old top-level keys from a replica.
+  or baseline is stored under the subtarget's name, as the publisher sent
+  it: a text value is stored (a receiver answered it 400), and ``0``,
+  ``false`` and ``""`` (deleted) are kept as values, not read as ``{}``. A
+  target-level callback whose ``data`` is not an object is refused (400),
+  not acknowledged. A single property's baseline is the publisher's own
+  answer: a 404 is the property gone, any other error, a redirect or a body
+  that is neither JSON nor ``application/json`` is a failed fetch, and a
+  failed fetch on ``sync_subscription()`` reports ``success=False``.
+  **Check:** code that read the old top-level keys from a replica, and a
+  subscription data hook for a subtarget that calls ``data.get()``
+  (``data`` may be text, a number or a boolean).
 
 - **Behavior change: web-UI edits notify subscribers.** Adding, editing or
   deleting a list item, editing list metadata, creating a list and creating

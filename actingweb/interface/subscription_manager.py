@@ -198,12 +198,30 @@ def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
         parsed = _NOT_JSON
     if parsed == {}:
         return {subtarget: ""}
-    content_type = str(getattr(proxy, "last_response_content_type", "") or "")
-    if getattr(proxy, "last_response_redirected", False) or not content_type.startswith(
-        "application/json"
-    ):
+    if not _own_json_answer(proxy):
         return None
     return text
+
+
+def _own_json_answer(proxy: Any) -> bool:
+    """The last answer was the publisher's own JSON: not redirected, and
+    ``application/json`` (any case, parameters ignored)."""
+    if getattr(proxy, "last_response_redirected", False):
+        return False
+    content_type = str(getattr(proxy, "last_response_content_type", "") or "")
+    return content_type.split(";", 1)[0].strip().lower() == "application/json"
+
+
+def _confirms_list(meta: Any, proxy: Any) -> bool:
+    """The metadata route answered for a list: a non-empty object without
+    ``error``, not reached through a redirect (a login page parses as
+    ``{}``)."""
+    return (
+        isinstance(meta, dict)
+        and bool(meta)
+        and "error" not in meta
+        and not getattr(proxy, "last_response_redirected", False)
+    )
 
 
 _NOT_JSON = object()
@@ -1153,6 +1171,23 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # A failed fetch (an error, a redirect, an answer that is not
+                # the publisher's own): not a success, and the sequence stays.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -2070,6 +2105,23 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # A failed fetch (an error, a redirect, an answer that is not
+                # the publisher's own): not a success, and the sequence stays.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -2735,7 +2787,11 @@ class SubscriptionManager:
             # an array is a list's items only when the spec's metadata route
             # answers for it (404 there: a value that is an array).
             code = int(proxy.last_response_code or 0)
-            if baseline_response is not None and code == 404:
+            if (
+                baseline_response is not None
+                and code == 404
+                and not getattr(proxy, "last_response_redirected", False)
+            ):
                 return {subtarget: ""}
             if baseline_response is None or not 200 <= code <= 299:
                 logger.warning(
@@ -2754,9 +2810,11 @@ class SubscriptionManager:
             if known_list:
                 return {subtarget: {"_list": True, "items": value}}
             meta = proxy.get_resource(path=f"properties/{subtarget}/metadata")
-            if isinstance(meta, dict) and "error" not in meta:
+            if _confirms_list(meta, proxy):
                 return {subtarget: {"_list": True, "items": value}}
-            if proxy.last_response_code == 404:
+            if proxy.last_response_code == 404 and not getattr(
+                proxy, "last_response_redirected", False
+            ):
                 return value
             logger.warning(
                 f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
@@ -2831,7 +2889,11 @@ class SubscriptionManager:
             # an array is a list's items only when the spec's metadata route
             # answers for it (404 there: a value that is an array).
             code = int(proxy.last_response_code or 0)
-            if baseline_response is not None and code == 404:
+            if (
+                baseline_response is not None
+                and code == 404
+                and not getattr(proxy, "last_response_redirected", False)
+            ):
                 return {subtarget: ""}
             if baseline_response is None or not 200 <= code <= 299:
                 logger.warning(
@@ -2852,9 +2914,11 @@ class SubscriptionManager:
             meta = await proxy.get_resource_async(
                 path=f"properties/{subtarget}/metadata"
             )
-            if isinstance(meta, dict) and "error" not in meta:
+            if _confirms_list(meta, proxy):
                 return {subtarget: {"_list": True, "items": value}}
-            if proxy.last_response_code == 404:
+            if proxy.last_response_code == 404 and not getattr(
+                proxy, "last_response_redirected", False
+            ):
                 return value
             logger.warning(
                 f"Baseline of {subtarget!r} from {peer_id}: could not tell a "

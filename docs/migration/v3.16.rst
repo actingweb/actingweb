@@ -1831,6 +1831,14 @@ applied twice.
   also matches list edits made over REST and the web UI, which arrived as
   scalars (``{"index", "value"}``, ``{"action": ...}``, text) before. The
   shapes a hook receives are in :doc:`../reference/hooks-reference`.
+- *Subscription hooks on a single property.* For a subscription to one
+  property (a subtarget), the callback's ``data`` is that property's value as
+  the publisher sent it: text, a number, ``true``/``false`` or ``""`` (the
+  property was deleted) as well as an object. A hook that calls
+  ``data.get(...)`` must check ``isinstance(data, dict)`` first. Before 3.16
+  a text value was refused (400) and ``0``, ``false`` and ``""`` arrived as
+  ``{}``. A whole-target callback whose ``data`` is not an object is refused
+  (400).
 - *Permission hooks that act on revocations.* With
   ``auto_delete_on_revocation`` on, ``permission_changes`` carries
   ``deleted_names`` (the replica names deleted) and ``not_evaluated``. A

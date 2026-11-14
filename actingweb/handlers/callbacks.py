@@ -915,7 +915,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                         # Response is a single diff object: {"data": {...}, "sequence": N, ...}
                         callback_data = url_data.get("data", {})
                         logger.debug(
-                            f"Fetched low-granularity data: {len(callback_data)} keys"
+                            "Fetched low-granularity data: "
+                            f"{len(callback_data) if isinstance(callback_data, dict | list | str) else 1} "
+                            f"{'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
                         # Not an empty diff: the data is unknown (another
@@ -935,8 +937,27 @@ class CallbacksHandler(base_handler.BaseHandler):
                     logger.error(f"Error fetching low-granularity callback data: {e}")
                     self._callback_retry_later = True
                     return False
-        else:
-            callback_data = callback_data or {}
+        elif callback_data is None:
+            # Only a missing body is empty: a subtarget's value may be falsy
+            # (0, false, and "" which deletes it).
+            callback_data = {}
+
+        if (
+            not subscription.get("subtarget")
+            and not isinstance(callback_data, dict)
+            and not callback_data
+        ):
+            # A target-level "" is everything deleted (DELETE /properties):
+            # an empty set of keys, as before 3.16.
+            callback_data = {}
+        if not subscription.get("subtarget") and not isinstance(callback_data, dict):
+            # Any other target-level body that is not a set of keys is
+            # malformed and is refused (400), never acknowledged and lost.
+            logger.warning(
+                f"Refused a callback from {peer_id} for {subscription_id}: a "
+                "target-level body that is not an object"
+            )
+            return False
 
         sequence = params.get("sequence", 0)
 

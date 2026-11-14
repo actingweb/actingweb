@@ -424,7 +424,7 @@
        "children": [
         {
          "actor": "<B>",
-         "data": {},
+         "data": "",
          "event": "subscription_data",
          "peer": "<A>",
          "sequence": 3,

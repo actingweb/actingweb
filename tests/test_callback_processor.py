@@ -1005,6 +1005,53 @@ class TestCallbackProcessorCleanup:
         assert state_info["pending_count"] == 0
 
 
+class TestStringCallbacksInThePendingQueue:
+    """Outside voice on iteration 27: a subtarget's text value that waits in
+    the pending queue is drained like any other."""
+
+    @pytest.mark.parametrize("use_sync", [False, True])
+    def test_a_pending_string_is_drained(
+        self,
+        mock_actor: MagicMock,
+        mock_subscription: tuple[MagicMock, dict[str, int]],  # noqa: ARG002
+        mock_attributes: tuple[MagicMock, dict[str, Any]],  # noqa: ARG002
+        use_sync: bool,
+    ) -> None:
+        processor = CallbackProcessor(mock_actor)
+        seen: list[tuple[int, Any]] = []
+
+        def handler(cb: ProcessedCallback) -> None:
+            seen.append((cb.sequence, cb.data))
+
+        async def ahandler(cb: ProcessedCallback) -> None:
+            handler(cb)
+
+        def run(seq: int, data: Any) -> ProcessResult:
+            if use_sync:
+                return processor.process_callback_sync(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=seq,
+                    data=data,
+                    handler=handler,
+                )
+            return asyncio.run(
+                processor.process_callback(
+                    peer_id="peer1",
+                    subscription_id="sub1",
+                    sequence=seq,
+                    data=data,
+                    handler=ahandler,
+                )
+            )
+
+        assert run(1, "red") == ProcessResult.PROCESSED
+        assert run(3, "blue") == ProcessResult.PENDING
+        assert run(2, "green") == ProcessResult.PROCESSED
+        assert seen == [(1, "red"), (2, "green"), (3, "blue")]
+        assert processor.get_state_info("peer1", "sub1")["pending_count"] == 0
+
+
 class TestCallbackProcessorSyncVersion:
     """Test synchronous version of callback processing."""
 

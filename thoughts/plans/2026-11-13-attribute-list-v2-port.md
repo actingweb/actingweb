@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-4.md
+verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-5.md
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
@@ -2115,3 +2115,26 @@ exact on the wire, or reverts; no new inference or state)
   some owned by other plans, pinned). `WL17.target` re-recorded (owned by
   `:4`): a list deleted while suspended is now gone at the subscriber after
   the resume (it kept the deleted list).
+
+### Open decisions (2026-11-14, after re-run 5; for the owner)
+
+The verify/iterate loop stopped at re-run 5 under its stop rule (a
+peer-reachable Medium in iteration-written code). Open:
+
+1. **Iteration 14 reversed a recorded decision** (the overlap doubling was
+   accepted until the specification plan; `WD15` is co-owned by `spec-1-5`).
+   Keep the skip (and fix its granularity hole), or revert it and the
+   covered-rebuild state it needed, back to the accepted doubling.
+2. **A subtarget baseline is ambiguous on the wire** (a list's items or a
+   scalar array; an empty list, a falsy value, a text scalar or a failure).
+   Iterations 21-25 fixed parts of it at the receiver and in the fetch, and
+   re-run 5 found the rest (findings 1, 4). A real fix is a wire marker (the
+   publisher saying "list" in a baseline), which is the specification plan's
+   territory; until then, revert to the iteration-16/pre-21 behaviour and
+   accept, or keep the probe and fix the bypassing caller and the
+   empty-baseline rule.
+3. **The tool's owed rebuilds** (finding 3): mark only a whole-target
+   subscription or the one whose subtarget is the list, or drop the marking
+   and document that the next baseline is the operator's to trigger.
+4. Whether the remaining findings go to `/iterate_plan` once more on that
+   basis, or the branch's PR opens with them recorded.

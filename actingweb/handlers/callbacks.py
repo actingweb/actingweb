@@ -855,7 +855,8 @@ class CallbacksHandler(base_handler.BaseHandler):
                         logger.debug(
                             f"Fetched resync baseline for {target}"
                             f"{f'/{subtarget}' if subtarget else ''}: "
-                            f"{len(callback_data)} {'keys' if isinstance(callback_data, dict) else 'items'}"
+                            f"{len(callback_data) if isinstance(callback_data, dict | list | str) else 1} "
+                            f"{'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
                         # An empty baseline and a failed fetch look the same

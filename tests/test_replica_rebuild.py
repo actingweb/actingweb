@@ -594,20 +594,25 @@ def test_a_subtarget_answering_404_is_gone() -> None:
 
 
 @pytest.mark.parametrize(
-    ("body", "raw", "code", "expected"),
+    ("body", "raw", "code", "ctype", "redirected", "expected"),
     [
-        ({}, b"plain text", 200, "plain text"),
-        ({}, b"", 200, {"notes": ""}),
-        ({}, b"{}", 200, {"notes": ""}),
-        (0, b"0", 200, 0),
-        (False, b"false", 200, False),
-        ({"v": 1}, b'{"v": 1}', 200, {"v": 1}),
-        ({"error": {"code": 500}}, b"", 500, None),
-        ({"error": {"code": 408}}, b"", 408, None),
+        ({}, b"plain text", 200, "application/json", False, "plain text"),
+        ({}, b"", 200, "application/json", False, {"notes": ""}),
+        ({}, b"{}", 200, "application/json", False, {"notes": ""}),
+        ({}, b"{ \n }", 200, "application/json", False, {"notes": ""}),
+        (0, b"0", 200, "application/json", False, 0),
+        (False, b"false", 200, "application/json", False, False),
+        ({"v": 1}, b'{"v": 1}', 200, "application/json", False, {"v": 1}),
+        ({"error": {"code": 500}}, b"", 500, "", False, None),
+        ({"error": {"code": 408}}, b"", 408, "", False, None),
+        # A login page behind a proxy is not the value (outside voice,
+        # iteration 26): a redirect followed, or not the publisher's JSON.
+        ({}, b"<html>sign in</html>", 200, "text/html", True, None),
+        ({}, b"<html>sign in</html>", 200, "text/html", False, None),
     ],
 )
 def test_a_single_propertys_baseline_is_what_the_wire_says(
-    body: Any, raw: bytes, code: int, expected: Any
+    body: Any, raw: bytes, code: int, ctype: str, redirected: bool, expected: Any
 ) -> None:
     """Verification re-run 5, the owner's decision (the spec reads
     properties as untyped values): text is text, an empty body is empty, a
@@ -617,6 +622,8 @@ def test_a_single_propertys_baseline_is_what_the_wire_says(
     proxy.get_resource.return_value = body
     proxy.last_response_code = code
     proxy.last_response_message = raw
+    proxy.last_response_content_type = ctype
+    proxy.last_response_redirected = redirected
     with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
         got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
             PEER, "properties", subtarget="notes"

@@ -54,6 +54,11 @@ class AwProxy:
         self.config = config
         self.last_response_code = 0
         self.last_response_message = 0
+        # The last GET's Content-Type, and whether a redirect was followed
+        # (3.16: a single property's unparsed body is its value only when
+        # the publisher itself answered it as JSON).
+        self.last_response_content_type = ""
+        self.last_response_redirected = False
         self.last_location: str | None = None
         self.peer_passphrase: str | None = None
         # Set timeout - supports tuple (connect, read) or single value
@@ -192,6 +197,8 @@ class AwProxy:
                     response = retry
             self.last_response_code = response.status_code
             self.last_response_message = response.content
+            self.last_response_content_type = response.headers.get("content-type", "")
+            self.last_response_redirected = bool(response.history)
         except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to get peer resource")
             self.last_response_code = 408
@@ -472,6 +479,10 @@ class AwProxy:
                         response = retry
                 self.last_response_code = response.status_code
                 self.last_response_message = response.content
+                self.last_response_content_type = response.headers.get(
+                    "content-type", ""
+                )
+                self.last_response_redirected = bool(response.history)
         except httpx.TimeoutException:
             logger.debug("Timeout getting peer resource async")
             self.last_response_code = 408

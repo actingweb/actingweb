@@ -656,7 +656,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         callback_type: str = "diff",
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None = None,
     ) -> ProcessResult:
@@ -768,7 +768,9 @@ class CallbackProcessor:
                     sequence=sequence,
                     callback_type=CallbackType.DIFF,
                     data=data,
-                    timestamp=data.get("timestamp", ""),
+                    timestamp=data.get("timestamp", "")
+                    if isinstance(data, dict)
+                    else "",
                 )
             ]
 
@@ -940,7 +942,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
     ) -> ProcessResult:
         """Handle a resync callback from the protocol."""
@@ -966,7 +968,7 @@ class CallbackProcessor:
                 sequence=sequence,
                 callback_type=CallbackType.RESYNC,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             failed = False
             try:
@@ -995,7 +997,7 @@ class CallbackProcessor:
     async def _handle_permission(
         self,
         peer_id: str,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
     ) -> ProcessResult:
         """Handle a permission callback.
@@ -1013,7 +1015,7 @@ class CallbackProcessor:
                 sequence=0,  # Not used for permissions
                 callback_type=CallbackType.PERMISSION,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             try:
                 await handler(callback)
@@ -1087,7 +1089,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         callback_type: str = "diff",
         handler: Callable[[ProcessedCallback], None] | None = None,
     ) -> ProcessResult:
@@ -1199,7 +1201,9 @@ class CallbackProcessor:
                     sequence=sequence,
                     callback_type=CallbackType.DIFF,
                     data=data,
-                    timestamp=data.get("timestamp", ""),
+                    timestamp=data.get("timestamp", "")
+                    if isinstance(data, dict)
+                    else "",
                 )
             ]
 
@@ -1371,7 +1375,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], None] | None,
     ) -> ProcessResult:
         """Handle a resync callback from the protocol (sync version)."""
@@ -1397,7 +1401,7 @@ class CallbackProcessor:
                 sequence=sequence,
                 callback_type=CallbackType.RESYNC,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             failed = False
             try:
@@ -1426,7 +1430,7 @@ class CallbackProcessor:
     def _handle_permission_sync(
         self,
         peer_id: str,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], None] | None,
     ) -> ProcessResult:
         """Handle a permission callback (sync version).
@@ -1444,7 +1448,7 @@ class CallbackProcessor:
                 sequence=0,  # Not used for permissions
                 callback_type=CallbackType.PERMISSION,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             try:
                 handler(callback)

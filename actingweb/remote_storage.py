@@ -892,7 +892,7 @@ class RemotePeerStore:
 
     def apply_resync_data(
         self,
-        data: dict[str, Any] | list[Any],
+        data: Any,
         *,
         subtarget: str | None = None,
         resource: str | None = None,

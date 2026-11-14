@@ -2186,3 +2186,33 @@ answers 404 when it is not a list (1072-1104). A list diff's `length` is
 the gone form at subtarget level; without the length check a delete arriving
 on a drifted replica whose item is gone is a no-op (overlapping subscriptions
 no longer deliver twice, so a second delivery no longer reaches it).
+
+#### 27. The fetch's new values reach every caller (scoped review of iteration 26)
+
+**Category**: Verification fix (no High; the Mediums were callers iteration
+26 left on the old dict-only contract)
+
+**What changed**: the callback handler's log line no longer takes `len()` of
+a number; the subscribe and "no diffs" sync paths store a single property's
+falsy value (`is not None` at subtarget level; unchanged at target level,
+whose recordings belong to other plans); the callback processor reads a
+resync's timestamp only from a dict; a body that is not JSON is the
+property's text only when the publisher answered it itself (no redirect
+followed, `application/json`; the proxy records both), so a login page behind
+a proxy is a failed fetch, not a value; an empty JSON object written with
+whitespace is empty. Documented: a polled whole-target subscription covers a
+pushed subtarget one, whose values then arrive with the poll.
+
+**Files affected**: `actingweb/aw_proxy.py`,
+`actingweb/interface/subscription_manager.py`, `actingweb/handlers/callbacks.py`,
+`actingweb/callback_processor.py`, `actingweb/remote_storage.py`,
+`docs/guides/subscriptions.rst`; `tests/test_replica_rebuild.py`.
+
+**Accepted**: a property stored as JSON `null` reads as a failed fetch
+(predates this plan); a list deleted between its items GET and its metadata
+GET is stored once as an array value.
+- Found by the Full tier: a callback whose data is a string (a subtarget
+  scalar such as `color = "blue"`) was answered 400 by the receiver, because
+  the processor read the timestamp from it as from an object; it is applied
+  now. `WS1.subtarget`, `WS2.subtarget`, `WS9.subtarget` re-recorded (owned
+  by `:4`).

@@ -4,6 +4,7 @@ Simplified subscription management for ActingWeb actors.
 
 import contextvars
 import functools
+import json
 import logging
 import os
 import threading
@@ -176,19 +177,36 @@ class SubscriptionWithDiffs:
         return bool(self._core_sub.clear_diff(seqnr=seqnr))
 
 
-def _subtarget_value(response: Any, raw: Any, subtarget: str) -> Any:
+def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
     """A single property's 2xx baseline as the value it is: an empty body
-    or ``{}`` is empty (``{subtarget: ""}``, which a replica stores as
-    nothing), text the proxy could not parse as JSON is that text, anything
-    else as parsed."""
-    if response == {}:
-        text = (
-            raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
-        ).strip()
-        if text in ("", "{}"):
-            return {subtarget: ""}
-        return text
-    return response
+    or an empty JSON object is empty (``{subtarget: ""}``, which a replica
+    stores as nothing); a body that is not JSON is the property's text only
+    when the publisher itself answered (no redirect followed) as
+    ``application/json``, otherwise it is a failed fetch (None: a login page
+    behind a proxy is not the value); anything else as parsed."""
+    if response != {}:
+        return response
+    raw = proxy.last_response_message
+    text = (
+        raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+    ).strip()
+    if not text:
+        return {subtarget: ""}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = _NOT_JSON
+    if parsed == {}:
+        return {subtarget: ""}
+    content_type = str(getattr(proxy, "last_response_content_type", "") or "")
+    if getattr(proxy, "last_response_redirected", False) or not content_type.startswith(
+        "application/json"
+    ):
+        return None
+    return text
+
+
+_NOT_JSON = object()
 
 
 @dataclass
@@ -420,7 +438,9 @@ class SubscriptionManager:
             # delete, so no baseline, as before 3.16.
             transformed_data = None
 
-        if transformed_data and config.auto_storage:
+        if (
+            transformed_data is not None if subtarget else transformed_data
+        ) and config.auto_storage:
             # Store baseline data if auto_storage is enabled
             from ..remote_storage import RemotePeerStore
             from .actor_interface import ActorInterface
@@ -526,7 +546,9 @@ class SubscriptionManager:
         if subtarget and transformed_data == {subtarget: ""}:
             transformed_data = None  # as the synchronous subscribe
 
-        if transformed_data and config.auto_storage:
+        if (
+            transformed_data is not None if subtarget else transformed_data
+        ) and config.auto_storage:
             # Store baseline data if auto_storage is enabled
             from ..remote_storage import RemotePeerStore
             from .actor_interface import ActorInterface
@@ -1131,8 +1153,9 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if transformed_data:
-                # Store baseline data
+            if transformed_data is not None if sub.subtarget else transformed_data:
+                # Store baseline data (a single property's falsy value is a
+                # value, 3.16)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -2047,8 +2070,9 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if transformed_data:
-                # Store baseline data
+            if transformed_data is not None if sub.subtarget else transformed_data:
+                # Store baseline data (a single property's falsy value is a
+                # value, 3.16)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -2718,9 +2742,13 @@ class SubscriptionManager:
                     f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
                 )
                 return None
-            value = _subtarget_value(
-                baseline_response, proxy.last_response_message, subtarget
-            )
+            value = _subtarget_value(baseline_response, proxy, subtarget)
+            if value is None:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: a body that is "
+                    "not JSON and not the publisher's own answer"
+                )
+                return None
             if not isinstance(value, list):
                 return value
             if known_list:
@@ -2810,9 +2838,13 @@ class SubscriptionManager:
                     f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
                 )
                 return None
-            value = _subtarget_value(
-                baseline_response, proxy.last_response_message, subtarget
-            )
+            value = _subtarget_value(baseline_response, proxy, subtarget)
+            if value is None:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: a body that is "
+                    "not JSON and not the publisher's own answer"
+                )
+                return None
             if not isinstance(value, list):
                 return value
             if known_list:

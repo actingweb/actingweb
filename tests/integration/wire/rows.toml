@@ -706,16 +706,16 @@ test = "test_wire_scalar_properties.py::test_ws1_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Subtarget color. The object arrives as the subtarget's data and is stored as the one scalar color; the string is answered 400 by B and stores nothing (last_seq stays 1); the empty value is answered 204 but held as pending sequence 3 behind the refused 2, so it changes nothing. Every diff stays queued at A."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "Subtarget color. The object arrives as the subtarget's data and is stored as the one scalar color; the string is stored as {value: blue}; the empty value deletes it. Sequences 1-3 are processed in order."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
 
 [rows."WS2.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws2_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "WS1.subtarget in a wire_named pair (the trust type reads exactly color): identical to WS1.subtarget, the object stored as the one scalar color. A subtarget diff is judged once by the subtarget's name, so the object's keys are not judged and nothing is withheld or spent; no exposure."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "WS1.subtarget in a wire_named pair (the trust type reads exactly color): identical to WS1.subtarget. A subtarget diff is judged once by the subtarget's name, so the object's keys are not judged and nothing is withheld or spent; no exposure."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
 
 [rows."WS3.target"]
 test = "test_wire_scalar_properties.py::test_ws3"
@@ -802,8 +802,8 @@ test = "test_wire_scalar_properties.py::test_ws9_subtarget"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "SDK on the test thread, subtarget transformed. The set sends the hook's value (BLUE), which B answers 400 (a string at subtarget level); the delete sends \"\", answered 204 and held as pending sequence 2. A stores BLUE, then nothing. Unlike WS5.subtarget the delete does send."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "SDK on the test thread, subtarget transformed. The set sends the hook's value (BLUE), which B stores as {value: BLUE}; the delete sends \"\", which deletes it. A stores BLUE, then nothing. Unlike WS5.subtarget the delete does send."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
 
 # ---------------------------------------------------------------------------
 # subscription-wire-baseline, Phase 1: list properties (test_wire_list_properties.py)

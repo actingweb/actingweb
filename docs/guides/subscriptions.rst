@@ -610,7 +610,10 @@ A diff in the middle of a list (``insert``, ``update``, ``delete``,
 not. When a peer is subscribed to both on its whole ``properties`` target
 and on a subtarget, only the whole-target subscription writes the replica
 (``ReplicaApplyResult.skipped`` for the other); the subtarget
-subscription's hooks still run.
+subscription's hooks still run. A whole-target subscription that is only
+polled (granularity ``none``) covers too, so the subtarget's values then
+reach the replica when that subscription is polled (``sync_peer()``), not
+when the subtarget's callbacks arrive.
 
 **What a hook receives.** A subscription data hook (and a
 ``callback_hook("subscription")``, in ``data["data"]``) receives the

@@ -320,39 +320,39 @@ _FROZEN_SURFACE = {
     "append_once": "(self, item: Any, *, key: str) -> AppendOnceResult",
     "check_item_size": "(self, item: Any) -> None",
     "clear": "(self) -> None",
-    "compact": "(self, allow_reverted: bool = False, sweep_span_orphans: bool = False) -> dict[str, typing.Any]",
+    "compact": "(self, allow_reverted: bool = False, sweep_span_orphans: bool = False) -> dict[str, Any]",
     "count": "(self, value: Any) -> int",
     "delete": "(self) -> None",
     "delete_by_handle": "(self, handle: ListItemHandle) -> bool",
-    "extend": "(self, items: list[typing.Any]) -> None",
+    "extend": "(self, items: list[Any]) -> None",
     "find": "(self, identity_key: str, value: Any, consistent: bool = True) -> Any | None",
-    "find_all": "(self, identity_key: str, value: Any, consistent: bool = True) -> list[typing.Any]",
+    "find_all": "(self, identity_key: str, value: Any, consistent: bool = True) -> list[Any]",
     "get_description": "(self) -> str",
     "get_explanation": "(self) -> str",
-    "get_metadata": "(self) -> dict[str, typing.Any]",
+    "get_metadata": "(self) -> dict[str, Any]",
     "index": "(self, value: Any, start: int = 0, stop: int | None = None) -> int",
     "insert": "(self, index: int, item: Any) -> None",
-    "item_at": "(self, handle: ListItemHandle) -> tuple[ListItemHandle, typing.Any]",
-    "items_with_handles": "(self, *, resolve: bool = True) -> list[tuple[ListItemHandle, typing.Any]]",
-    "migrate_to_v2": "(self, allow_damaged: bool = False) -> dict[str, typing.Any]",
+    "item_at": "(self, handle: ListItemHandle) -> tuple[ListItemHandle, Any]",
+    "items_with_handles": "(self, *, resolve: bool = True) -> list[tuple[ListItemHandle, Any]]",
+    "migrate_to_v2": "(self, allow_damaged: bool = False) -> dict[str, Any]",
     "pop": "(self, index: int = -1) -> Any",
-    "prime_from_rows": "(self, rows: dict[str, typing.Any]) -> None",
+    "prime_from_rows": "(self, rows: dict[str, Any]) -> None",
     "remove": "(self, value: Any) -> None",
-    "remove_where": "(self, identity_key: str, value: Any, *, first_only: bool = False) -> list[typing.Any]",
-    "repair_keys": "(self) -> dict[str, typing.Any]",
+    "remove_where": "(self, identity_key: str, value: Any, *, first_only: bool = False) -> list[Any]",
+    "repair_keys": "(self) -> dict[str, Any]",
     "set_description": "(self, description: str) -> None",
     "set_explanation": "(self, explanation: str) -> None",
-    "sizes_from_rows": "(self, rows: dict[str, typing.Any]) -> list[int]",
-    "slice": "(self, start: int, end: int, consistent: bool = True) -> list[typing.Any]",
+    "sizes_from_rows": "(self, rows: dict[str, Any]) -> list[int]",
+    "slice": "(self, start: int, end: int, consistent: bool = True) -> list[Any]",
     "storage_format": "(self) -> int",
     "sweep_foreign_format_rows": "(self) -> int",
-    "sweep_span_orphans": "(self) -> dict[str, typing.Any]",
-    "to_indexed_list": "(self, consistent: bool = True) -> list[tuple[int, typing.Any]]",
-    "to_list": "(self, consistent: bool = True) -> list[typing.Any]",
-    "to_list_from_rows": "(self, rows: dict[str, typing.Any], *, resolve: bool = True) -> list[typing.Any]",
+    "sweep_span_orphans": "(self) -> dict[str, Any]",
+    "to_indexed_list": "(self, consistent: bool = True) -> list[tuple[int, Any]]",
+    "to_list": "(self, consistent: bool = True) -> list[Any]",
+    "to_list_from_rows": "(self, rows: dict[str, Any], *, resolve: bool = True) -> list[Any]",
     "update_by_handle": "(self, handle: ListItemHandle, item: Any) -> bool",
-    "update_where": "(self, identity_key: str, value: Any, item: Any, *, first_only: bool = False) -> list[typing.Any]",
-    "verify": "(self, identity_key: str | None = None, spans: bool = False) -> dict[str, typing.Any]",
+    "update_where": "(self, identity_key: str, value: Any, item: Any, *, first_only: bool = False) -> list[Any]",
+    "verify": "(self, identity_key: str | None = None, spans: bool = False) -> dict[str, Any]",
 }
 
 # Moved to list_core and re-exported by property_list under the same name.
@@ -381,7 +381,8 @@ _MOVED = (
 
 def _sig(fn: Any) -> str:
     text = str(inspect.signature(fn))
-    for module in ("actingweb.list_core.", "actingweb.property_list."):
+    # 3.11 prints "typing.Any | None" where 3.14 prints "Any | None".
+    for module in ("actingweb.list_core.", "actingweb.property_list.", "typing."):
         text = text.replace(module, "")
     return text
 

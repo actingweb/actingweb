@@ -1418,7 +1418,7 @@ class ActingWebApp:
                 actor: ActorInterface,
                 peer_id: str,
                 target: str,
-                data: dict,
+                data: Any,  # an object; a subtarget's value as sent
                 sequence: int,
                 callback_type: str
             ) -> None:

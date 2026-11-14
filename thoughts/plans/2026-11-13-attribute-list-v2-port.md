@@ -2275,3 +2275,61 @@ an intermediary or configuration can reach; 3 Low)
   that is not an object is refused. The sync failure applies only to a
   single property's baseline (`properties`, a subtarget, no resource): a
   resource-level or another target's empty answer still succeeds.
+
+### 2026-11-14, after the outside voice on iteration 28 (`dbbc776..a98690a`) and the owner's decisions
+
+#### 29. No 400 at target level; a same-host redirect is the publisher's answer
+
+**Category**: Decision changed (owner, 2026-11-14), Verification fix
+
+**Review findings**: the iteration-28 refusal of a target-level body that is
+not an object came after a low-granularity fetch had already deleted the
+diff (lost), refused hooks-only custom targets that received the value on
+`dbbc776`, and was undone by the poll path, which applied it anyway (Medium,
+peer-reachable, three findings). A redirect on the publisher's own host
+(`http` to `https`, a trailing slash) made every list baseline and deleted
+property a failed fetch (Medium). Lows: the duplicate-diffs sync path still
+reported success on a failed baseline; `data: dict` in the hook docs.
+
+**Owner's decisions**: 1. remove the 400. 2. option a (a same-host redirect
+is the publisher's answer), logged at WARNING since it shows a wrong base
+URI.
+
+**What changed**:
+- The 400 is gone. `RemotePeerStore.apply_callback_data` ignores a
+  target-level body that is not an object (WARNING; nothing stored, the
+  sequence moves on), the same on push and poll. The callback handler does
+  not pass it to the whole `properties` target's hooks (which read an
+  object; Emm's `on_property_change` builds `data.keys()` outside a `try`);
+  a custom target's hooks receive it as sent, as on `dbbc776`.
+- `AwProxy` records `last_response_redirected` only for a redirect to
+  another host; one on the trust's own host logs `update the trust's base
+  URI` and is the publisher's answer; one to another host logs as well.
+- The duplicate-diffs sync path (sync and async) fails like the no-diffs
+  path on a single property's failed baseline.
+- `data: Any` in `ActingWebApp.subscription_data_hook`'s example and
+  `examples/p2p_quickstart.py`; the CHANGELOG and the migration guide
+  updated (the 400 sentence replaced; a checklist item for base URIs that
+  redirect).
+
+**Files affected**: `actingweb/aw_proxy.py`, `actingweb/handlers/callbacks.py`,
+`actingweb/remote_storage.py`, `actingweb/interface/subscription_manager.py`,
+`actingweb/interface/app.py`, `examples/p2p_quickstart.py`, `CHANGELOG.rst`,
+`docs/migration/v3.16.rst`; `tests/test_aw_proxy.py`,
+`tests/test_callback_in_progress_answer.py`, `tests/test_replica_receiver.py`,
+`tests/test_subscription_baseline_fetch.py` (each new test fails on
+`a98690a`).
+
+**Accepted**:
+- Low: the permission callback's fetch (`callbacks.py`, `properties/<name>`)
+  stays on the pre-3.16 reading (an array is a list without the probe; a
+  text value stored as `{}`); routing it through the shared fetch changes
+  recordings other plans own.
+- Codex Lows: `application/*+json` is not JSON for a body that did not parse
+  (only text labelled `+json` is affected); a metadata answer of `{}` no
+  longer confirms a list (this library's route always answers fields).
+- Unverified, not reachable from this library's publisher: a body carrying
+  both `url` and a falsy `data` is fetched.
+
+**Emm**: suite on `a98690a` (environment 9): the baseline's failures only,
+on both lanes.

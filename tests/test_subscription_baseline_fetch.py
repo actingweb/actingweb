@@ -451,6 +451,50 @@ class TestSyncSubscriptionBaselineFetch:
             )
         assert result.success is True
 
+    def test_a_failed_baseline_after_duplicates_is_a_failed_sync(self):
+        """The duplicate-diffs path fails like the no-diffs path when a
+        single property's baseline cannot be fetched (iteration 28's
+        review)."""
+        from actingweb.callback_processor import CallbackProcessor, ProcessResult
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "subtarget": "color",
+            "callback": True,
+        }
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=True, auto_storage=True
+        )
+        proxy = MagicMock()
+        proxy.get_resource.return_value = {
+            "sequence": 5,
+            "data": [{"sequence": 5, "data": "blue"}],
+        }
+        with (
+            patch.object(manager, "_get_peer_proxy", return_value=proxy),
+            patch.object(manager, "_fetch_and_transform_baseline", return_value=None),
+            patch.object(
+                CallbackProcessor,
+                "process_callback_sync",
+                return_value=ProcessResult.DUPLICATE,
+            ),
+            patch.object(
+                CallbackProcessor,
+                "rebuild_state",
+                return_value={"owed": False, "lists": []},
+            ),
+            patch("actingweb.remote_storage.RemotePeerStore") as store_class,
+        ):
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+        assert result.success is False
+        store_class.return_value.apply_resync_data.assert_not_called()
+
     def test_sync_subscription_skips_baseline_when_auto_storage_false(self):
         """Test sync_subscription skips baseline fetch when auto_storage=False."""
         actor = FakeCoreActor()

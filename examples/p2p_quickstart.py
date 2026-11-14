@@ -23,6 +23,7 @@ first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
 """
 
 import os
+from typing import Any
 
 from actingweb.interface import ActingWebApp, ActorInterface
 
@@ -55,7 +56,7 @@ def on_properties_changed(
     actor: ActorInterface,
     peer_id: str,
     target: str,
-    data: dict,
+    data: Any,  # an object; a subtarget's value as sent (text, a number...)
     sequence: int,
     callback_type: str,
 ) -> None:

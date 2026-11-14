@@ -260,18 +260,6 @@ class TestIteration27OutsideVoice:
         assert process.call_args.kwargs["data"] == {}
         assert webobj.response.status_code == 204
 
-    @pytest.mark.parametrize("value", ["blue", 7, [1]])
-    def test_a_target_level_body_that_is_not_an_object_is_refused(
-        self, value: Any
-    ) -> None:
-        handler, webobj, actor = _high_granularity_handler(
-            {"sequence": 1, "data": value}
-        )
-        with mock.patch.object(CallbackProcessor, "process_callback_sync") as process:
-            handler.post(aid(actor), "subscriptions/peer1/sub1")
-        process.assert_not_called()
-        assert webobj.response.status_code == 400
-
     @pytest.mark.parametrize("value", [0, True])
     def test_a_low_granularity_number_is_processed(self, value: Any) -> None:
         handler, webobj, actor = _high_granularity_handler(
@@ -303,3 +291,54 @@ class TestIteration27OutsideVoice:
         process.assert_called_once()
         assert process.call_args.kwargs["data"] == value
         assert webobj.response.status_code != 503
+
+
+class TestNoRefusalAtTargetLevel:
+    """Owner decision after iteration 28's review: a whole-target body that
+    is not an object is answered 204 and the sequence moves on; it is not
+    stored, and it reaches the hooks of a custom target but not those of
+    the whole ``properties`` target (which read an object)."""
+
+    @pytest.mark.parametrize(
+        ("target", "reaches"), [("properties", False), ("rooms", True)]
+    )
+    def test_the_hooks_it_reaches(self, target: str, reaches: bool) -> None:
+        config = make_config()
+        seen: list[Any] = []
+
+        def hook(_a: Any, _p: str, _t: str, data: Any, _s: int, _c: str) -> None:
+            seen.append(data)
+
+        config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
+            enabled=True,
+            auto_sequence=True,
+            auto_storage=True,
+            subscription_data_hooks={target: [hook]},
+        )
+        actor = create_core_actor(config, uuid_email())
+        assert Subscription(
+            actor_id=aid(actor),
+            peerid="peer1",
+            subid="sub1",
+            callback=True,
+            config=config,
+        ).create(target=target, granularity="high")
+        body = {"sequence": 1, "data": "blue"}
+        webobj = AWWebObj(url="https://test.example.com/x", body=json.dumps(body))
+        handler = CallbacksHandler(webobj, config)
+        check = mock.Mock()
+        check.check_authorisation.return_value = True
+        check.response = {"code": 200, "text": "Ok", "headers": {}}
+        check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
+        handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
+            return_value=mock.Mock(actor=actor, auth_obj=check)
+        )
+        handler.post(aid(actor), "subscriptions/peer1/sub1")
+        assert webobj.response.status_code == 204
+        assert seen == (["blue"] if reaches else [])
+        assert (
+            CallbackProcessor(mock.Mock(id=aid(actor), config=config)).get_state_info(
+                "peer1", "sub1"
+            )["last_seq"]
+            == 1
+        )

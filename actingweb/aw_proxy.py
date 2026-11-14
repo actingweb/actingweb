@@ -2,6 +2,8 @@ import base64
 import json
 import logging
 from typing import Any
+from urllib.parse import urlencode as urllib_urlencode
+from urllib.parse import urlsplit as urllib_urlsplit
 
 import httpx
 import requests
@@ -10,11 +12,6 @@ from actingweb import request_context, trust
 from actingweb.log_summary import summarize_payload
 
 logger = logging.getLogger(__name__)
-
-try:
-    from urllib.parse import urlencode as urllib_urlencode
-except ImportError:
-    from urllib.parse import urlencode as urllib_urlencode
 
 # Type alias for timeout parameter
 TimeoutType = int | float | tuple[int | float, int | float] | None
@@ -54,9 +51,11 @@ class AwProxy:
         self.config = config
         self.last_response_code = 0
         self.last_response_message = 0
-        # The last GET's Content-Type, and whether a redirect was followed
-        # (3.16: a single property's unparsed body is its value only when
-        # the publisher itself answered it as JSON).
+        # The last GET's Content-Type, and whether a redirect to another
+        # host was followed (3.16: a single property's unparsed body is its
+        # value only when the publisher itself answered it as JSON; a
+        # redirect on the same host, http to https or a trailing slash, is
+        # the publisher's own answer and logged as a configuration warning).
         self.last_response_content_type = ""
         self.last_response_redirected = False
         self.last_location: str | None = None
@@ -176,6 +175,29 @@ class AwProxy:
             return None
         return None
 
+    def _redirected_off_host(self, url: str, response: Any) -> bool:
+        """Whether the answer came through a redirect to another host. A
+        redirect on the trust's own host (http to https, a trailing slash)
+        is the publisher's answer, logged at WARNING: the trust's base URI
+        is out of date."""
+        if not getattr(response, "history", None):
+            return False
+        final = str(getattr(response, "url", "") or "")
+        asked_host = urllib_urlsplit(url).hostname
+        final_host = urllib_urlsplit(final).hostname
+        baseuri = (self.trust or {}).get("baseuri", "")
+        if asked_host and asked_host == final_host:
+            logger.warning(
+                f"A request to the peer at {baseuri} was redirected to {final}: "
+                "update the trust's base URI"
+            )
+            return False
+        logger.warning(
+            f"A request to the peer at {baseuri} was redirected to another "
+            f"host ({final_host}); the answer is not the peer's"
+        )
+        return True
+
     def get_resource(self, path=None, params=None):
         if not path or len(path) == 0:
             return None
@@ -198,7 +220,7 @@ class AwProxy:
             self.last_response_code = response.status_code
             self.last_response_message = response.content
             self.last_response_content_type = response.headers.get("content-type", "")
-            self.last_response_redirected = bool(response.history)
+            self.last_response_redirected = self._redirected_off_host(url, response)
         except Exception:  # folds DbError: peer HTTP only
             logger.debug("Not able to get peer resource")
             self.last_response_code = 408
@@ -482,7 +504,7 @@ class AwProxy:
                 self.last_response_content_type = response.headers.get(
                     "content-type", ""
                 )
-                self.last_response_redirected = bool(response.history)
+                self.last_response_redirected = self._redirected_off_host(url, response)
         except httpx.TimeoutException:
             logger.debug("Timeout getting peer resource async")
             self.last_response_code = 408

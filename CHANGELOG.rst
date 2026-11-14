@@ -1026,11 +1026,15 @@ CHANGED
   or baseline is stored under the subtarget's name, as the publisher sent
   it: a text value is stored (a receiver answered it 400), and ``0``,
   ``false`` and ``""`` (deleted) are kept as values, not read as ``{}``. A
-  target-level callback whose ``data`` is not an object is refused (400),
-  not acknowledged. A single property's baseline is the publisher's own
-  answer: a 404 is the property gone, any other error, a redirect or a body
-  that is neither JSON nor ``application/json`` is a failed fetch, and a
-  failed fetch on ``sync_subscription()`` reports ``success=False``.
+  whole-target callback whose ``data`` is not an object is answered 204 and
+  not stored; it reaches a custom target's hooks but not the whole
+  ``properties`` target's (logged at WARNING). A single property's baseline
+  is the publisher's own answer: a 404 is the property gone; any other
+  error, a redirect to another host, or a body that is neither JSON nor
+  ``application/json`` is a failed fetch, and a failed fetch on
+  ``sync_subscription()`` reports ``success=False``. A redirect on the
+  trust's own host (``http`` to ``https``, a trailing slash) is followed and
+  logged at WARNING (``update the trust's base URI``).
   **Check:** code that read the old top-level keys from a replica, and a
   subscription data hook for a subtarget that calls ``data.get()``
   (``data`` may be text, a number or a boolean).

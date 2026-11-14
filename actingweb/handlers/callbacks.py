@@ -950,14 +950,6 @@ class CallbacksHandler(base_handler.BaseHandler):
             # A target-level "" is everything deleted (DELETE /properties):
             # an empty set of keys, as before 3.16.
             callback_data = {}
-        if not subscription.get("subtarget") and not isinstance(callback_data, dict):
-            # Any other target-level body that is not a set of keys is
-            # malformed and is refused (400), never acknowledged and lost.
-            logger.warning(
-                f"Refused a callback from {peer_id} for {subscription_id}: a "
-                "target-level body that is not an object"
-            )
-            return False
 
         sequence = params.get("sequence", 0)
 
@@ -1013,6 +1005,22 @@ class CallbacksHandler(base_handler.BaseHandler):
 
                 # Invoke subscription_data_hooks (from app.subscription_data_hook decorator)
                 target = subscription.get("target", "properties")
+                if (
+                    target == "properties"
+                    and not subscription.get("subtarget")
+                    and not isinstance(cb.data, dict)
+                ):
+                    # A whole properties target's callback is a set of keys:
+                    # a malformed one is not stored (see RemotePeerStore) and
+                    # does not reach the hooks, which read it as an object.
+                    # Another target's hooks get what the publisher sent.
+                    logger.warning(
+                        f"Callback from {peer_id} for {subscription_id}: the "
+                        "data of a whole properties target is not an object; "
+                        "not passed to the hooks"
+                    )
+                    cb.out_of_step = out_of_step
+                    return
                 if config.subscription_data_hooks:
                     import inspect
 

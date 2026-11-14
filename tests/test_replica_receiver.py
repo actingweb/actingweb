@@ -512,3 +512,15 @@ class TestVerification4Findings:
         remote.apply_resync_data({"color": ""}, subtarget="color")
         assert remote.list_all_lists() == []
         assert remote.get_value("color") is None
+
+
+@pytest.mark.parametrize("body", ["blue", 7, [1, 2]])
+def test_a_target_level_body_that_is_not_an_object_is_ignored(env, body, caplog):
+    """Owner decision after iteration 28's review: no 400 (a low-granularity
+    diff is already gone, and the poll path would apply it anyway); the
+    replica stores nothing and the sequence moves on."""
+    remote, _, _ = env
+    with caplog.at_level("WARNING"):
+        r = remote.apply_callback_data(body)
+    assert not r.failed and r.out_of_step is None
+    assert "not an object" in caplog.text

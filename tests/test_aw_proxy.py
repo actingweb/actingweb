@@ -744,3 +744,45 @@ class TestRequestBodyNotLogged:
         assert "keys=" not in line
         assert "bytes=" in line
         assert "hunter2" not in caplog.text
+
+
+class TestRedirectedOffHost:
+    """Owner decision after iteration 28's review: a redirect on the trust's
+    own host (http to https, a trailing slash) is the publisher's answer and
+    a configuration warning; one to another host is not the publisher's."""
+
+    def _proxy(self) -> AwProxy:
+        proxy = AwProxy()
+        proxy.trust = {"baseuri": "http://peer.example.com/a1", "secret": "s"}
+        return proxy
+
+    def _get(self, proxy: AwProxy, final_url: str, history: list) -> None:
+        response = Mock(
+            status_code=200,
+            content=b"blue",
+            headers={"content-type": "application/json"},
+            history=history,
+            url=final_url,
+        )
+        response.json.side_effect = ValueError
+        with patch("actingweb.aw_proxy.requests.get", return_value=response):
+            proxy.get_resource(path="properties/color")
+
+    def test_same_host_is_the_publishers_answer(self, caplog):
+        proxy = self._proxy()
+        with caplog.at_level("WARNING"):
+            self._get(proxy, "https://peer.example.com/a1/properties/color", [Mock()])
+        assert proxy.last_response_redirected is False
+        assert "update the trust's base URI" in caplog.text
+
+    def test_another_host_is_not(self, caplog):
+        proxy = self._proxy()
+        with caplog.at_level("WARNING"):
+            self._get(proxy, "https://login.example.net/signin", [Mock()])
+        assert proxy.last_response_redirected is True
+        assert "another host" in caplog.text
+
+    def test_no_redirect(self):
+        proxy = self._proxy()
+        self._get(proxy, "http://peer.example.com/a1/properties/color", [])
+        assert proxy.last_response_redirected is False

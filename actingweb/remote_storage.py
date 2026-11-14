@@ -533,6 +533,17 @@ class RemotePeerStore:
                         subtarget, lambda: self._apply_entry(subtarget, value)
                     ),
                 )
+        elif not isinstance(data, dict):
+            # A target-level body is a set of keys; anything else is
+            # malformed and is not stored (the sequence moves on, as for
+            # any callback the replica cannot use).
+            logger.warning(
+                "Ignored a target-level callback from peer %s for actor %s: "
+                "its data is not an object (%s)",
+                self._peer_id,
+                self._actor.id,
+                type(data).__name__,
+            )
         else:
             for key, value in data.items():
                 record(

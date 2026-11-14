@@ -1837,8 +1837,14 @@ applied twice.
   property was deleted) as well as an object. A hook that calls
   ``data.get(...)`` must check ``isinstance(data, dict)`` first. Before 3.16
   a text value was refused (400) and ``0``, ``false`` and ``""`` arrived as
-  ``{}``. A whole-target callback whose ``data`` is not an object is refused
-  (400).
+  ``{}``. A whole-target callback whose ``data`` is not an object is not
+  stored and does not reach the ``properties`` target's hooks (logged); a
+  custom target's hooks receive it as sent.
+- *Trust base URIs that redirect.* A peer request redirected on the same
+  host (``http`` to ``https``, a trailing slash) logs ``update the trust's
+  base URI`` at WARNING; one redirected to another host is a failed fetch
+  for a single property's baseline. Search the logs for both after the
+  upgrade.
 - *Permission hooks that act on revocations.* With
   ``auto_delete_on_revocation`` on, ``permission_changes`` carries
   ``deleted_names`` (the replica names deleted) and ``not_evaluated``. A

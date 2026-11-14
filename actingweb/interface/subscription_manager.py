@@ -1412,6 +1412,23 @@ class SubscriptionManager:
                 resource=sub.resource or None,
             )
 
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # As on the no-diffs path: a single property's baseline that
+                # could not be fetched is a failed sync.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
             if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(
@@ -2341,6 +2358,23 @@ class SubscriptionManager:
                 resource=sub.resource or None,
             )
 
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # As on the no-diffs path: a single property's baseline that
+                # could not be fetched is a failed sync.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
             if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(

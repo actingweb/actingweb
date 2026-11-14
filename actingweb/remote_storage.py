@@ -830,26 +830,10 @@ class RemotePeerStore:
                 old_item = data["old_item"]
                 values = list_attr.to_list()
                 matches = [i for i, v in enumerate(values) if v == old_item]
-                length = data.get("length")
-                if isinstance(length, int) and not isinstance(length, bool):
-                    # ``length`` is the publisher's list after the delete:
-                    # one more here means not applied yet; equal with the
-                    # item gone, applied (a second delivery); anything else,
-                    # including equal with an equal item still held (an
-                    # applied duplicate, or drift), out of step.
-                    if len(values) == length and not matches:
-                        return {"operation": "delete", "success": True, "noop": True}
-                    if len(values) != length + 1:
-                        raise ReplicaOutOfStep(
-                            list_name,
-                            f"delete with the replica at {len(values)} items, "
-                            f"the publisher at {length} after it",
-                        )
+                # ``length`` is not consulted: the specification makes it
+                # advisory, and receivers MUST NOT use it to address rows.
                 if not matches:
-                    if isinstance(length, int) and not isinstance(length, bool):
-                        raise ReplicaOutOfStep(
-                            list_name, "delete of an item the replica does not hold"
-                        )
+                    # Gone already (applied before).
                     return {"operation": "delete", "success": True, "noop": True}
                 if len(matches) == 1:
                     del list_attr[matches[0]]

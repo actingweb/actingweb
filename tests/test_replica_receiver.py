@@ -352,17 +352,17 @@ class TestVerificationFindings:
 class TestVerification2Findings:
     """Verification re-run 2 (findings 2, 3, 6, 10)."""
 
-    def test_a_duplicate_delete_delivered_twice_is_applied_once(self, env):
+    def test_length_is_not_consulted(self, env):
+        """The specification makes ``length`` advisory (receivers MUST NOT
+        use it to address rows): a delete is decided by its item and index
+        (verification re-run 5, the owner's decision)."""
         remote, _, _ = env
-        remote.set_list("n", ["A", "A"])
-        diff = {"n": _diff("n", "delete", index=0, old_item="A", length=1)}
-        assert remote.apply_callback_data(diff).out_of_step is None
-        second = remote.apply_callback_data(diff)
-        # Equal length with an equal item still held: an applied duplicate or
-        # drift, which the replica cannot tell apart; out of step (a rebuild),
-        # never the surviving copy deleted.
-        assert second.out_of_step is not None
-        assert remote.get_list("n") == ["A"]
+        remote.set_list("n", ["A", "A", "B"])
+        r = remote.apply_callback_data(
+            {"n": _diff("n", "delete", index=1, old_item="A", length=99)}
+        )
+        assert r.out_of_step is None
+        assert remote.get_list("n") == ["A", "B"]
 
     def test_a_unique_delete_delivered_twice_is_a_noop(self, env):
         remote, _, _ = env
@@ -373,13 +373,13 @@ class TestVerification2Findings:
         assert second.out_of_step is None and second["n"].get("noop")
         assert remote.get_list("n") == ["B"]
 
-    def test_a_delete_on_a_drifted_replica_is_out_of_step(self, env):
+    def test_a_delete_of_an_item_not_held_is_a_noop(self, env):
         remote, _, _ = env
         remote.set_list("n", ["A", "X", "C"])
         r = remote.apply_callback_data(
             {"n": _diff("n", "delete", index=1, old_item="B", length=2)}
         )
-        assert r.out_of_step is not None
+        assert r.out_of_step is None and r["n"].get("noop")
         assert remote.get_list("n") == ["A", "X", "C"]
 
     @pytest.mark.parametrize(

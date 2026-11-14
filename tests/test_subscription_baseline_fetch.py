@@ -97,6 +97,7 @@ class TestFetchAndTransformBaseline:
         # The list's items, then its metadata (3.16: an array is a list's
         # only when the metadata route answers).
         mock_proxy.get_resource.side_effect = [items, {"description": ""}]
+        mock_proxy.last_response_code = 200
 
         with patch.object(manager, "_get_peer_proxy", return_value=mock_proxy):
             result = manager._fetch_and_transform_baseline(

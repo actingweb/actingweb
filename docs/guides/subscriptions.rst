@@ -448,11 +448,10 @@ to the replica:
    * - ``delete``
      - ``index``, and ``old_item`` when the item was read
      - With ``old_item``: removes the one row holding that value, or, when
-       several do, the one at ``index``. ``length`` (the publisher's list
-       after the delete) tells a second delivery from drift: the replica
-       one longer applies it; equal with the item gone is a no-op (applied
-       before); anything else is out of step. Without ``old_item``: removes
-       the row at ``index``. REST, bulk and web-UI deletes send this
+       several do, the one at ``index`` (none at ``index`` is out of step);
+       no row holding it is a no-op (applied before). ``length`` is not
+       consulted (advisory in the specification). Without ``old_item``:
+       removes the row at ``index``. REST, bulk and web-UI deletes send this
    * - ``pop``
      - ``index`` (default ``-1``, negative counts from the end)
      - Removes the row at ``index``

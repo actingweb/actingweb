@@ -148,8 +148,8 @@ def apply_revoked(store: RemotePeerStore, revoked: RevokedNames) -> list[str]:
 
 
 def subscribes_to_whole_properties(config: Any, actor_id: str, peer_id: str) -> bool:
-    """Whether ``actor_id`` holds a pushed subscription to ``peer_id``'s
-    whole ``properties`` target, which stores every name a subscription to
+    """Whether ``actor_id`` holds a subscription to ``peer_id``'s whole
+    ``properties`` target (pushed or polled), which stores every name a subscription to
     one of its properties would (``RemotePeerStore`` skips the latter). One
     read of the actor's subscriptions; a fault raises ``DbError``."""
     from .db import get_subscription_list
@@ -161,8 +161,8 @@ def subscribes_to_whole_properties(config: Any, actor_id: str, peer_id: str) -> 
         and s.get("target") == "properties"
         and not s.get("subtarget")
         and not s.get("resource")
-        # A subscription never pushed to stores nothing it could cover.
-        and s.get("granularity") != "none"
+        # Granularity "none" covers too: it is polled (sync_peer) into the
+        # same replica, so excluding it doubled every pushed change.
         for s in subscriptions
         if isinstance(s, dict)
     )

@@ -176,6 +176,21 @@ class SubscriptionWithDiffs:
         return bool(self._core_sub.clear_diff(seqnr=seqnr))
 
 
+def _subtarget_value(response: Any, raw: Any, subtarget: str) -> Any:
+    """A single property's 2xx baseline as the value it is: an empty body
+    or ``{}`` is empty (``{subtarget: ""}``, which a replica stores as
+    nothing), text the proxy could not parse as JSON is that text, anything
+    else as parsed."""
+    if response == {}:
+        text = (
+            raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+        ).strip()
+        if text in ("", "{}"):
+            return {subtarget: ""}
+        return text
+    return response
+
+
 @dataclass
 class SubscriptionSyncResult:
     """Result of syncing a single subscription."""
@@ -1330,30 +1345,16 @@ class SubscriptionManager:
                 f"fetching baseline for subscription {subscription_id}"
             )
 
-            # Construct target path for baseline fetch
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
+            # Through the shared fetch: a subtarget's list, value, gone and
+            # failure are told apart as everywhere else (3.16).
+            transformed_data = self._fetch_and_transform_baseline(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+            )
 
-            baseline_response = proxy.get_resource(path=target_path)
-
-            if baseline_response and "error" not in baseline_response:
-                # Transform list metadata if needed
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = self._transform_baseline_list_properties(
-                        baseline_data=baseline_response,
-                        peer_id=peer_id,
-                        target=sub.target,
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(
                     actor=actor_interface,
@@ -2256,32 +2257,15 @@ class SubscriptionManager:
                 f"fetching baseline for subscription {subscription_id}"
             )
 
-            # Construct target path for baseline fetch
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
+            # Through the shared fetch (as the synchronous sync).
+            transformed_data = await self._fetch_and_transform_baseline_async(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+            )
 
-            baseline_response = await proxy.get_resource_async(path=target_path)
-
-            if baseline_response and "error" not in baseline_response:
-                # Transform list metadata if needed
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = (
-                        await self._transform_baseline_list_properties_async(
-                            baseline_data=baseline_response,
-                            peer_id=peer_id,
-                            target=sub.target,
-                        )
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(
                     actor=actor_interface,
@@ -2719,15 +2703,38 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
-        if (
-            target == "properties"
-            and subtarget
-            and not resource
-            and proxy.last_response_code == 404
-        ):
-            # The property or list is gone at the publisher (exact on the
-            # wire): "" deletes it from the replica, as a callback's "" does.
-            return {subtarget: ""}
+        if target == "properties" and subtarget and not resource:
+            # A single property's baseline, told apart by facts on the wire
+            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # fetch; a 2xx body is the value (the spec's properties are
+            # untyped: an empty body or ``{}`` is empty, text is text), and
+            # an array is a list's items only when the spec's metadata route
+            # answers for it (404 there: a value that is an array).
+            code = int(proxy.last_response_code or 0)
+            if baseline_response is not None and code == 404:
+                return {subtarget: ""}
+            if baseline_response is None or not 200 <= code <= 299:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
+                )
+                return None
+            value = _subtarget_value(
+                baseline_response, proxy.last_response_message, subtarget
+            )
+            if not isinstance(value, list):
+                return value
+            if known_list:
+                return {subtarget: {"_list": True, "items": value}}
+            meta = proxy.get_resource(path=f"properties/{subtarget}/metadata")
+            if isinstance(meta, dict) and "error" not in meta:
+                return {subtarget: {"_list": True, "items": value}}
+            if proxy.last_response_code == 404:
+                return value
+            logger.warning(
+                f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                f"list from a value ({proxy.last_response_code})"
+            )
+            return None
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
@@ -2742,27 +2749,6 @@ class SubscriptionManager:
                 peer_id=peer_id,
                 target=target,
             )
-        if (
-            target == "properties"
-            and subtarget
-            and not resource
-            and isinstance(baseline_response, list)
-        ):
-            # An array is a list's items or a scalar's value: the metadata
-            # route answers 200 only for a list and 404 for a scalar; any
-            # other answer is a failed fetch (never a guess, 3.16).
-            # ``known_list``: the caller's replica holds it as a list.
-            if known_list:
-                return {subtarget: {"_list": True, "items": baseline_response}}
-            meta = proxy.get_resource(path=f"properties/{subtarget}/metadata")
-            if isinstance(meta, dict) and "error" not in meta:
-                return {subtarget: {"_list": True, "items": baseline_response}}
-            if proxy.last_response_code != 404:
-                logger.warning(
-                    f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
-                    f"list from a scalar ({proxy.last_response_code})"
-                )
-                return None
         return baseline_response
 
     async def _fetch_and_transform_baseline_async(
@@ -2809,15 +2795,40 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
-        if (
-            target == "properties"
-            and subtarget
-            and not resource
-            and proxy.last_response_code == 404
-        ):
-            # The property or list is gone at the publisher (exact on the
-            # wire): "" deletes it from the replica, as a callback's "" does.
-            return {subtarget: ""}
+        if target == "properties" and subtarget and not resource:
+            # A single property's baseline, told apart by facts on the wire
+            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # fetch; a 2xx body is the value (the spec's properties are
+            # untyped: an empty body or ``{}`` is empty, text is text), and
+            # an array is a list's items only when the spec's metadata route
+            # answers for it (404 there: a value that is an array).
+            code = int(proxy.last_response_code or 0)
+            if baseline_response is not None and code == 404:
+                return {subtarget: ""}
+            if baseline_response is None or not 200 <= code <= 299:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
+                )
+                return None
+            value = _subtarget_value(
+                baseline_response, proxy.last_response_message, subtarget
+            )
+            if not isinstance(value, list):
+                return value
+            if known_list:
+                return {subtarget: {"_list": True, "items": value}}
+            meta = await proxy.get_resource_async(
+                path=f"properties/{subtarget}/metadata"
+            )
+            if isinstance(meta, dict) and "error" not in meta:
+                return {subtarget: {"_list": True, "items": value}}
+            if proxy.last_response_code == 404:
+                return value
+            logger.warning(
+                f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                f"list from a value ({proxy.last_response_code})"
+            )
+            return None
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
@@ -2826,27 +2837,6 @@ class SubscriptionManager:
             return None
 
         # For properties subscriptions, transform list metadata into actual items
-        if (
-            target == "properties"
-            and subtarget
-            and not resource
-            and isinstance(baseline_response, list)
-        ):
-            # As the synchronous fetch: the metadata route answers only for
-            # a list.
-            if known_list:
-                return {subtarget: {"_list": True, "items": baseline_response}}
-            meta = await proxy.get_resource_async(
-                path=f"properties/{subtarget}/metadata"
-            )
-            if isinstance(meta, dict) and "error" not in meta:
-                return {subtarget: {"_list": True, "items": baseline_response}}
-            if proxy.last_response_code != 404:
-                logger.warning(
-                    f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
-                    f"list from a scalar ({proxy.last_response_code})"
-                )
-                return None
         if target == "properties" and not subtarget and not resource:
             return await self._transform_baseline_list_properties_async(
                 baseline_data=cast(dict[str, Any], baseline_response),

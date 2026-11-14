@@ -2138,3 +2138,51 @@ peer-reachable Medium in iteration-written code). Open:
    and document that the next baseline is the operator's to trigger.
 4. Whether the remaining findings go to `/iterate_plan` once more on that
    basis, or the branch's PR opens with them recorded.
+
+### 2026-11-14, after the owner's decisions on verification re-run 5
+
+#### 26. The owner's decisions (1 keep and fix, 2 A as the spec reads, 3 A, `length` b)
+
+**Category**: Decision changed and verification fix
+
+**Checked against the specification** (`docs/protocol/actingweb-spec.rst`):
+properties are "untyped, UTF-8 encoded attribute/value pairs" whose value
+"MAY [be] either a blob or a json structure", and actors "MUST NOT apply any
+logic or process on semantics when a property is changed using PUT or POST"
+(806-837): a regular property may hold a JSON array, and no rule makes an
+array a list or says how a list is created; lists and properties share one
+namespace (1015); `GET /properties` marks lists with `_list` (862-888); a
+single list's GET is a JSON array (977), and `GET properties/<name>/metadata`
+answers 404 when it is not a list (1072-1104). A list diff's `length` is
+"Advisory ... Receivers MUST NOT use it to address rows" (about 2700).
+
+**What changed**:
+- (1) A whole-target subscription with granularity `none` covers again: it
+  is polled by `sync_peer` into the same replica, so excluding it doubled
+  every pushed change (re-run 5 finding 2).
+- (2-A) A single property's baseline is what the wire says: 404 is gone;
+  another non-2xx or no answer is a failed fetch; a 2xx body is the value
+  (an empty body or `{}` is empty, text the proxy could not parse is the
+  text, `0` and `false` are values), and an array is a list only when the
+  metadata route answers for it. The sync paths' "duplicates, fetch a
+  baseline" branch goes through the same fetch (it bypassed it, finding 1),
+  and the callback handler takes any fetched value, falsy included, as
+  fetched (finding 4).
+- (3-A) `--delete-damaged-replicas` owes the rebuild only to a subscription
+  whose baseline carries the list: the whole `properties` target, or that
+  list (finding 3).
+- (b) The delete diff's `length` is no longer consulted (the spec's MUST NOT);
+  a delete with `old_item` takes the one equal row, or the one at `index`
+  among equal rows, is a no-op when none is held, and is out of step when
+  equal rows exist and none is at `index`.
+
+**Files affected**: `actingweb/replica_revocation.py`,
+`actingweb/interface/subscription_manager.py`, `actingweb/handlers/callbacks.py`,
+`actingweb/maintenance/verify_property_lists.py`, `actingweb/remote_storage.py`,
+`docs/guides/subscriptions.rst`; `tests/test_replica_rebuild.py`,
+`tests/test_replica_receiver.py`, `tests/test_subscription_baseline_fetch.py`.
+
+**Accepted**: a dict value `{"<name>": ""}` held by property `<name>` reads as
+the gone form at subtarget level; without the length check a delete arriving
+on a drifted replica whose item is gone is a no-op (overlapping subscriptions
+no longer deliver twice, so a second delivery no longer reaches it).

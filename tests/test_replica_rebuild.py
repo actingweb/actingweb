@@ -374,7 +374,7 @@ class TestVerification4Covered:
     """Verification re-run 4 (finding 3, the dropped batch's level, the
     tool's owed rebuild)."""
 
-    def test_a_whole_target_subscription_never_pushed_to_covers_nothing(self):
+    def test_a_polled_whole_target_subscription_covers_too(self):
         from actingweb.replica_revocation import subscribes_to_whole_properties
 
         listing = MagicMock()
@@ -387,7 +387,9 @@ class TestVerification4Covered:
             }
         ]
         with patch("actingweb.db.get_subscription_list", return_value=listing):
-            assert subscribes_to_whole_properties(MagicMock(), ACTOR, PEER) is False
+            # Polled by sync_peer into the same replica: covering it is what
+            # keeps a pushed subtarget change from being stored twice.
+            assert subscribes_to_whole_properties(MagicMock(), ACTOR, PEER) is True
 
     def test_deleting_a_covering_subscription_owes_the_covered_a_rebuild(self):
         from actingweb.actor import Actor
@@ -440,7 +442,25 @@ class TestVerification4Covered:
 
         listing = MagicMock()
         listing.fetch.return_value = [
-            {"peerid": PEER, "subscriptionid": SUB, "callback": True}
+            {
+                "peerid": PEER,
+                "subscriptionid": SUB,
+                "callback": True,
+                "target": "properties",
+            },
+            {
+                "peerid": PEER,
+                "subscriptionid": "other",
+                "callback": True,
+                "target": "properties",
+                "subtarget": "email",
+            },
+            {
+                "peerid": PEER,
+                "subscriptionid": "meta",
+                "callback": True,
+                "target": "meta",
+            },
         ]
         lst = MagicMock(actor_id=ACTOR, config=env.config)
         lst.name = "notes"
@@ -483,6 +503,7 @@ def test_a_known_list_needs_no_probe() -> None:
     env = _Env()
     proxy = MagicMock()
     proxy.get_resource.return_value = [1]
+    proxy.last_response_code = 200
     with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
         got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
             PEER, "properties", subtarget="notes", known_list=True
@@ -570,3 +591,34 @@ def test_a_subtarget_answering_404_is_gone() -> None:
             PEER, "properties", subtarget="notes"
         )
     assert got == {"notes": ""}
+
+
+@pytest.mark.parametrize(
+    ("body", "raw", "code", "expected"),
+    [
+        ({}, b"plain text", 200, "plain text"),
+        ({}, b"", 200, {"notes": ""}),
+        ({}, b"{}", 200, {"notes": ""}),
+        (0, b"0", 200, 0),
+        (False, b"false", 200, False),
+        ({"v": 1}, b'{"v": 1}', 200, {"v": 1}),
+        ({"error": {"code": 500}}, b"", 500, None),
+        ({"error": {"code": 408}}, b"", 408, None),
+    ],
+)
+def test_a_single_propertys_baseline_is_what_the_wire_says(
+    body: Any, raw: bytes, code: int, expected: Any
+) -> None:
+    """Verification re-run 5, the owner's decision (the spec reads
+    properties as untyped values): text is text, an empty body is empty, a
+    falsy value is a value, a non-2xx is a failed fetch."""
+    env = _Env()
+    proxy = MagicMock()
+    proxy.get_resource.return_value = body
+    proxy.last_response_code = code
+    proxy.last_response_message = raw
+    with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+        got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+            PEER, "properties", subtarget="notes"
+        )
+    assert got == expected

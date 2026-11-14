@@ -849,7 +849,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                             known_list=known_list,
                         )
                     )
-                    if callback_data:
+                    if callback_data is not None:
                         # A list's items arrive wrapped as a list by the fetch
                         # (it asks the publisher); a bare array is a scalar's.
                         logger.debug(

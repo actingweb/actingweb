@@ -587,10 +587,12 @@ def _settle_attribute_layout(
 
 
 def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
-    """Mark a rebuild owed for every callback subscription to the replica's
-    peer, so the next callback or sync replaces the deleted list from a
-    baseline (a next ``append`` alone would recreate a partial one). Returns
-    how many were marked; a fault is logged."""
+    """Mark a rebuild owed for each subscription to the replica's peer whose
+    baseline carries the list (the whole ``properties`` target, or that
+    list), so the next callback or sync replaces the deleted list (a next
+    ``append`` alone would recreate a partial one). None such: nothing
+    subscribes to the list any more. Returns how many were marked; a fault
+    is logged."""
     from types import SimpleNamespace
 
     from actingweb.callback_processor import CallbackProcessor
@@ -606,10 +608,16 @@ def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
         )
         marked = 0
         for row in rows:
+            # Only a subscription whose baseline carries the list: one to the
+            # whole properties target, or to that list. Another one's rebuild
+            # would find the list not carried and delete it again.
             if (
                 isinstance(row, dict)
                 and row.get("peerid") == peer_id
                 and row.get("callback")
+                and row.get("target") == "properties"
+                and not row.get("resource")
+                and (row.get("subtarget") or "") in ("", list_attr.name)
             ):
                 processor.settle_rebuild(
                     peer_id,

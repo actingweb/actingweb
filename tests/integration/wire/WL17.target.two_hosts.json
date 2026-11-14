@@ -552,18 +552,7 @@
        }
       },
       "replica": {
-       "lists": {
-        "notes": [
-         {
-          "id": "a",
-          "text": "one"
-         },
-         {
-          "id": "b",
-          "text": "two"
-         }
-        ]
-       },
+       "lists": {},
        "scalars": {}
       },
       "subscriptions": [
@@ -611,7 +600,9 @@
       },
       {
        "actor": "<B>",
-       "data": {},
+       "data": {
+        "notes": ""
+       },
        "event": "subscription_data",
        "peer": "<A>",
        "sequence": 3,

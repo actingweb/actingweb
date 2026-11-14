@@ -998,8 +998,8 @@ test = "test_wire_list_properties.py::test_wl17_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4"]
 exposure = false
-expected = "Suspend notes, delete the list, resume: one resync callback; B's baseline GET /properties/notes is answered 404 and B keeps the deleted list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Suspend notes, delete the list, resume: one resync callback; B's baseline GET /properties/notes is answered 404, which B reads as the list gone, and B deletes its copy."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a resync whose subtarget answers 404 deletes it from the replica: the list deleted while suspended is gone at B after the resume (attribute-list-v2-port:4)"]
 
 # ---------------------------------------------------------------------------
 # subscription-wire-baseline, Phase 1: delivery (test_wire_delivery.py)

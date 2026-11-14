@@ -400,6 +400,10 @@ class SubscriptionManager:
             subtarget=subtarget or None,
             resource=resource or None,
         )
+        if subtarget and transformed_data == {subtarget: ""}:
+            # Not there yet: at a first subscription nothing is stored to
+            # delete, so no baseline, as before 3.16.
+            transformed_data = None
 
         if transformed_data and config.auto_storage:
             # Store baseline data if auto_storage is enabled
@@ -504,6 +508,8 @@ class SubscriptionManager:
             subtarget=subtarget or None,
             resource=resource or None,
         )
+        if subtarget and transformed_data == {subtarget: ""}:
+            transformed_data = None  # as the synchronous subscribe
 
         if transformed_data and config.auto_storage:
             # Store baseline data if auto_storage is enabled
@@ -2713,6 +2719,15 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
+        if (
+            target == "properties"
+            and subtarget
+            and not resource
+            and proxy.last_response_code == 404
+        ):
+            # The property or list is gone at the publisher (exact on the
+            # wire): "" deletes it from the replica, as a callback's "" does.
+            return {subtarget: ""}
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
@@ -2794,6 +2809,15 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
+        if (
+            target == "properties"
+            and subtarget
+            and not resource
+            and proxy.last_response_code == 404
+        ):
+            # The property or list is gone at the publisher (exact on the
+            # wire): "" deletes it from the replica, as a callback's "" does.
+            return {subtarget: ""}
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "

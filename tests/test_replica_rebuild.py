@@ -489,3 +489,84 @@ def test_a_known_list_needs_no_probe() -> None:
         )
     assert got == {"notes": {"_list": True, "items": [1]}}
     proxy.get_resource.assert_called_once()
+
+
+class TestRealSubscription:
+    """The rebuild's sequence check against the real ``Subscription`` (its
+    first read is cached at construction), on DynamoDB Local: the double that
+    re-read on every call hid a regression (verification re-run 4)."""
+
+    def test_a_callback_recorded_during_the_rebuild_is_kept(self, env):
+        import os
+        import uuid
+
+        from actingweb.subscription import Subscription
+
+        if os.getenv("DATABASE_BACKEND", "dynamodb") != "dynamodb":
+            pytest.skip("DynamoDB-only test")
+        actor_id = f"rebuildseq-{uuid.uuid4().hex}"
+        env.core.id = actor_id
+        processor = CallbackProcessor(actor=ActorInterface(env.core))
+        env.processor = processor
+        row = Subscription(
+            actor_id=actor_id,
+            peerid=PEER,
+            subid=SUB,
+            callback=True,
+            config=env.config,
+        )
+        assert row.create(target="properties", granularity="high", seqnr=1)
+        try:
+            processor.settle_rebuild(PEER, SUB, rebuilt=False)
+
+            def callback_meanwhile(**_: Any) -> Any:
+                Subscription(
+                    actor_id=actor_id,
+                    peerid=PEER,
+                    subid=SUB,
+                    callback=True,
+                    config=env.config,
+                ).handle.modify(seqnr=9)  # type: ignore[union-attr]
+                return {}
+
+            env.sequences = [5]
+            with (
+                patch.object(
+                    env.manager, "get_callback_subscription", return_value=env.sub
+                ),
+                patch.object(env.manager, "_get_peer_proxy", return_value=env.proxy),
+                patch.object(
+                    env.manager,
+                    "_fetch_and_transform_baseline",
+                    side_effect=callback_meanwhile,
+                ),
+            ):
+                result = env.manager.rebuild_subscription(PEER, SUB)
+            fresh = Subscription(
+                actor_id=actor_id,
+                peerid=PEER,
+                subid=SUB,
+                callback=True,
+                config=env.config,
+            )
+            assert fresh.get()["sequence"] == 9
+            assert result.success is False
+            assert processor.rebuild_state(PEER, SUB)["owed"] is True
+        finally:
+            row.delete()
+
+
+def test_a_subtarget_answering_404_is_gone() -> None:
+    env = _Env()
+    proxy = MagicMock()
+
+    def get(path: str) -> Any:
+        proxy.last_response_code = 404
+        return {"error": {"code": 404}}
+
+    proxy.get_resource.side_effect = get
+    with patch.object(env.manager, "_get_peer_proxy", return_value=proxy):
+        got = env.manager._fetch_and_transform_baseline(  # noqa: SLF001
+            PEER, "properties", subtarget="notes"
+        )
+    assert got == {"notes": ""}

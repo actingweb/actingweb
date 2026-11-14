@@ -763,20 +763,9 @@ class RemotePeerStore:
                 raise ReplicaOutOfStep(list_name, f"insert index {idx!r} not an index")
             # As ``list.insert`` (and the publisher's SDK, which sends the
             # caller's index): a negative index counts from the end, and one
-            # past either end clamps. The publisher's ``length`` (after the
-            # insert) tells a short replica, which the clamp would hide.
+            # past either end clamps. (Not checked against ``length``: the
+            # SDK's is the advisory count hint under v2.)
             length = len(list_attr)
-            after = data.get("length")
-            if (
-                isinstance(after, int)
-                and not isinstance(after, bool)
-                and after != length + 1
-            ):
-                raise ReplicaOutOfStep(
-                    list_name,
-                    f"insert with the replica at {length} items, the publisher "
-                    f"at {after} after it",
-                )
             idx = max(0, length + idx) if idx < 0 else min(idx, length)
             list_attr.insert(idx, data["item"])
             return {"operation": "insert", "index": idx, "success": True}
@@ -962,7 +951,9 @@ class RemotePeerStore:
             results.failed.append(subtarget)
             return results
         if subtarget:
-            own = _wraps_list(data, subtarget, baseline=True)
+            # A list's state keyed by its own name, or the gone form
+            # ``{subtarget: ""}`` the fetch answers for a 404.
+            own = _wraps_list(data, subtarget, baseline=True) or data == {subtarget: ""}
             entries = data if own else {subtarget: data}
         for key, value in entries.items():
             try:
@@ -1035,6 +1026,14 @@ class RemotePeerStore:
                 self._peer_id,
             )
             return key, {"error": "refused", "success": False}
+        if value == "":
+            # Gone at the publisher (a subtarget's GET answered 404): as a
+            # callback's "" for a name, the list or the scalar is deleted.
+            if self._list_exists(key):
+                self.delete_list(key)
+            else:
+                self.delete_value(key)
+            return key, {"deleted": True, "success": True}
         if self._list_exists(key):
             self.delete_list(key)
         if isinstance(value, dict):

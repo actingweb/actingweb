@@ -493,16 +493,22 @@ class TestVerification4Findings:
         r = remote.apply_callback_data({"n": _diff("n", "append", item="x" * 500)})
         assert r.out_of_step is not None
 
-    def test_an_insert_on_a_short_replica_is_out_of_step(self, env):
+    def test_an_insert_is_not_checked_against_an_advisory_length(self, env):
+        """The SDK's insert ``length`` is the v2 count hint (advisory): a
+        clamped insert applies (verification re-run 5 reverted the check)."""
         remote, _, _ = env
         remote.set_list("n", ["a", "b", "c"])
         r = remote.apply_callback_data(
             {"n": _diff("n", "insert", index=10, item="i", length=12)}
         )
-        assert r.out_of_step is not None
-        assert remote.get_list("n") == ["a", "b", "c"]
-        r = remote.apply_callback_data(
-            {"n": _diff("n", "insert", index=-1, item="i", length=4)}
-        )
         assert r.out_of_step is None
-        assert remote.get_list("n") == ["a", "b", "i", "c"]
+        assert remote.get_list("n") == ["a", "b", "c", "i"]
+
+    def test_a_subtarget_gone_at_the_publisher_is_deleted(self, env):
+        remote, _, _ = env
+        remote.set_list("notes", ["a"])
+        remote.set_value("color", {"v": 1})
+        assert remote.apply_resync_data({"notes": ""}, subtarget="notes").failed == []
+        remote.apply_resync_data({"color": ""}, subtarget="color")
+        assert remote.list_all_lists() == []
+        assert remote.get_value("color") is None

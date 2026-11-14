@@ -2084,3 +2084,34 @@ that subscription to rebuild: the covering one stores the names).
 before); per-key and per-apply read cost (`_list_exists`, `_covered`);
 `repair_keys`/`sweep_span_orphans` making every subscriber rebuild (cost of
 an owner's maintenance).
+
+#### 25. Three checks on iteration 4 before re-run 5
+
+**Category**: Verification fix (rule from here on: a fix routes the
+ambiguous case to the existing out-of-step rebuild, discriminates on a fact
+exact on the wire, or reverts; no new inference or state)
+
+**What changed**:
+- The insert `length` check of iteration 23 is reverted: the SDK's insert
+  `length` is the v2 count hint (advisory), so a drifted hint would have made
+  every SDK insert out of step. Accepted: a short replica's clamped insert
+  is not caught by the insert itself.
+- A subtarget whose GET answers 404 (exact: gone at the publisher) is
+  fetched as `{subtarget: ""}`, which a baseline reads as gone (the list or
+  scalar is deleted), as a callback's `""` does; before, the empty-baseline
+  rule of iteration 23 kept the stale value and left the rebuild owed for
+  ever.
+- Checked, no change: the async proxy sets `last_response_code`, and
+  `GET properties/<name>/metadata` exists in v3.15.1.
+- `tests/test_replica_rebuild.py::TestRealSubscription` runs the rebuild's
+  sequence check against the real `Subscription` on DynamoDB Local; it fails
+  on `7955475` (the cached read) and passes now.
+
+**Files affected**: `actingweb/remote_storage.py`,
+`actingweb/interface/subscription_manager.py`; `tests/test_replica_receiver.py`,
+`tests/test_replica_rebuild.py`.
+- The first subscription treats the gone form as no baseline (as before:
+  nothing to delete, and no peer-metadata refresh, which 17 recordings,
+  some owned by other plans, pinned). `WL17.target` re-recorded (owned by
+  `:4`): a list deleted while suspended is now gone at the subscriber after
+  the resume (it kept the deleted list).

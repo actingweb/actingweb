@@ -1012,8 +1012,9 @@ class CallbacksHandler(base_handler.BaseHandler):
                 ):
                     # A whole properties target's callback is a set of keys:
                     # a malformed one is not stored (see RemotePeerStore) and
-                    # does not reach the hooks, which read it as an object.
-                    # Another target's hooks get what the publisher sent.
+                    # reaches none of the hooks (target, wildcard or legacy),
+                    # which read it as an object. Another target's hooks get
+                    # what the publisher sent.
                     logger.warning(
                         f"Callback from {peer_id} for {subscription_id}: the "
                         "data of a whole properties target is not an object; "

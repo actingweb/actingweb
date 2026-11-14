@@ -524,3 +524,14 @@ def test_a_target_level_body_that_is_not_an_object_is_ignored(env, body, caplog)
         r = remote.apply_callback_data(body)
     assert not r.failed and r.out_of_step is None
     assert "not an object" in caplog.text
+
+
+@pytest.mark.parametrize("body", ["x", [1, 2]])
+def test_a_target_level_baseline_that_is_not_an_object_is_ignored(env, body, caplog):
+    """An inline resync at target level that is not an object is logged and
+    not stored, as a diff is (narrow check of iteration 9)."""
+    remote, _, _ = env
+    with caplog.at_level("WARNING"):
+        r = remote.apply_resync_data(body)
+    assert not r.failed
+    assert "not an object" in caplog.text

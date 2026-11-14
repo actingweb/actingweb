@@ -950,6 +950,17 @@ class RemotePeerStore:
             # ``{subtarget: ""}`` the fetch answers for a 404.
             own = _wraps_list(data, subtarget, baseline=True) or data == {subtarget: ""}
             entries = data if own else {subtarget: data}
+        elif not isinstance(data, dict):
+            # As for a diff: a target-level baseline is a set of keys; any
+            # other body is not stored.
+            logger.warning(
+                "Ignored a target-level baseline from peer %s for actor %s: "
+                "its data is not an object (%s)",
+                self._peer_id,
+                self._actor.id,
+                type(data).__name__,
+            )
+            return results
         for key, value in entries.items():
             try:
                 outcome = self._resync_entry(key, value)

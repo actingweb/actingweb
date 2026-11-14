@@ -1,6 +1,6 @@
 ---
 status: done
-verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-6.md
+verified: thoughts/verifications/2026-11-14-attribute-list-v2-port-7.md
 ---
 
 # Implementation Plan: one list implementation for properties and attributes, and list diffs that reach a replica
@@ -1668,10 +1668,10 @@ ruff, pyright and `verify_groups.py` clean, docs build clean (`-W`). The
 amended Phase 3 tree alone: unit suite 5,801 passed, `WP4` and the sync
 coverage tests passed.
 
-### Still owed before the PR opens
-- Emm's suite ran on `6d1387c` and `/verify_implementation` ran
-  (`thoughts/verifications/2026-11-13-attribute-list-v2-port.md`): its
-  peer-reachable findings are fixed through `/iterate_plan` before the PR.
+### Before the PR (done)
+- Seven verifications, the last
+  `thoughts/verifications/2026-11-14-attribute-list-v2-port-7.md` (clean by
+  the stop rule); Emm's suite last on `a98690a`, baseline only.
 
 ### Deviations from Plan
 - Each phase's notes list them. In short: the format moved with two hooks
@@ -2333,3 +2333,12 @@ URI.
 
 **Emm**: suite on `a98690a` (environment 9): the baseline's failures only,
 on both lanes.
+- Narrow check of `a98690a..f0fe2b1` (codex and a fresh-context reviewer):
+  no regression; three Lows in the new lines, fixed: `apply_resync_data`
+  gets the same target-level guard (an inline target-level resync that is
+  not an object raised outside the per-key guard); the redirect warning
+  logs scheme, host, port and path only (no credentials or query); the
+  handler's comment says a malformed whole-properties body reaches none of
+  the hooks (target, wildcard or legacy). Noted: the hostname comparison
+  ignores the port; a peer controls its own host, so a same-host port change
+  adds nothing it could not answer directly.

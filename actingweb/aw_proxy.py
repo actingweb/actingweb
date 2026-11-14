@@ -182,9 +182,13 @@ class AwProxy:
         is out of date."""
         if not getattr(response, "history", None):
             return False
-        final = str(getattr(response, "url", "") or "")
+        final_parts = urllib_urlsplit(str(getattr(response, "url", "") or ""))
         asked_host = urllib_urlsplit(url).hostname
-        final_host = urllib_urlsplit(final).hostname
+        final_host = final_parts.hostname
+        # Scheme, host, port and path only: credentials or a query string
+        # may carry a token.
+        port = f":{final_parts.port}" if final_parts.port else ""
+        final = f"{final_parts.scheme}://{final_host}{port}{final_parts.path}"
         baseuri = (self.trust or {}).get("baseuri", "")
         if asked_host and asked_host == final_host:
             logger.warning(

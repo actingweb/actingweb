@@ -786,3 +786,22 @@ class TestRedirectedOffHost:
         proxy = self._proxy()
         self._get(proxy, "http://peer.example.com/a1/properties/color", [])
         assert proxy.last_response_redirected is False
+
+
+def test_the_redirect_warning_leaves_out_query_and_credentials(caplog):
+    proxy = AwProxy()
+    proxy.trust = {"baseuri": "http://peer.example.com/a1", "secret": "s"}
+    response = Mock(
+        status_code=200,
+        content=b"{}",
+        headers={"content-type": "application/json"},
+        history=[Mock()],
+        url="https://u:pw@peer.example.com/a1/properties?token=abc",
+    )
+    with (
+        caplog.at_level("WARNING"),
+        patch("actingweb.aw_proxy.requests.get", return_value=response),
+    ):
+        proxy.get_resource(path="properties")
+    assert "https://peer.example.com/a1/properties" in caplog.text
+    assert "token=abc" not in caplog.text and "pw" not in caplog.text

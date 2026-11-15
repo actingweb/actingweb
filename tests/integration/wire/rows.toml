@@ -124,7 +124,7 @@ reason = [
 [rows."WD10"]
 test = "test_wire_peer_paths.py::test_wd10_suspend_resume"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:3"]
 exposure = false
 expected = "Writes while suspended send nothing and queue nothing; resume sends one resync callback (sequence 1, no data); B fetches GET /<A>/properties inside it and the data hook gets the baseline as type resync; the deleted property never reaches B."
 reason = [
@@ -134,7 +134,7 @@ reason = [
 
 [rows."WD10.import"]
 test = "test_wire_peer_paths.py::test_wd10_import"
-owners = []
+owners = ["spec-1-5:3"]
 exposure = false
 expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"length\": 3} and then the resync for subtarget memories arrives as a top-level request with B's fetch of the list nested in it; A's queue keeps diffs 1 and 2. A callback recorded under the method is moved to follow it (subscription-wire-baseline iteration 5), so the row cannot tell a callback sent inside the method request from one sent after it."
 reason = [
@@ -178,7 +178,7 @@ reason = [
 [rows."WQ3"]
 test = "test_wire_peer_paths.py::test_wq3_clear"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:3"]
 exposure = false
 expected = "PUT {\"sequence\": 1} 204 clears diff 1; {\"sequence\": 0} 204; no sequence 400; text 400; an unknown id 404; GET ?_method=PUT&sequence=2 204 clears the rest."
 reason = [
@@ -188,7 +188,7 @@ reason = [
 
 [rows."WQ3.subscriber"]
 test = "test_wire_peer_paths.py::test_wq3_subscriber"
-owners = ["peer-authorisation-fixes:2"]
+owners = ["peer-authorisation-fixes:2", "spec-1-5:3"]
 exposure = false
 expected = "WQ3 in a subscriber pair without adoption rows: every clear is admitted by the built-in owner row, as in the adopted variant."
 reason = [
@@ -200,7 +200,7 @@ reason = [
 
 [rows."WQ3.subscriber_adopted"]
 test = "test_wire_peer_paths.py::test_wq3_subscriber"
-owners = []
+owners = ["spec-1-5:3"]
 exposure = false
 expected = "WQ3 in a subscriber pair with the two adoption rows: identical through every phase."
 reason = [
@@ -403,7 +403,7 @@ reason = [
 [rows."WA11"]
 test = "test_wire_access.py::test_wa11_generic_and_reserved_names"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:2"]
 exposure = false
 expected = "A peer's GET, POST and DELETE: wire_ping runs its hook (200); an unhandled name answers 200 as before; permissions, subscription, www and resource_x answer 403 with no hook; a bare subscriptions answers 403 on GET and 400 on POST and DELETE (the subscription branch with its ids missing)."
 reason = [
@@ -502,7 +502,7 @@ reason = [
 [rows."WT1"]
 test = "test_wire_trust.py::test_wt1_re_pair"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:1", "spec-1-5:5"]
 exposure = false
 expected = "B re-initiates through the SDK: its request carries the current secret as bearer, A answers 201 from its stored approval and swaps the secret only (approved, relationship and base URI kept, no trust_request_received), B stores the new secret; A's next callback carries it."
 reason = [
@@ -524,7 +524,7 @@ reason = [
 [rows."WT3"]
 test = "test_wire_trust.py::test_wt3_new_peer"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:1", "spec-1-5:2", "spec-1-5:5"]
 exposure = false
 expected = "A new peer N asks A for a trust: the verification GET to N with the new secret, then A's GET of N's /meta (its id must be N), 202, trust_request_received."
 reason = [
@@ -537,7 +537,7 @@ reason = [
 [rows."WT4"]
 test = "test_wire_trust.py::test_wt4_re_pair_with_another_relationship"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:1", "spec-1-5:5"]
 exposure = false
 expected = "B re-initiates asking for admin: B refuses it itself (the trust is friend: delete and pair again) and sends A nothing; both rows unchanged; B's subscription intact. The receiver's own 403 for a different relationship is the unit tests'."
 reason = [
@@ -599,7 +599,7 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 
 [rows."WG6"]
 test = "test_wire_grants.py::test_wg6_flows_that_must_not_change"
-owners = []
+owners = ["spec-1-5:1"]
 exposure = false
 expected = "F's reads and writes of allowed names and lists, D (admin) overwriting private and settings, L (wire_legacy) reading color, F and P calling a method and an action and listing both: the outcomes every phase keeps."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)"]
@@ -622,7 +622,7 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 
 [rows."WG9"]
 test = "test_wire_grants.py::test_wg9_category_not_mentioned"
-owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2"]
+owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2", "spec-1-5:1"]
 exposure = false
 expected = "L (no trust type, access rows only) pulls a properties subscription: color, as a direct read through the access table answers it. wire_hooked: S 403; F and L 200."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
@@ -1124,7 +1124,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-
 [rows."WD20"]
 test = "test_wire_delivery.py::test_wd20_subscribe_with_data"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:2"]
+owners = []
 exposure = false
 expected = "A holds a property and a list; B's creator subscribes: 204 at B, inside it A answers 201, then B fetches the baseline (GET /properties, the list by name), and again /properties, /methods, /actions and /permissions/<B>; B holds both."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
@@ -1224,7 +1224,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-
 [rows."WP3"]
 test = "test_wire_permissions.py::test_wp3_grant_deleted"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:2", "attribute-list-v2-port:3"]
+owners = ["attribute-list-v2-port:3"]
 exposure = false
 expected = "DELETE of A's grant (which excluded hidden): since the security plans A sends a permission callback; B stores the friend default without the exclusion (not stale)."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)"]
@@ -1232,7 +1232,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-
 [rows."WP4"]
 test = "test_wire_permissions.py::test_wp4_older_permission_callback"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:2", "attribute-list-v2-port:3"]
+owners = ["attribute-list-v2-port:3"]
 exposure = false
 expected = "Two grant changes (excluding first, then second), each a permission callback B stores; the first callback posted again with A's bearer: 204, not stored (older sender timestamp), no permissions hook runs, and since its properties grant differs from the stored copy B reconciles with A (GET /permissions)."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 permission_changes gains deleted_names and not_evaluated (attribute-list-v2-port:3)", "2026-11-13 an older-stamped callback whose properties grant differs from the stored one reconciles with A (GET /permissions), not only one that revokes a pattern (attribute-list-v2-port:3)"]
@@ -1240,7 +1240,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-
 [rows."WP6"]
 test = "test_wire_permissions.py::test_wp6_baseline_under_an_exclusion"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:2"]
+owners = []
 exposure = false
 expected = "A holds shown and hidden and excludes hidden; B subscribes: the baseline (and the second /properties fetch) returns shown only. hidden never reaches B: no exposure since the security plans."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]

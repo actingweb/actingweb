@@ -366,6 +366,11 @@ Every actor records how it came to exist in ``auth_method`` (in the
 Any marker counts as unvouched while ``email_verified`` is ``"false"``: the
 address is still waiting for its proof.
 
+``PUT`` and ``DELETE /<id>/trust/trustee`` (the trustee root, and with
+``creator`` the creator) are the creator's and the trustee's only (3.16): a
+peer of any relationship, ``admin`` included, gets 403. An ``admin`` peer
+keeps the rest of ``/trust``.
+
 ``auth_method`` is a trust assertion about ``creator``. When a sign-in later
 proves the creator address over an unvouched actor, the actor is replaced
 (``factory``) or cleaned in place (the rest); see :doc:`../reference/security`

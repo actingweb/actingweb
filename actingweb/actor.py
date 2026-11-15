@@ -40,6 +40,7 @@ from actingweb.permission_evaluator import (
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
+from .access_table import is_reserved_relationship
 from .db.creator_rules import (
     dup_value,
     is_exempt,
@@ -2312,6 +2313,11 @@ class Actor:
             relationship: The trust type/permission level to request (friend, admin, etc.)
             trust_type: Expected peer mini-app type for validation (optional)
         """
+        if is_reserved_relationship(relationship):
+            # A role or an access-table keyword (3.16): a peer named so
+            # would read as the creator or the trustee.
+            logger.warning(f"Refused a trust with the reserved name {relationship!r}")
+            return False
         try:
             # Whether this call approved a waiting request instead of sending
             # one: set by _approve_on_create, read by TrustManager for its hook.
@@ -2511,6 +2517,9 @@ class Actor:
 
         Creates a new reciprocal trust relationship locally and by requesting a relationship from a peer actor.
         """
+        if is_reserved_relationship(relationship):
+            logger.warning(f"Refused a trust with the reserved name {relationship!r}")
+            return False
         try:
             # Whether this call approved a waiting request instead of sending
             # one: set by _approve_on_create, read by TrustManager for its hook.
@@ -2997,6 +3006,9 @@ class Actor:
             trust_type: The peer's ActingWeb mini-application type URI
             relationship: The trust type/permission level (friend, admin, etc.)
         """
+        if is_reserved_relationship(relationship):
+            logger.warning(f"Refused a trust with the reserved name {relationship!r}")
+            return False
         if not peerid or len(baseuri) == 0 or not relationship:
             return False
         from .trust import is_valid_peer_baseuri, is_valid_peer_id
@@ -4179,6 +4191,9 @@ class Actor:
         desc="",
     ):
         """Async version - wraps sync method in asyncio.to_thread to prevent blocking."""
+        if is_reserved_relationship(relationship):
+            logger.warning(f"Refused a trust with the reserved name {relationship!r}")
+            return False
         import asyncio
 
         return await asyncio.to_thread(

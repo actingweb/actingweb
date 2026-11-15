@@ -33,7 +33,7 @@ Core Actor Routes
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
 - `/<actor_id>/subscriptions`: Subscriptions to peer updates
-- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name
+- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name. A name no hook is registered for answers 403 (3.16; 200 with `false` before). The one exception: a hook registered with `allow_anonymous=True` admits an unauthenticated `POST` to its own name and authenticates the caller itself (see :doc:`hooks-reference`)
 
 Web UI Routes (when with_web_ui(True))
 ======================================
@@ -42,6 +42,7 @@ Web UI Routes (when with_web_ui(True))
 - `/<actor_id>/www/properties` and `/<actor_id>/www/properties/<name>`
 - `/<actor_id>/www/trust` and `/<actor_id>/www/trust/new`
 - `/<actor_id>/www/init`: Initialization helpers
+- Any other `/<actor_id>/www/<path>`: the application's `www` callback hook; 404 when none is registered
 
 Authentication
 ==============
@@ -78,6 +79,9 @@ JSON with actor information:
         "passphrase": "actor-passphrase",
         "trustee_root": "optional-trustee-root"
     }
+
+``passphrase`` is returned to the creator and the trustee only (3.16); a
+peer, an ``admin`` one included, gets the object without it.
 
 If not authenticated, API clients receive a 401 or 403 error response. A
 peer refused by its grant on a property route gets 403 with ``{"error":

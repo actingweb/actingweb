@@ -27,6 +27,10 @@ RESERVED_CALLBACK_NAMES = frozenset(
     {"permissions", "subscription", "subscriptions", "www"}
 )
 
+# The largest body an anonymous webhook POST may carry (3.16); larger answers
+# 413. An authenticated caller is not limited here.
+ANONYMOUS_CALLBACK_MAX_BYTES = 1024 * 1024
+
 # How far ahead of the receiver's clock a permission callback's timestamp may
 # be: ordinary clock skew. Further ahead answers 400.
 PERMISSION_TIMESTAMP_SKEW = timedelta(minutes=5)
@@ -82,7 +86,8 @@ class CallbacksHandler(base_handler.BaseHandler):
     """``/<actor>/callbacks/<name>``.
 
     Every request is authenticated (401 with a challenge when it carries no
-    credentials). The two peer branches, ``subscriptions/<peer>/<subid>`` and
+    credentials), except a ``POST`` to a name whose hook was registered with
+    ``allow_anonymous=True`` (3.16), which that hook authenticates itself. The two peer branches, ``subscriptions/<peer>/<subid>`` and
     ``permissions/<peer>``, admit only the peer they name (403 for anyone
     else, the creator and an ``admin`` peer included). The generic branch
     admits any authenticated caller to the application's callback hook,
@@ -130,6 +135,104 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
         return True
 
+    def _refuse_unhandled_name(self, name: str) -> bool:
+        """403 for an authenticated request to a callback name no hook is
+        registered for (3.16, specification 1.5; it answered 200 with
+        ``false``). A hook that ran and returned a falsy value is not this:
+        it keeps its answer."""
+        if self.hooks is not None and self.hooks.has_callback_hook(name):
+            return False
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+        return True
+
+    def _anonymous_webhook(self, name: str, method: str) -> bool:
+        """Whether this request is an anonymous webhook (3.16): a POST that
+        arrived as a POST (no ``_method`` override on either side), with no
+        ``Authorization`` header, to a callback name whose hook was
+        registered with ``allow_anonymous=True``."""
+        if method != "POST" or getattr(self, "_via_override", False):
+            return False
+        if self.request.get("_method"):
+            return False
+        headers = getattr(self.request, "headers", None) or {}
+        if "Authorization" in headers or "authorization" in headers:
+            return False
+        return bool(
+            self.hooks is not None and self.hooks.allows_anonymous_callback(name)
+        )
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = getattr(self.request, "headers", None) or {}
+        try:
+            return {str(k): str(v) for k, v in dict(headers).items()}
+        except (TypeError, ValueError):
+            return {}
+
+    def _raw_body(self) -> bytes:
+        body = self.request.body
+        if body is None:
+            return b""
+        if isinstance(body, bytes):
+            return body
+        return str(body).encode("utf-8")
+
+    def _hook_data(self, raw: bytes) -> dict[str, Any]:
+        """The JSON object a body holds, or an empty dict for any other body
+        (3.16: a JSON array or scalar raised, a 500)."""
+        try:
+            parsed = json.loads(raw.decode("utf-8", "ignore") or "{}")
+        except (TypeError, ValueError, RecursionError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _post_anonymous(self, actor_id: str, name: str) -> None:
+        """An anonymous webhook POST (``allow_anonymous=True``): only the
+        hooks registered under this exact name with the flag run, never the
+        ``"*"`` hooks; no access row is consulted (there is no caller). The
+        hook verifies its caller from ``headers`` and ``raw_body``."""
+        from ..actor import Actor
+
+        headers = self._request_headers()
+        declared = {k.lower(): v for k, v in headers.items()}.get("content-length", "")
+        if declared.isdigit() and int(declared) > ANONYMOUS_CALLBACK_MAX_BYTES:
+            if self.response:
+                self.response.set_status(413, "Payload Too Large")
+            return
+        raw = self._raw_body()
+        if len(raw) > ANONYMOUS_CALLBACK_MAX_BYTES:
+            if self.response:
+                self.response.set_status(413, "Payload Too Large")
+            return
+        myself = Actor(actor_id, config=self.config)
+        if not myself.id:
+            if self.response:
+                self.response.set_status(404, "Actor not found")
+            return
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface or self.hooks is None:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+        hook_data = self._hook_data(raw)
+        hook_data["method"] = "POST"
+        hook_data["anonymous"] = True
+        hook_data["headers"] = self._request_headers()
+        hook_data["raw_body"] = raw
+        hook_result = self.hooks.execute_callback_hooks(
+            name, actor_interface, hook_data, anonymous=True
+        )
+        if not hook_result:
+            # The hook refused the caller, or raised (logged by the registry):
+            # a provider retries on a non-2xx, and a forger learns nothing.
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+        if self.response:
+            self.response.set_status(200, "OK")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps(hook_result))
+
     def _peer_segments(self, path: list[str], count: int) -> list[str] | None:
         """The ``count`` segments after the branch name, all non-empty, or
         None after answering 400."""
@@ -147,9 +250,11 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self._refuse_cross_site_override():
             return
         if self.request.get("_method") == "PUT":
+            self._via_override = True
             self.put(actor_id, name)
             return
         if self.request.get("_method") == "POST":
+            self._via_override = True
             self.post(actor_id, name)
             return
         auth_result = self._authenticate_callback(actor_id, name)
@@ -159,6 +264,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self._refuse_reserved_name(name):
             return
         if not auth_result.authorize("GET", "callbacks", name):
+            return
+        if self._refuse_unhandled_name(name):
             return
         # Execute callback hook for GET
         hook_result = None
@@ -271,6 +378,8 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
+        if self._refuse_unhandled_name(name):
+            return
         # Execute callback hook for DELETE
         hook_result = None
         if self.hooks:
@@ -290,6 +399,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def post(self, actor_id: str, name: str, method: str = "POST") -> None:
         """Handles POST callbacks (and PUT, authorised as ``method``)"""
+        if self._anonymous_webhook(name, method):
+            self._post_anonymous(actor_id, name)
+            return
         auth_result = self._authenticate_callback(actor_id, name)
         if auth_result is None:
             return
@@ -668,25 +780,16 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
         if not auth_result.authorize(method, "callbacks", name):
             return
+        if self._refuse_unhandled_name(name):
+            return
         # Execute callback hook for POST
         hook_result = None
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                # Parse request body for hook data
-                try:
-                    body: str | bytes | None = self.request.body
-                    if body is None:
-                        body_str = "{}"
-                    elif isinstance(body, bytes):
-                        body_str = body.decode("utf-8", "ignore")
-                    else:
-                        body_str = body
-                    hook_data = json.loads(body_str)
-                except (TypeError, ValueError, KeyError, RecursionError):
-                    hook_data = {}
-
+                hook_data = self._hook_data(self._raw_body())
                 hook_data["method"] = method
+                hook_data["anonymous"] = False
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )

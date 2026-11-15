@@ -12,6 +12,7 @@ Use decorators on your ``ActingWebApp`` instance to customize behavior without s
 - ``@app.action_hook(name)``: implement side‑effecting actions
 - ``@app.lifecycle_hook(event)``: react to lifecycle events
 - ``@app.subscription_hook``: handle subscription callbacks
+- ``@app.callback_hook(name)``: handle ``/<actor_id>/callbacks/<name>``
 
 Property Hooks
 --------------
@@ -204,6 +205,33 @@ Subscription Hook
        if subscription.get("target") == "properties" and "status" in data:
            actor.properties[f"peer_{peer_id}_status"] = data["status"]
        return True
+
+Webhooks From Third Parties
+---------------------------
+
+Every ``/callbacks/<name>`` request is authenticated, so a provider that
+cannot send an actor's credentials (a payment or SMS service) gets 401.
+Register its hook with ``allow_anonymous=True`` and an unauthenticated
+``POST`` to that one name reaches it (3.16). The library then knows nothing
+about the caller: **the hook authenticates it**, from the provider's
+signature over ``data["raw_body"]`` or a shared secret in
+``data["headers"]``, and refuses anything else before it writes. It
+verifies every request, not only anonymous ones: an authenticated peer of
+any relationship reaches a callback hook too.
+
+.. code-block:: python
+
+    @app.callback_hook("sms_webhook", allow_anonymous=True)
+    def sms_webhook(actor, name, data):
+        if not verify_provider_signature(data):  # every request, see below
+            return False  # answers 403
+        ...
+
+Only ``POST`` is admitted, never through a ``_method`` override, never for
+``"*"`` or the library's own callback names, and never for the ``"*"``
+hooks. A link a browser opens is a ``GET`` and stays authenticated. See
+:doc:`../reference/hooks-reference` ("Anonymous webhooks") for what the hook
+is given and the limits.
 
 MCP Decorators
 --------------

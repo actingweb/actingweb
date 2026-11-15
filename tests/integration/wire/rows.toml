@@ -409,6 +409,7 @@ expected = "A peer's GET, POST and DELETE: wire_ping runs its hook (200); an unh
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:1)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 a callback name no hook is registered for answers 403 (spec-1-5:2)",
 ]
 
 [rows."WA15"]
@@ -534,6 +535,7 @@ reason = [
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-09 the 202 answer to a request that waits carries no secret or verification_token (reverify-8 Issue 7, iteration 73) (peer-authorisation-fixes:3)",
   "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
+  "2026-11-15 the answer to a trust request carries its flags as booleans (spec-1-5:2)",
 ]
 
 [rows."WT4"]
@@ -1267,3 +1269,15 @@ owners = []
 exposure = false
 expected = "Subtarget notes, the steps of WL30.target: the same list diffs on the list's subtarget; B's list follows A's."
 reason = ["2026-11-15 first recording (spec-1-5:1)"]
+
+# ---------------------------------------------------------------------------
+# spec-1-5, Phase 2: anonymous webhooks
+# ---------------------------------------------------------------------------
+
+[rows."WA19"]
+test = "test_wire_access.py::test_wa19_anonymous_webhook"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "No credentials: a POST to B's wire_webhook (registered with allow_anonymous) runs that hook, which is given anonymous: true and the raw body, and answers 200 with its result; a GET to it and a POST to wire_ping (not flagged) answer 401 and run nothing."
+reason = ["2026-11-15 first recording (spec-1-5:2)"]

@@ -838,9 +838,10 @@ class WwwHandler(base_handler.BaseHandler):
                 "default_relationship": self.config.default_relationship,
             }
             return
-        # Execute callback hook for custom web paths
+        # Execute callback hook for custom web paths. A path no ``www`` hook
+        # is registered for is 404 (3.16; it answered 200 "False").
         output = None
-        if self.hooks:
+        if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
@@ -1655,9 +1656,10 @@ class WwwHandler(base_handler.BaseHandler):
                 self.response.set_status(500, f"Error processing property: {str(e)}")
                 return
 
-        # Handle other POST operations or custom web paths
+        # Handle other POST operations or custom web paths (404 when no
+        # ``www`` hook is registered, 3.16)
         output = None
-        if self.hooks:
+        if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(

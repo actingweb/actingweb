@@ -415,6 +415,10 @@ to its trustee and back to its owner changes nothing. A ``factory`` actor keeps
 ``force_email_prop_as_creator`` on and a stored email, a ``creator`` other than
 those two answers ``400``: the creator is pinned to that email.
 
+Only the creator and the trustee may call ``PUT`` and ``DELETE
+/<id>/trust/trustee`` (see `The passphrase and the trustee`_); a peer of
+any relationship, ``admin`` included, answers 403.
+
 The endpoint answers ``500`` and changes nothing (``trustee_root`` included)
 when it cannot read the actor's ``_internal`` bucket, when the marker cannot
 be written, or when the creator change itself fails. In the last case the
@@ -1607,8 +1611,12 @@ replaces a stored copy. On the generic branch, ``/callbacks/<name>``, any authen
 caller reaches the application's hook as before, except for the library's
 own names (``permissions``, ``subscription``, ``subscriptions``, ``www``,
 ``resource_*``), which answer 403: only a direct request to such a name is
-affected, not the library's own dispatch. A third party that called
-``/callbacks/<name>`` anonymously (a webhook) now receives 401. A peer
+affected, not the library's own dispatch. A name no hook is registered for
+answers 403 (it answered 200 with ``false``); a hook that returns ``False``
+keeps its answer. A third party that called ``/callbacks/<name>``
+anonymously (a webhook) now receives 401, unless the application registers
+that hook with ``allow_anonymous=True`` and verifies the caller in the hook
+(see :doc:`../reference/hooks-reference`, "Anonymous webhooks"). A peer
 trustee's Basic retry after a refused bearer cannot succeed on the two peer
 branches.
 
@@ -2080,6 +2088,47 @@ DELETE`` (an unhandled ``IndexError``, a 500, before).
 
 **``/meta/version`` is the application's version.** ``with_app_version("2.3.1")``
 sets it; unset it is the library's version, as before.
+
+The passphrase and the trustee
+------------------------------
+
+Two refusals close the way an ``admin`` peer could take an actor over and keep
+it after its trust was deleted. **Behavior change:** both.
+
+- ``GET /<actor_id>`` returns ``passphrase`` to the creator and the trustee
+  only. A peer, an ``admin`` one included, gets ``id``, ``creator`` and
+  ``trustee_root`` without it. *What to check:* a peer integration that read
+  the passphrase from the actor root no longer gets it; the owner hands it
+  over by other means if a trustee needs it.
+- ``PUT`` and ``DELETE /<actor_id>/trust/trustee`` (the trustee root, and
+  with ``creator`` the creator) answer 403 to every peer. Before, they were
+  authorised as ``/trust`` is, so an ``admin`` peer could set the trustee
+  root and rename the creator to ``trustee``; with the passphrase it had read,
+  that was trustee access no trust deletion ended. *What to check:* an
+  integration that set the trustee through an ``admin`` peer has the creator
+  set it. An ``admin`` peer keeps the rest of ``/trust``.
+
+A trust relationship can no longer be named ``creator``, ``trustee``,
+``owner`` or ``any``: a request or an initiation with such a name answers 400.
+The access table's ``creator`` and ``trustee`` rows never match a peer,
+whatever its relationship is named, so a peer whose trust was called
+``creator`` no longer reaches the creator's routes (``/www`` among them, which
+shows the passphrase). *What to check:* a trust type registered under one of
+those names (none should be) is renamed, and an existing trust row with such a
+relationship is deleted.
+
+**Operator step.** Nothing rotates a passphrase an ``admin`` peer of an earlier
+version may already hold. Where that matters, give the actor a new
+passphrase through the SDK (``Actor.modify(passphrase=...)``), and check
+``/meta/trustee_root`` and the creator for values you did not set.
+
+Other trust answers changed with them: ``approved`` in a trust ``PUT`` accepts
+``true`` only (``false``, ``null`` and anything else answer 400 with nothing
+changed; ``false`` answered 204 and did nothing); the answer to a trust
+request carries ``approved``, ``peer_approved`` and ``verified`` as JSON
+booleans, as a GET of the row does (a client that compared them with the
+string ``"true"`` compares with ``true``); and ``GET /permissions/<peer>``
+answers 404, not 500, for a relationship whose trust type is not registered.
 
 What stays the same
 ===================

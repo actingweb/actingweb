@@ -19,6 +19,7 @@ is actually running.
 
 import sys
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -334,3 +335,96 @@ def test_the_demo_approval_hook_runs_on_an_approval() -> None:
             {**row, "peer_approved": True},
         )
     assert [c.args[0] for c in run.call_args_list] == ["trust_fully_approved_local"]
+
+
+class _WebhookActor:
+    """An actor whose properties record what a webhook writes."""
+
+    id = "test-actor"
+
+    def __init__(self) -> None:
+        self.written: dict[str, object] = {}
+
+        actor = self
+
+        class _Props:
+            def get(self, name: str, default: object = None) -> object:
+                return actor.written.get(name, default)
+
+            def __setattr__(self, name: str, value: object) -> None:
+                actor.written[name] = value
+
+        self.properties = _Props()
+
+
+def _webhook_data(secret: str | None, body: bytes) -> dict:
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if secret is not None:
+        headers["X-Webhook-Secret"] = secret
+    return {"method": "POST", "anonymous": True, "headers": headers, "raw_body": body}
+
+
+@pytest.mark.parametrize("name", ["sms_webhook", "payment_webhook"])
+def test_demo_webhooks_are_flagged_and_email_verify_is_not(name):
+    hooks = _import_demo_application().aw_app.hooks
+    assert hooks.allows_anonymous_callback(name)
+    assert not hooks.allows_anonymous_callback("email_verify")
+
+
+def test_demo_sms_webhook_runs_with_the_right_secret(monkeypatch):
+    monkeypatch.setenv("DEMO_WEBHOOK_SECRET", "s3cret")
+    hooks = _import_demo_application().aw_app.hooks
+    actor = _WebhookActor()
+    result = hooks.execute_callback_hooks(
+        "sms_webhook",
+        actor,
+        _webhook_data("s3cret", b"From=%2B4799&Body=hi&MessageSid=m1"),
+        anonymous=True,
+    )
+    assert isinstance(result, dict)
+    assert result["status"] == "received"
+    messages: Any = actor.written["sms_messages"]
+    assert messages[0]["body"] == "hi"
+
+
+@pytest.mark.parametrize("secret", ["wrong", None])
+@pytest.mark.parametrize("name", ["sms_webhook", "payment_webhook"])
+def test_demo_webhooks_refuse_a_wrong_or_missing_secret(monkeypatch, name, secret):
+    monkeypatch.setenv("DEMO_WEBHOOK_SECRET", "s3cret")
+    hooks = _import_demo_application().aw_app.hooks
+    actor = _WebhookActor()
+    body = b"type=payment_intent.succeeded&Body=hi"
+    result = hooks.execute_callback_hooks(
+        name, actor, _webhook_data(secret, body), anonymous=True
+    )
+    assert result is False
+    assert actor.written == {}
+
+
+def test_demo_webhooks_refuse_all_without_a_configured_secret(monkeypatch):
+    monkeypatch.delenv("DEMO_WEBHOOK_SECRET", raising=False)
+    hooks = _import_demo_application().aw_app.hooks
+    actor = _WebhookActor()
+    result = hooks.execute_callback_hooks(
+        "payment_webhook",
+        actor,
+        _webhook_data("", b"type=payment_intent.succeeded"),
+        anonymous=True,
+    )
+    assert result is False
+    assert actor.written == {}
+
+
+def test_demo_webhooks_refuse_an_authenticated_caller_without_the_secret(monkeypatch):
+    """An authenticated peer of any relationship reaches a callback hook; only
+    the provider knows the secret."""
+    monkeypatch.setenv("DEMO_WEBHOOK_SECRET", "s3cret")
+    hooks = _import_demo_application().aw_app.hooks
+    actor = _WebhookActor()
+    result = hooks.execute_callback_hooks(
+        "payment_webhook",
+        actor,
+        {"method": "POST", "anonymous": False, "type": "payment_intent.succeeded"},
+    )
+    assert result is False
+    assert actor.written == {}

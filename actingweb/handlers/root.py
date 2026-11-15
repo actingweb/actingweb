@@ -1,6 +1,7 @@
 import json
 import logging
 
+from actingweb.constants import TRUSTEE_CREATOR
 from actingweb.handlers import base_handler
 
 from ..db.exceptions import DbError
@@ -72,8 +73,17 @@ class RootHandler(base_handler.BaseHandler):
         pair = {
             "id": myself.id,
             "creator": myself.creator,
-            "passphrase": myself.passphrase,
         }
+        # The passphrase to the creator and the trustee only (3.16,
+        # specification 1.5): a peer, an admin one included, could keep
+        # trustee access with it after its trust was deleted.
+        acl = getattr(auth_result.auth_obj, "acl", None)
+        acl = acl if isinstance(acl, dict) else {}
+        if not acl.get("peerid") and acl.get("relationship") in (
+            "creator",
+            TRUSTEE_CREATOR,
+        ):
+            pair["passphrase"] = myself.passphrase
         trustee_root = myself.store.trustee_root if myself.store else None
         if trustee_root and len(trustee_root) > 0:
             pair["trustee_root"] = trustee_root

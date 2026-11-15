@@ -44,6 +44,9 @@ def _put(
     auth_result.success = True
     auth_result.actor = actor
     auth_result.authorize = Mock(return_value=True)
+    # The creator's call: only the creator and the trustee may change the
+    # creator (3.16, spec-1-5 Phase 2).
+    auth_result.auth_obj.acl = {"relationship": "creator", "peerid": ""}
     handler.authenticate_actor = Mock(return_value=auth_result)
     handler._get_actor_interface = Mock(return_value=interface or Mock())  # type: ignore[method-assign]
     handler.put(aid(actor), "trustee")

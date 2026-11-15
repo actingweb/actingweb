@@ -782,17 +782,15 @@
     }
    },
    "result": {
-    "body": false,
-    "status": 200
+    "body": "",
+    "status": 403
    },
    "step": "GET unhandled",
    "wire": [
     {
      "auth": "bearer:trust:A-B",
      "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
+     "headers": {},
      "host": "wire_app",
      "method": "GET",
      "path": "/<B>/callbacks/unhandled",
@@ -800,8 +798,8 @@
      "request": {
       "x": 1
      },
-     "response": false,
-     "status": 200
+     "response": null,
+     "status": 403
     }
    ]
   },
@@ -975,17 +973,15 @@
     }
    },
    "result": {
-    "body": false,
-    "status": 200
+    "body": "",
+    "status": 403
    },
    "step": "POST unhandled",
    "wire": [
     {
      "auth": "bearer:trust:A-B",
      "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
+     "headers": {},
      "host": "wire_app",
      "method": "POST",
      "path": "/<B>/callbacks/unhandled",
@@ -993,8 +989,8 @@
      "request": {
       "x": 1
      },
-     "response": false,
-     "status": 200
+     "response": null,
+     "status": 403
     }
    ]
   },
@@ -1168,17 +1164,15 @@
     }
    },
    "result": {
-    "body": false,
-    "status": 200
+    "body": "",
+    "status": 403
    },
    "step": "DELETE unhandled",
    "wire": [
     {
      "auth": "bearer:trust:A-B",
      "children": [],
-     "headers": {
-      "content-type": "application/json"
-     },
+     "headers": {},
      "host": "wire_app",
      "method": "DELETE",
      "path": "/<B>/callbacks/unhandled",
@@ -1186,8 +1180,8 @@
      "request": {
       "x": 1
      },
-     "response": false,
-     "status": 200
+     "response": null,
+     "status": 403
     }
    ]
   },

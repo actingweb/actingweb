@@ -420,6 +420,20 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
         )
         return True
 
+    @aw_app.callback_hook("wire_webhook", allow_anonymous=True)
+    def record_webhook(actor, name, data):
+        """A third party's webhook (``allow_anonymous``, 3.16): records what
+        the hook is given to verify its caller with."""
+        record_event(
+            "callback",
+            actor=actor.id,
+            name=name,
+            method=data.get("method"),
+            anonymous=data.get("anonymous"),
+            raw_body=bytes(data.get("raw_body") or b"").decode("utf-8", "replace"),
+        )
+        return {"received": True}
+
     @aw_app.callback_hook("wire_ping")
     def record_ping(actor, name, data):
         """An application callback on the generic branch (``/callbacks/wire_ping``)."""

@@ -1260,11 +1260,23 @@ class ActingWebApp:
 
         return decorator
 
-    def callback_hook(self, callback_name: str = "*") -> Callable[..., Any]:
-        """Decorator to register actor-level callback hooks."""
+    def callback_hook(
+        self, callback_name: str = "*", *, allow_anonymous: bool = False
+    ) -> Callable[..., Any]:
+        """Decorator to register actor-level callback hooks.
+
+        ``allow_anonymous=True`` (3.16) also runs the hook for a ``POST`` to
+        ``/<actor>/callbacks/<callback_name>`` without credentials, for a
+        third party's webhook; the hook authenticates its caller itself from
+        ``data["headers"]`` and ``data["raw_body"]`` (``data["anonymous"]``
+        is True). Refused for ``"*"`` and the library's own callback names,
+        when the decorator is applied. See the hooks reference.
+        """
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            self.hooks.register_callback_hook(callback_name, func)
+            self.hooks.register_callback_hook(
+                callback_name, func, allow_anonymous=allow_anonymous
+            )
             return func
 
         return decorator

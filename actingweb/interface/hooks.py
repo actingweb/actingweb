@@ -361,6 +361,9 @@ class HookRegistry:
     def __init__(self) -> None:
         self._property_hooks: dict[str, dict[str, list[Callable[..., Any]]]] = {}
         self._callback_hooks: dict[str, list[Callable[..., Any]]] = {}
+        # Hooks registered with ``allow_anonymous=True`` (3.16), by name: the
+        # only hooks an unauthenticated POST to that name runs.
+        self._anonymous_callback_hooks: dict[str, list[Callable[..., Any]]] = {}
         self._app_callback_hooks: dict[
             str, list[Callable[..., Any]]
         ] = {}  # New: for application-level callbacks
@@ -521,7 +524,11 @@ class HookRegistry:
                 self._property_hooks[property_name][op].append(func)
 
     def register_callback_hook(
-        self, callback_name: str, func: Callable[..., Any]
+        self,
+        callback_name: str,
+        func: Callable[..., Any],
+        *,
+        allow_anonymous: bool = False,
     ) -> None:
         """
         Register a callback hook function.
@@ -529,10 +536,41 @@ class HookRegistry:
         Args:
             callback_name: Name of callback to hook ("*" for all callbacks)
             func: Function with signature (actor, name, data) -> bool
+            allow_anonymous: Also run this hook for a ``POST`` to
+                ``/<actor>/callbacks/<callback_name>`` that carries no
+                credentials (3.16), for a third party's webhook. The hook
+                then authenticates its caller itself: its ``data`` carries
+                ``anonymous: True``, the request's ``headers`` and its
+                ``raw_body``. Refused (``ValueError``) for ``"*"`` and for
+                the library's own callback names.
         """
+        if allow_anonymous:
+            from ..handlers.callbacks import is_reserved_callback_name
+
+            if callback_name == "*" or is_reserved_callback_name(callback_name):
+                raise ValueError(
+                    f"allow_anonymous is refused for the callback name "
+                    f"{callback_name!r}: the wildcard and the library's own "
+                    f"callback paths are never reached without credentials"
+                )
+            self._anonymous_callback_hooks.setdefault(callback_name, []).append(func)
         if callback_name not in self._callback_hooks:
             self._callback_hooks[callback_name] = []
         self._callback_hooks[callback_name].append(func)
+
+    def has_callback_hook(self, callback_name: str) -> bool:
+        """Whether any hook would run for ``callback_name``: one registered
+        for it, or for ``"*"`` (3.16). Tells "nothing handles this name"
+        apart from "a hook ran and returned a falsy value", which
+        :meth:`execute_callback_hooks` answers alike."""
+        return bool(
+            self._callback_hooks.get(callback_name) or self._callback_hooks.get("*")
+        )
+
+    def allows_anonymous_callback(self, callback_name: str) -> bool:
+        """Whether a hook for ``callback_name`` was registered with
+        ``allow_anonymous=True``."""
+        return bool(self._anonymous_callback_hooks.get(callback_name))
 
     def register_app_callback_hook(
         self, callback_name: str, func: Callable[..., Any]
@@ -766,9 +804,17 @@ class HookRegistry:
         return value
 
     def execute_callback_hooks(
-        self, callback_name: str, actor: Any, data: Any
+        self,
+        callback_name: str,
+        actor: Any,
+        data: Any,
+        *,
+        anonymous: bool = False,
     ) -> bool | dict[str, Any]:
         """Execute callback hooks and return whether callback was processed or result data.
+
+        ``anonymous=True`` runs only the hooks registered for this exact name
+        with ``allow_anonymous=True``, never the ``"*"`` hooks (3.16).
 
         Note: If you have async hooks and are in an async context,
         use execute_callback_hooks_async() instead for proper async execution.
@@ -777,10 +823,11 @@ class HookRegistry:
         """
         processed = False
         result_data: dict[str, Any] | None = None
+        named = self._anonymous_callback_hooks if anonymous else self._callback_hooks
 
         # Execute hooks for specific callback
-        if callback_name in self._callback_hooks:
-            for hook in self._callback_hooks[callback_name]:
+        if callback_name in named:
+            for hook in named[callback_name]:
                 try:
                     hook_result = self._execute_hook_in_sync_context(
                         hook, actor, callback_name, data
@@ -795,7 +842,7 @@ class HookRegistry:
                     logger.error(f"Error in callback hook for {callback_name}: {e}")
 
         # Execute hooks for all callbacks
-        if "*" in self._callback_hooks:
+        if "*" in self._callback_hooks and not anonymous:
             for hook in self._callback_hooks["*"]:
                 try:
                     hook_result = self._execute_hook_in_sync_context(
@@ -1246,6 +1293,10 @@ class HookRegistry:
     ) -> bool | dict[str, Any]:
         """Execute callback hooks asynchronously.
 
+        Runs every hook for the name and the ``"*"`` hooks, so it is not for
+        an anonymous webhook: the library dispatches those with
+        :meth:`execute_callback_hooks` and ``anonymous=True``.
+
         Args:
             callback_name: Name of the callback
             actor: ActorInterface instance
@@ -1523,12 +1574,15 @@ def property_hook(
     return decorator
 
 
-def callback_hook(callback_name: str = "*") -> Callable[..., Any]:
+def callback_hook(
+    callback_name: str = "*", *, allow_anonymous: bool = False
+) -> Callable[..., Any]:
     """
     Decorator for registering actor-level callback hooks.
 
     Args:
         callback_name: Name of callback to hook ("*" for all)
+        allow_anonymous: See :meth:`HookRegistry.register_callback_hook`
 
     Example:
         .. code-block:: python
@@ -1540,7 +1594,9 @@ def callback_hook(callback_name: str = "*") -> Callable[..., Any]:
     """
 
     def decorator(func: Callable[..., Any]) -> Callable:
-        _hook_registry.register_callback_hook(callback_name, func)
+        _hook_registry.register_callback_hook(
+            callback_name, func, allow_anonymous=allow_anonymous
+        )
         return func
 
     return decorator

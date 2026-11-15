@@ -133,9 +133,11 @@ class PermissionsHandler(base_handler.BaseHandler):
                     logger.error(
                         f"Trust type '{trust_rel.relationship}' not found in registry"
                     )
+                    # 404, as the trust permissions endpoint answers (3.16,
+                    # specification 1.5; it was a 500).
                     if self.response:
                         self.response.set_status(
-                            500, f"Trust type '{trust_rel.relationship}' not configured"
+                            404, f"Trust type '{trust_rel.relationship}' not found"
                         )
                     return
 

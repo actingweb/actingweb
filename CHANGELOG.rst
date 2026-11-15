@@ -8,6 +8,27 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **An admin peer could keep trustee access to an actor after its trust was
+  deleted.** ``GET /<actor_id>`` returned the passphrase to every caller the
+  access table admitted, an ``admin`` peer included, and ``PUT
+  /<actor_id>/trust/trustee`` was authorised as ``/trust`` is, so an admin
+  peer could set the trustee root and rename the creator to ``trustee``:
+  with the passphrase, that was trustee access no trust deletion ended. Now
+  the passphrase is returned to the creator and the trustee only, and only
+  they may ``PUT`` or ``DELETE /trust/trustee`` (403 for every peer; an admin
+  peer keeps the rest of ``/trust``). A trust relationship can no longer be
+  named ``creator``, ``trustee``, ``owner`` or ``any`` (400 when requested
+  or initiated), and the access table's ``creator`` and ``trustee`` rows
+  never match a peer whatever its relationship is called: a peer whose
+  trust was named ``creator`` matched the creator's rows, ``/www`` (which
+  shows the passphrase) included. **Behavior change:** a peer no longer
+  reads the passphrase, and an integration that set the trustee through an
+  admin peer has the creator set it. **Check:** an admin peer of an earlier
+  version may hold the passphrase; where that matters, set a new one with
+  ``Actor.modify(passphrase=...)`` and check ``/meta/trustee_root`` and the
+  creator. See ``docs/migration/v3.16.rst``, "The passphrase and the
+  trustee".
+
 - **An actor's owner could write a grant into another actor.** ``PUT
   /<actor>/trust/<rel>/<peer>/permissions`` (and ``permissions`` in a trust
   ``PUT``) on an existing override copied any field the request named,
@@ -928,6 +949,30 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **An authenticated callback to a name nothing handles answers 403.**
+  ``/callbacks/<name>`` with no hook registered for the name (and no ``"*"``
+  hook) answered 200 with ``false``; a hook registry could not tell that
+  apart from a hook that ran and returned ``False``. Now
+  ``HookRegistry.has_callback_hook`` tells them apart: nothing registered is
+  403, and a hook that returns a falsy value keeps its 200. An
+  authenticated body that is not a JSON object reaches the hook as an empty
+  dict (a JSON array was a 500), and the hook's ``data`` carries
+  ``anonymous: False``. **Behavior change:** a probe that expected 200 from
+  an unhandled callback gets 403.
+- **A ``/www/<path>`` with no ``www`` hook registered answers 404** (it
+  answered 200 with the text ``False``). A ``www`` hook that returns
+  ``False`` keeps its answer. **Behavior change.**
+- **Trust answers follow the specification.** ``approved`` in a trust
+  ``PUT`` accepts ``true`` (or the string ``"true"`` a form sends) only;
+  ``false``, ``null`` and anything else answer 400 with nothing changed
+  (``false`` was read as absent and answered 204). The answer to a trust
+  request (and a re-pair) carries ``approved``, ``peer_approved`` and
+  ``verified`` as JSON booleans, as a GET of the row does (they were the
+  strings ``"true"``/``"false"``). ``GET /permissions/<peer>`` answers 404
+  for a relationship whose trust type is not registered, as the trust
+  permissions endpoint does (it answered 500). **Behavior change:** a
+  client that compared the flags with ``"true"`` compares with ``true``.
 
 - **List items are addressed by path, and ``POST`` to a list appends
   (specification 1.5).** ``GET /properties/<list>/0`` answered the whole
@@ -2143,6 +2188,18 @@ CHANGED
 
 ADDED
 ~~~~~
+
+- **``allow_anonymous`` on callback hooks, for third-party webhooks.**
+  ``@app.callback_hook(name, allow_anonymous=True)`` lets an unauthenticated
+  ``POST /<actor_id>/callbacks/<name>`` reach that hook (only a ``POST``
+  that arrived as one, no ``_method`` override, never ``"*"`` or the
+  library's callback names, never the ``"*"`` hooks; 413 above 1 MB). The
+  hook authenticates its caller itself from ``data["headers"]`` and
+  ``data["raw_body"]`` (``data["anonymous"]`` is ``True``), and its falsy
+  result answers 403 (a truthy one 200). Since 3.16 made
+  every callback authenticated, this is how a provider webhook works again.
+  The demo's ``sms_webhook`` and ``payment_webhook`` use it with a shared
+  secret.
 
 - **``ActingWebApp.with_app_version(version)``** sets the application's
   version, served at ``/meta/version`` and in the ``/meta`` object. The

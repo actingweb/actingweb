@@ -1630,8 +1630,9 @@ CHANGED
   **Check:** the migration guide's "Creator uniqueness" section has the
   rollout order (Step 0: ``report``, ``resolve --apply``, ``enable --apply``
   before the deploy) and the IAM grants (``ConditionCheckItem`` on the actor
-  table); the demo application and ``actingweb_mcp`` run the flag on and
-  need both before they serve 3.16, or they refuse to start. See the entry
+  table); an application that already ran the flag on (the demo
+  application does) needs both before it serves 3.16, or it refuses to
+  start. See the entry
   "Behavior change: ``unique_creator`` defaults to on" below.
 
 - **Breaking: the factory form no longer redirects to an existing actor.**

@@ -22,7 +22,7 @@ also item 25.
 
    **An application does not start on 3.16 until you have run
    ``actingweb-unique-creators``,** because creator uniqueness is on by
-   default (the demo application and ``actingweb_mcp`` already used it). Run
+   default (applications that already called ``with_unique_creator()`` are affected the same way). Run
    `Step 0`_ against the production database before the deploy; the
    application otherwise raises ``UniqueCreatorNotReady`` from
    ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
@@ -1120,8 +1120,8 @@ it exists, even with the flag off.
   write units instead of 1 (a transaction, and the conditional release of
   the old record). Only opted-in tables pay this.
 
-**Scripts that write actors directly.** ``actingweb_mcp``'s
-``scripts/restore_actor.py`` writes through ``DbActor``: either create
+**Scripts that write actors directly.** A script that writes actors
+through ``DbActor`` (a restore or import tool, say): either create
 through ``Actor.create`` with the flag on, or run ``resolve --apply`` and
 ``enable --apply`` after it. ``report`` finds what such a script leaves.
 
@@ -1231,8 +1231,8 @@ attributes tables: a policy scoped per table needs ``ConditionCheckItem``,
   ``CreatorTaken``.
 - Callers of ``Actor.modify(creator=…)`` that relied on the load putting the
   email back.
-- Scripts that write ``_internal`` directly (``actingweb_mcp``'s
-  ``scripts/restore_actor.py --full``): run the sweep's dry run after one.
+- Scripts that write ``_internal`` directly (a restore or import tool):
+  run the sweep's dry run after one.
 - A custom actor backend: ``rename_creator`` (`Custom database backends`_).
 
 SPA ``prompt``
@@ -1508,7 +1508,7 @@ admitted by a GET row. A peer's own subscription
 (``subscriptions/<id>/<subid>``) and its own trust row are admitted by the
 built-in ``owner`` rows, which now compare with the peer the path names, so
 a trust type whose ``acl_rules`` grant only GET on its subscription (the
-pattern ``actingweb_mcp``'s ``subscriber`` type used) needs nothing new: its
+common pattern for a subscriber-only trust type) needs nothing new: its
 subscribers clear their queue and are unsubscribed as before, and another
 peer's PUT or DELETE answers 403. PUT and DELETE rows an application added
 are harmless. The ``owner`` rows on subscriptions are now ``("owner",

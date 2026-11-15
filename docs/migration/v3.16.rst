@@ -907,6 +907,13 @@ builder calls cannot leave it stale, and ``Config.aw_supported`` is **read-only*
 (an assignment raises ``AttributeError``). A peer that keyed on ``sessions`` or
 ``onewaytrust`` finds neither; none that we know of does.
 
+``subscriptionbatch`` is gone too: no specification defines it and nothing
+served it. ``permissioncallback`` and ``permissionquery`` are always
+advertised, since the two endpoints are always served (they were listed only
+with peer permission caching on). A peer that read ``subscriptionbatch`` from
+the list stops finding it; ``PeerCapabilities.supports_batch_subscriptions()``
+still reads what a peer says and answers ``False`` for a 3.16 peer.
+
 Permission pattern escapes
 --------------------------
 
@@ -1710,8 +1717,9 @@ validated and authorised before anything is applied. One refusal is 403 with
 ``{"error": "forbidden", "refused": [<names>]}`` and nothing changed; a
 malformed ``items`` is 400 with nothing changed. Before 3.16 a refused name
 was skipped silently, and a refused bulk list update answered 403 after it
-was applied. ``POST /properties/<name>`` is 400 (it answered 400 and wrote
-the body anyway); post to the collection.
+was applied. ``POST /properties/<name>`` is 400 for a name that is not a
+list (it answered 400 and wrote the body anyway); post to the collection. For
+a list it appends one item (see `List items by path, and text values`_).
 
 **Behavior change: a rule that does not match denies.** When a peer's grant
 states a rule for properties or resources (the key is present, even empty),
@@ -2016,6 +2024,62 @@ applied twice.
 - *Mixed versions.* Until every process runs 3.16, a 3.15 process reads a
   converted list, a replica's included, as empty (see "During a rolling
   deploy" and "Rolling back" above).
+
+List items by path, and text values
+-----------------------------------
+
+Specification 1.5 is written to what the library serves; these are the
+``/properties`` answers that changed for it.
+
+**List items by path.** ``GET``, ``PUT`` and ``DELETE
+/properties/<list>/<n>`` address item ``n`` of an existing list, as
+``?index=n`` does for GET and PUT: GET returns the item (404 out of range),
+PUT replaces it or appends at the length (204; 404 beyond it), DELETE removes
+it and the rest close up (204; 404 out of range). ``POST
+/properties/<list>`` appends the body as one item: 201 with ``Location:
+…/properties/<list>/<index>`` and ``{"index": <index>}`` (two concurrent
+appends get two indices on a v2 list; a v1 list can report the same index
+for both, as its appends always could). The second segment
+is an item only when it is a canonical non-negative integer and the first is a
+list; under any other name a numeric segment is still a nested key, and
+``items`` and ``metadata`` keep their routes. Access is decided on the list
+name. The hooks each form runs and the out-of-range answers of the three item
+forms (path, ``?index``, ``/items``) are in :doc:`../guides/property-lists`,
+"Three ways to address an item".
+
+*What to check:* a client that read the whole list from ``GET
+/properties/<list>/0`` (it answered the list and ignored the index) now gets
+item 0; read ``/properties/<list>`` for the list. A client that relied on
+``POST /properties/<list>`` answering 400 now appends. **Behavior change:**
+both.
+
+**A value that is not JSON is ``text/plain``.** ``GET /properties/<name>`` of
+a value stored as text answers ``Content-Type: text/plain; charset=utf-8``; a
+JSON value stays ``application/json``. The scalar ``/meta`` paths
+(``/meta/id``, ``/meta/version``, ``/meta/actingweb/supported``, …) are
+``text/plain`` too; Flask labelled them ``text/html`` and FastAPI sent no
+label. *What to check:* a client that called a JSON parser because of the
+label (``response.json()`` on a text value raised before, as now) reads the
+text. A 3.16 subscriber accepts a text baseline labelled either way, so a
+3.15 subscriber of a 3.16 publisher is the one case to upgrade first: it
+reads a ``text/plain`` value at a property-name subscription as a failed
+fetch. **Behavior change.**
+
+**409 for a name that is taken.** A write that would put a property where a
+list of that name exists, or a list where a property exists, answers 409
+``{"error": "name_taken", ...}`` and writes nothing for that name, on every
+route (single and nested ``PUT``, a key of a ``POST`` body or form, list
+creation); in a ``POST`` of several keys the keys applied before it stay
+written and reach the subscribers. It was
+400 on the nested ``PUT`` and 500 on the others. The property's ``put`` or
+``post`` hook has run when the 409 is answered. In the library the condition
+raises ``ListNameTakenError`` (a ``ValueError``, as before).
+
+**``PUT /properties`` without a name is 405** with ``Allow: GET, POST,
+DELETE`` (an unhandled ``IndexError``, a 500, before).
+
+**``/meta/version`` is the application's version.** ``with_app_version("2.3.1")``
+sets it; unset it is the library's version, as before.
 
 What stays the same
 ===================

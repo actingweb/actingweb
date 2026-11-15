@@ -113,6 +113,7 @@ class ActingWebApp:
         self._actors_config: dict[str, dict[str, Any]] = {}
         self._enable_ui = False
         self._enable_devtest = False
+        self._app_version: str | None = None
         self._enable_bot = False
         self._bot_config: dict[str, Any] | None = None
         self._www_auth = "basic"
@@ -215,6 +216,7 @@ class ActingWebApp:
         if self._config is None:
             return
         # Core toggles
+        self._config.version = self._app_version or __version__
         self._config.ui = self._enable_ui
         self._config.devtest = self._enable_devtest
         self._config.www_auth = self._www_auth
@@ -353,6 +355,21 @@ class ActingWebApp:
     def with_web_ui(self, enable: bool = True) -> "ActingWebApp":
         """Enable or disable the web UI."""
         self._enable_ui = enable
+        self._apply_runtime_changes_to_config()
+        return self
+
+    def with_app_version(self, version: str) -> "ActingWebApp":
+        """Set the application's version, served at ``/meta/version`` and in
+        the ``/meta`` object (3.16).
+
+        The specification defines ``/meta/version`` as the version of the
+        application, not of the library serving it. Unset, it is the
+        ActingWeb library's version, as before; an application should set
+        its own (any non-empty string, for example ``"2.3.1"``).
+        """
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("with_app_version() needs a non-empty version string")
+        self._app_version = version
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1471,7 +1488,7 @@ class ActingWebApp:
                 proto=self.proto,
                 aw_type=self.aw_type,
                 desc=f"ActingWeb app: {self.aw_type}",
-                version=__version__,
+                version=self._app_version or __version__,
                 devtest=self._enable_devtest,
                 actors=self._actors_config,
                 force_email_prop_as_creator=self._force_email_prop_as_creator,

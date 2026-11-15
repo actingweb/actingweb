@@ -125,3 +125,10 @@ and position).
   and a list baseline containing the string `"error"` raises on `.get`.
   Belongs with the failed-fetch signal above.
 
+- **The permission callback's incremental fetch stores a text value as `{}`**
+  (`CallbacksHandler._fetch_single_property`, `handlers/callbacks.py`, via
+  `AwProxy.get_resource`, which answers a non-JSON 200 as `{}`). A newly
+  granted property whose value is text reaches the replica as an empty
+  object; the baseline path reads the raw body (`_subtarget_value`) and is
+  not affected. Found by the codex review of spec-1-5 Phase 1 (2026-11-15);
+  predates it, and is independent of the `text/plain` label that phase added.

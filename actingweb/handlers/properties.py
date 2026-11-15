@@ -2,11 +2,14 @@ import copy
 import functools
 import json
 import logging
+import re
+import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
+from actingweb.list_core import ListNameTakenError
 from actingweb.property_list import (
     ListCorruptionError,
     ListItemSpanError,
@@ -335,6 +338,70 @@ def register_list_diff(
     )
 
 
+_ITEM_INDEX_RE = re.compile(r"(?:0|[1-9][0-9]*)")
+
+
+def item_index(segment: str) -> int | None:
+    """The item index a path segment names: a canonical non-negative integer
+    (``0``, ``7``; not ``-1``, ``01`` or ``+1``), else None (3.16)."""
+    if _ITEM_INDEX_RE.fullmatch(segment):
+        return int(segment)
+    return None
+
+
+class _ConcurrentlyModified(Exception):
+    """A v2 item's conditional write lost to another writer."""
+
+
+class _DeleteRefused(Exception):
+    """The ``delete`` hook refused the item (``approve`` returned False)."""
+
+
+def delete_list_item(
+    list_prop: Any, index: int, approve: Callable[[Any], bool] | None = None
+) -> dict[str, Any] | None:
+    """Delete the item at ``index`` and return the ``delete`` diff's fields
+    (``index``, ``length``, ``old_item`` when it was read); None when the
+    index is out of range. Shared by ``/items`` and the path form (3.16).
+
+    ``approve`` is given the item before anything is deleted; False raises
+    ``_DeleteRefused``. On a v2 list the item it is given is the one the
+    delete is conditioned on, so a concurrent change between the two
+    answers ``_ConcurrentlyModified``, never the deletion of another item.
+
+    Raises ``_ConcurrentlyModified`` when a v2 item changed since it was
+    read, and lets a broken span (``ListItemSpanError``) through.
+    """
+    fields: dict[str, Any] = {"index": index}
+    if list_prop.storage_format() == 2:
+        pairs = list_prop.items_with_handles(resolve=approve is not None)
+        if index < 0 or index >= len(pairs):
+            return None
+        handle = pairs[index][0]
+        if approve is not None and not approve(pairs[index][1]):
+            raise _DeleteRefused()
+        old_fields = handle_old_item_fields(list_prop, handle)
+        if "old_item" in old_fields:
+            fields["old_item"] = old_fields["old_item"]
+        fields["length"] = len(pairs) - 1
+        if not list_prop.delete_by_handle(handle):
+            raise _ConcurrentlyModified(
+                f"list '{list_prop.name}' item at index {index} was "
+                f"concurrently modified"
+            )
+        return fields
+    try:
+        if approve is not None and not approve(list_prop[index]):
+            raise _DeleteRefused()
+        del list_prop[index]
+    except ListItemSpanError:
+        raise
+    except IndexError:
+        return None
+    fields["length"] = list_length_hint(list_prop)
+    return fields
+
+
 # A bulk list update over this many changes is announced as one resync of
 # the list after the batch instead of a diff per change (3.16).
 BULK_LIST_DIFF_LIMIT = 25
@@ -526,13 +593,30 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         which names exist."""
         if len(path) < 2 or not peer_of(auth_obj):
             return True
-        if not (
-            myself
-            and getattr(myself, "property_lists", None) is not None
-            and myself.property_lists.exists(path[0])
-        ):
+        if not self._is_list(myself, path[0]):
             return True
         return self._check_property_permission(actor_id, auth_obj, path[0], operation)
+
+    def _respond_name_taken(self, error: Exception) -> None:
+        """409: the name is a list where a property was written, or a
+        property where a list was created (3.16; 400 or 500 before)."""
+        if self.response:
+            self.response.set_status(409, "Conflict")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(
+                json.dumps({"error": "name_taken", "detail": str(error)})
+            )
+
+    def _is_list(self, myself: Any, name: str) -> bool:
+        """Whether ``name`` is an existing list, read once per request."""
+        known: dict[str, bool] = self.__dict__.setdefault("_known_lists", {})
+        if name not in known:
+            known[name] = bool(
+                myself
+                and getattr(myself, "property_lists", None) is not None
+                and myself.property_lists.exists(name)
+            )
+        return known[name]
 
     def _touches_excluded(self, myself: Any, path: list[str], incoming: Any) -> bool:
         """Whether a peer's write or delete at ``path`` would touch a part its
@@ -683,6 +767,144 @@ class PropertiesHandler(_PropertyHandlerBase):
         )
         return True
 
+    def _delete_item(self, myself: Any, check: Any, name: str, index: int) -> None:
+        """``DELETE /properties/<list>/<n>`` (3.16): the item goes and the
+        rest close up; 404 out of range. The ``delete`` hook runs with
+        ``[name, str(n)]`` and the item the delete is conditioned on, and its
+        refusal is a 403; the diff is the one ``/items`` registers. Access
+        was decided on the path and on the list name before this runs."""
+        approve: Callable[[Any], bool] | None = None
+        actor_interface = self._get_actor_interface(myself) if self.hooks else None
+        if actor_interface:
+            auth_context = self._create_auth_context(check, "delete")
+
+            def run_delete_hook(item: Any) -> bool:
+                return (
+                    self._run_hooks(
+                        name,
+                        "delete",
+                        actor_interface,
+                        item,
+                        [name, str(index)],
+                        auth_context,
+                    )
+                    is not None
+                )
+
+            approve = run_delete_hook
+
+        try:
+            list_prop = getattr(myself.property_lists, name)
+            fields = delete_list_item(list_prop, index, approve)
+        except _DeleteRefused:
+            if self.response:
+                self.response.set_status(403)
+            return
+        except _ConcurrentlyModified as e:
+            self._respond_list_metadata_contended(RuntimeError(str(e)))
+            return
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
+            return
+        except ListCorruptionError as e:
+            self._respond_list_corrupted(name, e)
+            return
+        if fields is None:
+            if self.response:
+                self.response.set_status(404, "List item not found")
+            return
+        register_list_diff(myself, self.config, name, "delete", **fields)
+        if self.response:
+            self.response.set_status(204)
+
+    def _append_item(self, actor_id: str, myself: Any, check: Any, name: str) -> None:
+        """``POST /properties/<list>`` appends the body as one item (3.16;
+        400 before): 201 with ``Location`` naming the index the append
+        landed at. The ``put`` hook runs first with ``[name, str(length)]``,
+        as a ``PUT`` at the length does, and its refusal is a 400 with
+        nothing written."""
+        body = self.request.body
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "ignore")
+        elif body is None:
+            body = ""
+        try:
+            item_value: Any = json.loads(body)
+        except RecursionError:
+            if self.response:
+                self.response.set_status(400, "Body nested too deep")
+            return
+        except (TypeError, ValueError):
+            item_value = body
+        try:
+            list_prop = getattr(myself.property_lists, name)
+            if self.hooks:
+                actor_interface = self._get_actor_interface(myself)
+                if actor_interface:
+                    auth_context = self._create_auth_context(check, "write")
+                    transformed = self._run_hooks(
+                        name,
+                        "put",
+                        actor_interface,
+                        item_value,
+                        [name, str(len(list_prop))],
+                        auth_context,
+                    )
+                    if transformed is None:
+                        if self.response:
+                            self.response.set_status(400, "Item rejected by hooks")
+                        return
+                    item_value = transformed
+            index = list_prop.append_indexed(item_value)
+        except ListMetadataContentionError as e:
+            self._respond_list_metadata_contended(e)
+            return
+        except ListItemTooLargeError as e:
+            self._respond_list_item_too_large(name, e)
+            return
+        except ListCorruptionError as e:
+            self._respond_list_corrupted(name, e)
+            return
+        except (ValueError, TypeError) as e:
+            # As the ``?index`` twin answers an item it cannot store.
+            logger.error(f"Error appending to list '{name}': {e}")
+            if self.response:
+                self.response.set_status(400, "Error appending list item")
+            return
+        if index is None:
+            # Stored, but its index could not be read: subscribers get a
+            # resync of the list in place of a diff without a position, and
+            # the client a 201 without Location (a retry would append again).
+            try:
+                myself.request_resync("properties", name)
+            except DbError as e:  # folds DbError: the item is stored; a 503 would invite a duplicate retry
+                logger.error(
+                    f"Resync of list {name!r} after an append faulted; its "
+                    f"subscribers may be stale until the next change: {e}"
+                )
+            if self.response:
+                self.response.headers["Content-Type"] = "application/json"
+                self.response.write(json.dumps({}))
+                self.response.set_status(201, "Created")
+            return
+        register_list_diff(
+            myself,
+            self.config,
+            name,
+            "append",
+            item=item_value,
+            index=index,
+            length=index + 1,
+        )
+        if self.response:
+            self.response.headers["Location"] = str(
+                f"{self.config.root}{actor_id}/properties/"
+                f"{urllib.parse.quote(name, safe='')}/{index}"
+            )
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps({"index": index}))
+            self.response.set_status(201, "Created")
+
     @_hook_denials_are_403
     def get(self, actor_id, name):
         # A GET with a _method override changes state: refuse one a
@@ -732,18 +954,16 @@ class PropertiesHandler(_PropertyHandlerBase):
         lookup = myself.property[name] if myself and myself.property else None
 
         # Check if this is a list property
-        if (
-            lookup is None
-            and myself
-            and hasattr(myself, "property_lists")
-            and myself.property_lists is not None
-            and myself.property_lists.exists(name)
-        ):
+        if lookup is None and self._is_list(myself, name):
             # This is a list property - handle format and index parameters
             logger.info(f"Processing list property '{name}'")
             index_param = (
                 self.request.get("index") or None
             )  # Convert empty string to None
+            if len(path) == 2 and item_index(path[1]) is not None:
+                # ``/properties/<list>/<n>``: the item, as ``?index=n``
+                # serves it (3.16; it answered the whole list).
+                index_param = path[1]
             format_param = (
                 self.request.get("format") or None
             )  # Convert empty string to None
@@ -938,6 +1158,14 @@ class PropertiesHandler(_PropertyHandlerBase):
             except (TypeError, ValueError):
                 if self.response:
                     self.response.set_status(404)
+                return
+            if isinstance(value, str) and jsonblob is lookup:
+                # A value that is not JSON is labelled as what it is (3.16;
+                # it was labelled application/json).
+                if self.response:
+                    self.response.set_status(200, "Ok")
+                    self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
+                    self.response.write(out)
                 return
         else:
             try:
@@ -1230,16 +1458,34 @@ class PropertiesHandler(_PropertyHandlerBase):
         check = auth_result.auth_obj
         resource = None
         if not name:
-            path = []
-        else:
-            path = name.split("/")
-            name = path[0]
-            if len(path) >= 2 and len(path[1]) > 0:
-                resource = path[1]
+            # ``PUT /properties`` names nothing to write (3.16: an
+            # IndexError, a 500).
+            if self.response:
+                self.response.set_status(405, "Method Not Allowed")
+                self.response.headers["Allow"] = "GET, POST, DELETE"
+            return
+        path = name.split("/")
+        name = path[0]
+        if len(path) >= 2 and len(path[1]) > 0:
+            resource = path[1]
 
         # Check if this is a list operation (indicated by index parameter)
         # Note: request.get() may return None or "" when parameter is not present
         index_param = self.request.get("index")
+        if len(path) == 2 and item_index(path[1]) is not None:
+            # ``PUT /properties/<list>/<n>`` writes item n as ``?index=n``
+            # does, when the first segment is a list (3.16). The path is
+            # allowed first, so whether a list exists is read only then;
+            # under any other name the segment is a nested key.
+            if not check or not self._check_property_permission(
+                actor_id, check, "/".join(path), "write"
+            ):
+                self._forbid()
+                return
+            if self._is_list(myself, name):
+                # The path names the item; a ``?index`` beside it is not
+                # read, as on GET.
+                index_param = path[1]
         if index_param:
             # This is a list item operation - handle it appropriately.
             # Write permission first: the path, and the list it writes into
@@ -1255,12 +1501,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             ):
                 self._forbid()
                 return
-            if not (
-                myself
-                and hasattr(myself, "property_lists")
-                and myself.property_lists is not None
-                and myself.property_lists.exists(name)
-            ):
+            if not self._is_list(myself, name):
                 if self.response:
                     self.response.set_status(404, f"List property '{name}' not found")
                 return
@@ -1468,12 +1709,16 @@ class PropertiesHandler(_PropertyHandlerBase):
                     else:
                         self.response.set_status(400, "Payload is not accepted")
                         return
-            if is_json:
-                if myself and myself.property:
-                    myself.property[name] = json.dumps(new)
-            else:
-                if myself and myself.property:
-                    myself.property[name] = new
+            try:
+                if is_json:
+                    if myself and myself.property:
+                        myself.property[name] = json.dumps(new)
+                else:
+                    if myself and myself.property:
+                        myself.property[name] = new
+            except ListNameTakenError as e:
+                self._respond_name_taken(e)
+                return
             myself.register_diffs(target="properties", subtarget=name, blob=body)
             self.response.set_status(204)
             return
@@ -1519,6 +1764,9 @@ class PropertiesHandler(_PropertyHandlerBase):
         if myself and myself.property:
             try:
                 myself.property[name] = res
+            except ListNameTakenError as e:
+                self._respond_name_taken(e)
+                return
             except ValueError as e:
                 # The store refuses a name it cannot key (control character,
                 # collision with an existing list); the request is malformed.
@@ -1574,10 +1822,31 @@ class PropertiesHandler(_PropertyHandlerBase):
         if not auth_result.authorize("POST", "properties", name):
             return
         if len(name) > 0:
+            # Write access on the name first, so a peer that may not write
+            # it gets the same 403 whether or not it names a list (3.16).
+            if not check or not self._check_property_permission(
+                actor_id, check, name, "write"
+            ):
+                self._forbid()
+                return
+            if "/" not in name and self._is_list(myself, name):
+                self._append_item(actor_id, myself, check, name)
+                return
             if self.response:
                 self.response.set_status(400)
             return
-        pair = {}
+        try:
+            self._post_root(actor_id, myself, check)
+        except ListNameTakenError as e:
+            # A key over a list, or a list over a property (3.16: 500 or
+            # 400): what was applied before it reaches the subscribers.
+            self._register_post_diffs(myself, getattr(self, "_post_pair", {}))
+            self._respond_name_taken(e)
+
+    def _post_root(self, actor_id: str, myself: Any, check: Any) -> None:
+        """``POST /properties``: the form, form arguments or a JSON body."""
+        pair: dict[str, Any] = {}
+        self._post_pair = pair
         # The list keys' diffs, kept apart from ``pair``, which is the
         # response body (3.16: it was the diff too).
         self._post_lists: dict[str, _PostListDiffs] = {}
@@ -1663,9 +1932,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                             if self.response:
                                 self.response.set_status(403)
                             return
-                pair[prop_name] = val
                 if myself and myself.property:
                     myself.property[prop_name] = val
+                # Recorded once written: a collision (409) announces nothing.
+                pair[prop_name] = val
 
             else:
                 # Missing value for simple property
@@ -2341,6 +2611,13 @@ class PropertiesHandler(_PropertyHandlerBase):
         if self._touches_excluded(myself, path, None):
             self._forbid()
             return
+        if (
+            len(path) == 2
+            and item_index(path[1]) is not None
+            and self._is_list(myself, name)
+        ):
+            self._delete_item(myself, check, name, item_index(path[1]) or 0)
+            return
         if not name:
             # Get actor interface for property operations
             actor_interface = self._get_actor_interface(myself)
@@ -2862,52 +3139,28 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                         self.response.set_status(400, "Invalid 'item_index' value")
                     return
 
-                # v1/v2 split -- see the "update" branch above for the
-                # rationale. Announced as ``delete`` by index, with the item
+                # Announced as ``delete`` by index, with the item
                 # (``old_item``) when it was read: the receiver deletes the one
                 # equal item, or the one at the index among equal ones, so
-                # duplicates do not take the wrong row.
-                delete_operation = "delete"
-                delete_fields: dict[str, Any] = {"index": index}
+                # duplicates do not take the wrong row. The same helper serves
+                # ``DELETE /properties/<list>/<n>`` (3.16).
                 try:
-                    if list_prop.storage_format() == 2:
-                        pairs = list_prop.items_with_handles(resolve=False)
-                        if index < 0 or index >= len(pairs):
-                            if self.response:
-                                self.response.set_status(
-                                    400, f"Index {index} out of range"
-                                )
-                            return
-                        handle = pairs[index][0]
-                        old_fields = handle_old_item_fields(list_prop, handle)
-                        if "old_item" in old_fields:
-                            delete_fields["old_item"] = old_fields["old_item"]
-                        delete_fields["length"] = len(pairs) - 1
-                        if not list_prop.delete_by_handle(handle):
-                            self._respond_list_metadata_contended(
-                                RuntimeError(
-                                    f"list '{name}' item at index {index} was "
-                                    f"concurrently modified"
-                                )
-                            )
-                            return
-                    else:
-                        del list_prop[index]
-                        delete_fields["length"] = list_length_hint(list_prop)
+                    delete_fields = delete_list_item(list_prop, index)
+                except _ConcurrentlyModified as e:
+                    self._respond_list_metadata_contended(RuntimeError(str(e)))
+                    return
                 except ListItemSpanError as e:
                     # A ListCorruptionError, so an IndexError too: caught
-                    # here, ahead of the out-of-range arm, so a broken span
-                    # answers 409 with its remedy, not 400.
+                    # here, so a broken span answers 409 with its remedy,
+                    # not 400.
                     self._respond_list_corrupted(name, e)
                     return
-                except IndexError:
+                if delete_fields is None:
                     if self.response:
                         self.response.set_status(400, f"Index {index} out of range")
                     return
 
-                register_list_diff(
-                    myself, self.config, name, delete_operation, **delete_fields
-                )
+                register_list_diff(myself, self.config, name, "delete", **delete_fields)
 
                 if self.response:
                     self.response.set_status(204)

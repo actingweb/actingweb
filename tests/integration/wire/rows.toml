@@ -508,6 +508,7 @@ expected = "B re-initiates through the SDK: its request carries the current secr
 reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
 ]
 
 [rows."WT2"]
@@ -532,6 +533,7 @@ reason = [
   "2026-11-08 the receiver binds the claimed id to the base URI through /meta (verification Issue 4) (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-09 the 202 answer to a request that waits carries no secret or verification_token (reverify-8 Issue 7, iteration 73) (peer-authorisation-fixes:3)",
+  "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
 ]
 
 [rows."WT4"]
@@ -544,6 +546,7 @@ reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 the initiator refuses a different relationship before sending (outside voice on Phase 3) (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
 ]
 
 [rows."WT5"]
@@ -934,8 +937,8 @@ test = "test_wire_list_properties.py::test_wl9_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:1"]
 exposure = false
-expected = "POST /properties/notes with an object: 400 since the security plans (the plan's 201 and stray root write are gone); nothing written at A, nothing sent; the list untouched."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "POST /properties/notes with an object: appended as one item, 201 with Location naming index 2; the append diff (sequence 3) reaches B, whose replica list holds the item."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 a POST to a list's name appends one item, 201 with Location (spec-1-5:1)"]
 
 [rows."WL10.target"]
 test = "test_wire_list_properties.py::test_wl10_target"
@@ -1244,3 +1247,23 @@ owners = []
 exposure = false
 expected = "A holds shown and hidden and excludes hidden; B subscribes: the baseline (and the second /properties fetch) returns shown only. hidden never reaches B: no exposure since the security plans."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+
+# ---------------------------------------------------------------------------
+# spec-1-5, Phase 1: list items addressed by path
+# ---------------------------------------------------------------------------
+
+[rows."WL30.target"]
+test = "test_wire_list_properties.py::test_wl30"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "GET /properties/notes/1 answers item 1 and sends nothing; PUT /properties/notes/0 replaces item 0 (204, an update diff), PUT /properties/notes/2 at the length appends (204, an append diff), DELETE /properties/notes/1 removes item 1 and the rest close up (204, a delete diff with old_item). B applies each and ends with A's list."
+reason = ["2026-11-15 first recording (spec-1-5:1)"]
+
+[rows."WL30.subtarget"]
+test = "test_wire_list_properties.py::test_wl30"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Subtarget notes, the steps of WL30.target: the same list diffs on the list's subtarget; B's list follows A's."
+reason = ["2026-11-15 first recording (spec-1-5:1)"]

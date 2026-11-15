@@ -929,13 +929,22 @@ class ListProperty(ListCore):
 
     def append(self, item: Any) -> None:
         """Add item to end of list."""
+        self.append_indexed(item, _locate=False)
+
+    def append_indexed(self, item: Any, *, _locate: bool = True) -> int | None:
+        """Add ``item`` to the end of the list and return the index it landed
+        at, or None when it was written but its index could not be read
+        (3.16; see :meth:`ListCore.append_indexed`). A v1 list writes at the
+        index it read as the length, so two concurrent appends to a v1 list
+        can both report (and write) the same index, as ``append()`` always
+        could on v1."""
         if not self._db:
             raise RuntimeError("No database connection available")
 
         self._maybe_lazy_migrate()
         if self._dispatch_and_stash() == 2:
-            self._v2_append(item)
-            return
+            rank = self._v2_append(item)
+            return self._v2_index_of_rank(rank) if _locate else -1
 
         item_str = self._encode_item(item)
         self._check_item_size(item_str)
@@ -962,6 +971,7 @@ class ListProperty(ListCore):
         # the CAS, so a retained instance's stale `length` no longer
         # overwrites a concurrent writer's more-current one.
         self._save_metadata({}, length_delta=1, create_if_absent=False)
+        return length
 
     def extend(self, items: list[Any]) -> None:
         """Add multiple items to end of list.

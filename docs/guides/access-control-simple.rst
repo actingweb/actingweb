@@ -483,7 +483,7 @@ Clients can discover permission management support by checking the ``/meta/actin
    GET /myapp/actor123/meta/actingweb/supported
    
    # If response includes "trustpermissions", the enhanced trust API is available
-   actions,callbacks,listproperties,methods,nestedproperties,oauth,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www
+   actions,callbacks,listproperties,methods,nestedproperties,oauth,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www
 
 Custom Permission Logic
 -----------------------

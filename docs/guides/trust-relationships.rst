@@ -478,7 +478,10 @@ callbacks contain the full *effective* permissions (base trust-type defaults mer
 per-trust overrides), enabling accurate change detection. When new property patterns are
 granted, an incremental sync automatically fetches only the newly granted properties.
 Peers supporting this feature advertise ``permissioncallback`` in their
-``/meta/actingweb/supported`` endpoint.
+``/meta/actingweb/supported`` endpoint. Since 3.16 an ActingWeb actor
+advertises ``permissioncallback`` and ``permissionquery`` whenever it serves
+the two endpoints, which is always; before, only with peer permission caching
+turned on.
 
 **Use Cases for MCP**
 

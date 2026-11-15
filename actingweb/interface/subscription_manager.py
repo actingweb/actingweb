@@ -182,8 +182,9 @@ def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
     or an empty JSON object is empty (``{subtarget: ""}``, which a replica
     stores as nothing); a body that is not JSON is the property's text only
     when the publisher itself answered (no redirect followed) as
-    ``application/json``, otherwise it is a failed fetch (None: a login page
-    behind a proxy is not the value); anything else as parsed."""
+    ``text/plain`` (specification 1.5) or ``application/json`` (a publisher
+    before 3.16), otherwise it is a failed fetch (None: a login page behind
+    a proxy is not the value); anything else as parsed."""
     if response != {}:
         return response
     raw = proxy.last_response_message
@@ -198,18 +199,20 @@ def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
         parsed = _NOT_JSON
     if parsed == {}:
         return {subtarget: ""}
-    if not _own_json_answer(proxy):
+    if not _own_value_answer(proxy):
         return None
     return text
 
 
-def _own_json_answer(proxy: Any) -> bool:
-    """The last answer was the publisher's own JSON: not redirected, and
-    ``application/json`` (any case, parameters ignored)."""
+def _own_value_answer(proxy: Any) -> bool:
+    """The last answer was the publisher's own property value: not
+    redirected, and ``text/plain`` or ``application/json`` (any case,
+    parameters ignored)."""
     if getattr(proxy, "last_response_redirected", False):
         return False
     content_type = str(getattr(proxy, "last_response_content_type", "") or "")
-    return content_type.split(";", 1)[0].strip().lower() == "application/json"
+    media = content_type.split(";", 1)[0].strip().lower()
+    return media in ("text/plain", "application/json")
 
 
 def _confirms_list(meta: Any, proxy: Any) -> bool:

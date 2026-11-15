@@ -115,14 +115,14 @@ it is resolved (see :doc:`troubleshooting`). The replicas of peers' lists in
 Namespace Collision Detection
 ------------------------------
 
-Property names and list property names share the same namespace. Attempting to create a property when a list with the same name exists, or vice versa, will raise a ``ValueError``:
+Property names and list property names share the same namespace. Attempting to create a property when a list with the same name exists, or vice versa, will raise ``ListNameTakenError`` (from ``actingweb.list_core``, a ``ValueError``; over HTTP a 409, see "Name collisions over HTTP" below):
 
 .. code-block:: python
 
-   # This will raise ValueError if a list named 'notes' already exists
+   # This will raise ListNameTakenError if a list named 'notes' already exists
    actor.properties.notes = "some value"
 
-   # This will raise ValueError if a property named 'tags' already exists
+   # This will raise ListNameTakenError if a property named 'tags' already exists
    tags = actor.property_lists.tags
    tags.append("python")
 
@@ -934,6 +934,73 @@ List properties integrate with the standard ``/properties`` endpoints:
   GET /{actor_id}/properties/{list_name}
   # Returns: [item1, item2, ...]
 
+**Items by path** (3.16; the form the specification defines)::
+
+  GET    /{actor_id}/properties/{list_name}/2      # item 2; 404 out of range
+  PUT    /{actor_id}/properties/{list_name}/2      # replace item 2, 204
+  PUT    /{actor_id}/properties/{list_name}/3      # 3 == length: append, 204
+  DELETE /{actor_id}/properties/{list_name}/2      # remove item 2, the rest
+                                                   # close up, 204
+  POST   /{actor_id}/properties/{list_name}        # append the body as one item
+  # Returns 201, Location: .../properties/{list_name}/{index}, {"index": N}
+
+The second segment is an item only when it is a canonical non-negative
+integer (``0``, ``7``; not ``-1``, ``01`` or ``+1``) and the first segment
+is an existing list. Any other segment keeps its meaning: ``items`` and
+``metadata`` are the routes below, and under a name that is not a list a
+numeric segment is a nested key (``PUT /properties/obj/0`` writes key
+``"0"`` of the object ``obj``). Before 3.16 ``GET
+/properties/{list_name}/0`` answered the whole list and ``POST
+/properties/{list_name}`` answered 400.
+
+``Location`` names the index the append landed at, read after the write:
+on a list in the current storage format (v2, every list created since
+3.14) two appends at the same time get two different locations; a v1 list
+can give both the same index, as its appends always could (convert it with
+``migrate_to_v2()``). Reading the index costs a whole-list key-only read.
+When that read fails after the item was stored, the answer is 201 without
+``Location`` and the list's subscribers get a resync in place of the
+diff; do not retry such an append.
+
+Access is decided on the list name: a grant must allow the list itself,
+not only ``{list_name}/*``, and a peer that may not write a name gets the
+same 403 from the append whether or not the name is a list.
+
+**Three ways to address an item.** The path forms above, ``?index=N`` and
+``/items`` reach the same items; they differ in the hook they run and in
+what an index out of range answers. They are kept as they are (unifying
+them would change forms clients use):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 28 28 24
+
+   * - Operation
+     - Path form
+     - ``?index=N``
+     - ``/items``
+   * - Read one item
+     - ``get`` hook with ``[str(n)]``; 404 out of range
+     - ``get`` hook with ``[str(n)]``; 404 out of range
+     - no item read; ``GET /items`` lists all with their indices
+   * - Replace or append
+     - ``put`` hook with ``[name, str(n)]``; 404 beyond the length; an
+       ``update`` or ``append`` diff
+     - the same as the path form
+     - ``add`` and ``update`` actions, no hook; 400 out of range; an
+       ``append`` or ``update`` diff
+   * - Append (``POST``)
+     - ``put`` hook with ``[name, str(length)]``; 201 with ``Location``; an
+       ``append`` diff
+     - not offered
+     - ``add`` action, no hook, 201
+   * - Delete one item
+     - ``delete`` hook with ``[name, str(n)]`` (its refusal is a 403); 404
+       out of range; a ``delete`` diff with ``old_item``
+     - not offered: ``DELETE ?index=N`` deletes the whole list
+     - ``delete`` action, no hook; 400 out of range; the same ``delete``
+       diff
+
 **GET all properties (default / format=short)**::
 
   GET /{actor_id}/properties
@@ -950,8 +1017,7 @@ List properties integrate with the standard ``/properties`` endpoints:
   # Returns: {"simple": {"properties": [...], "total_bytes": N}, "lists": {...}}
 
 **GET/POST items** (an implementation extension, not part of the ActingWeb
-spec -- the spec addresses items by path index,
-``/properties/{list_name}/{index}``)::
+spec -- the spec addresses items by path index, the path forms above)::
 
   GET /{actor_id}/properties/{list_name}/items
   # Returns: {"items": [{"index": 0, "item": item0}, {"index": 1, "item": item1}, ...], "count": N}
@@ -1024,6 +1090,24 @@ relying on batch semantics:
 **DELETE entire list**::
 
   DELETE /{actor_id}/properties/{list_name}
+  # Also with ?index=N: the query parameter is not read on DELETE, and the
+  # whole list goes. Delete one item by path, or with the /items action.
+
+**Name collisions over HTTP (409 Conflict)**
+
+A write that would put a property where a list of that name exists, or a
+list where a property exists, answers 409 and writes nothing for that name
+(3.16; it was 400 or 500 depending on the route). In a ``POST`` of several
+keys, the keys applied before the colliding one stay written and reach the
+subscribers::
+
+  {"error": "name_taken", "detail": "Cannot create property 'notes': ..."}
+
+Every route answers it the same way: ``PUT /properties/{name}``, a nested
+``PUT /properties/{name}/{key}``, a key of a ``POST /properties`` body or
+form, and list creation in a ``POST``. The ``put`` or ``post`` hook has run
+when the 409 is answered (the collision is found by the write). In the
+library the same condition raises ``ListNameTakenError``, a ``ValueError``.
 
 **GET/PUT metadata**::
 
@@ -1035,9 +1119,11 @@ relying on batch semantics:
 **What subscribers receive.** Each list edit above, and each list form in
 the web UI, registers a list diff on the list's own subtarget (3.16; the
 HTTP responses are unchanged): ``append`` from the ``/items`` ``add``
-action, ``update`` from ``PUT ?index=N`` and the ``update`` action (with
-``old_item`` when the item was read), ``delete`` by index (with
-``old_item`` when the item was read) from the ``delete`` action, ``metadata`` from
+action and from ``POST /properties/{list_name}``, ``update`` from ``PUT
+?index=N``, ``PUT /properties/{list_name}/{n}`` and the ``update`` action
+(with ``old_item`` when the item was read), ``append`` from a PUT at the
+length, ``delete`` by index (with ``old_item`` when the item was read) from
+the ``delete`` action and ``DELETE /properties/{list_name}/{n}``, ``metadata`` from
 the metadata ``PUT``, ``delete_all`` from ``DELETE``, and an empty
 ``extend`` for a new list. A bulk update sends up to 25 changes in the order
 they are applied (a run of appends as one ``extend``) and, beyond that, one
@@ -1046,8 +1132,9 @@ fields and what a subscriber's replica does with them.
 
 **Item too large (413 Payload Too Large)**
 
-Every item-writing path above (PUT ``?index=N``, the ``/items`` ``add``
-and ``update`` actions, and the bulk update) answers 413 when an item's
+Every item-writing path above (PUT ``?index=N``, the path forms and the
+append, the ``/items`` ``add`` and ``update`` actions, and the bulk update)
+answers 413 when an item's
 encoded size is over the configured limit. Nothing is written::
 
   {"error": "list_item_too_large", "list": "notes", "bytes": 4194306,

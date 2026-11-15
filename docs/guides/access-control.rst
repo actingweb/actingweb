@@ -875,7 +875,7 @@ ActingWeb applications supporting the unified access control system automaticall
    GET /myapp/actor123/meta/actingweb/supported
    
    # Response includes:
-   actions,callbacks,listproperties,methods,nestedproperties,oauth,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www
+   actions,callbacks,listproperties,methods,nestedproperties,oauth,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www
 
 The presence of ``trustpermissions`` indicates support for:
 

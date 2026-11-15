@@ -32,7 +32,10 @@ Core Identity
   backslash, interior whitespace or control character is rejected at
   startup.
 - ``proto``: URL scheme (``https://`` recommended).
-- ``version``: Populated from library version; can be displayed to clients.
+- ``version``: The application's version, served at ``/meta/version`` and in
+  the ``/meta`` object (``with_app_version("2.3.1")``, 3.16). Unset, it is the
+  ActingWeb library's version, as before; the specification defines it as the
+  application's, so an application should set its own.
 
 Runtime Switches
 ----------------
@@ -1117,7 +1120,9 @@ Permission Callbacks
 
 When a peer modifies permissions granted to your actor, they can send a permission
 callback to notify you immediately. This requires the ``permissioncallback`` option
-to be advertised in the peer's ``/meta/actingweb/supported`` endpoint.
+to be advertised in the peer's ``/meta/actingweb/supported`` endpoint. Since 3.16
+an ActingWeb actor advertises ``permissioncallback`` and ``permissionquery``
+whenever it serves the endpoints, which is always, not only with caching on.
 
 The callback is sent to::
 

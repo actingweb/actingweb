@@ -616,6 +616,11 @@ def test_a_subtarget_answering_404_is_gone() -> None:
         ({}, b"blue", 200, "Application/JSON; charset=utf-8", False, "blue"),
         ({}, b"blue", 200, "application/jsonx", False, None),
         ({}, b"blue", 200, "", False, None),
+        # Specification 1.5: a value that is not JSON is labelled
+        # text/plain by a 3.16 publisher; still not through a redirect.
+        ({}, b"blue", 200, "text/plain; charset=utf-8", False, "blue"),
+        ({}, b"blue", 200, "Text/Plain", False, "blue"),
+        ({}, b"blue", 200, "text/plain", True, None),
     ],
 )
 def test_a_single_propertys_baseline_is_what_the_wire_says(

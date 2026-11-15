@@ -531,16 +531,16 @@ class Config:
         ``with_oauth()``) cannot leave a stale tag. A tag is advertised only
         when the path or behaviour it names exists: ``www`` needs the web UI,
         ``oauth`` needs a configured provider, and ``sessions``,
-        ``onewaytrust``, ``callbackcompression``, ``proxy`` and the
-        subscription health tags are never advertised (no route or no
-        support).
+        ``onewaytrust``, ``callbackcompression``, ``proxy``,
+        ``subscriptionbatch`` and the subscription health tags are never
+        advertised (no route or no support; ``subscriptionbatch`` was
+        advertised until 3.16 and is defined nowhere).
         """
         options = [
             "callbacks",
             "trust",
             "subscriptions",
             "subscriptionresync",  # resync callbacks (ActingWeb v1.4)
-            "subscriptionbatch",  # batched subscription callbacks
             "actions",
             "resources",
             "methods",
@@ -555,11 +555,12 @@ class Config:
             options.append("trustpermissions")
         if getattr(self, "mcp", False):
             options.append("mcp")
-        if getattr(self, "peer_permissions_caching", False):
-            # permissioncallback: receives permission change notifications;
-            # permissionquery: GET /{actor_id}/permissions/{peer_id}
-            options.append("permissioncallback")
-            options.append("permissionquery")
+        # Both endpoints are always served (3.16; they were advertised only
+        # with peer permission caching): permissioncallback receives
+        # permission change notifications at /callbacks/permissions/{peer_id},
+        # permissionquery answers GET /{actor_id}/permissions/{peer_id}.
+        options.append("permissioncallback")
+        options.append("permissionquery")
         return sorted(options)
 
     @property

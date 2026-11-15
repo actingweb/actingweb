@@ -11,6 +11,7 @@ The core logs under ``actingweb.property_list``, the logger name consumers
 already configure.
 """
 
+import bisect
 import hashlib
 import hmac
 import json
@@ -304,9 +305,12 @@ class ListItemTooLargeError(ValueError):
 
 
 class ListNameTakenError(ValueError):
-    """A list cannot be created: a scalar row of the same name exists (a
-    property, or an attribute). A ``ValueError`` as before; the replica
-    path catches it to replace the scalar with the list."""
+    """A name is taken across the scalar and list namespaces: a list cannot
+    be created where a scalar row of the same name exists (a property, or an
+    attribute), and a property cannot be written where a list of that name
+    exists (3.16; a plain ``ValueError`` before). A ``ValueError`` as before;
+    the replica path catches it to replace the scalar with the list, and the
+    HTTP handlers answer it 409."""
 
 
 class ListRankExhaustedError(RuntimeError):
@@ -2263,7 +2267,7 @@ class ListCore:
             detail="metadata row changed under a first-mutation create",
         )
 
-    def _v2_append(self, item: Any) -> None:
+    def _v2_append(self, item: Any) -> str:
         """Phase 9B: one ``get_last_in_range`` read (a single item's read
         capacity) instead of ``_v2_ensure_rank_cache()``'s whole-list range
         query -- append only ever needs the last rank. The collision loop
@@ -2309,6 +2313,7 @@ class ListCore:
         if self._v2_rank_cache is not None:
             self._v2_rank_cache.append(landed[0])
         self._v2_touch_metadata(count_delta=1)
+        return landed[0]
 
     def _v2_write_item_at_new_rank(self, head: str) -> str:
         """Write ``head`` at a fresh rank after the current last one, and
@@ -2358,6 +2363,43 @@ class ListCore:
         self._before_mutation()
         self._dispatch_v2()
         self._v2_append(item)
+
+    def append_indexed(self, item: Any) -> int | None:
+        """Add ``item`` to the end of the list and return the index it landed
+        at (3.16), or None when the item was written but its index could not
+        be read.
+
+        The index is the position of the rank this append wrote, in a read
+        of the list's ranks made after the write, so two concurrent appends
+        report two different indices. That read is a whole-list key-only
+        range query (on DynamoDB it costs the capacity of the whole list,
+        ``keys_only`` notwithstanding); a caller that does not need the index
+        uses :meth:`append`, which reads only the last rank. None means the
+        item is stored: the read faulted (logged, not raised, so a caller
+        does not retry a write that landed), or the item was deleted again
+        before it could be found.
+        """
+        if not self._db:
+            raise RuntimeError("No database connection available")
+
+        self._before_mutation()
+        self._dispatch_v2()
+        return self._v2_index_of_rank(self._v2_append(item))
+
+    def _v2_index_of_rank(self, rank: str) -> int | None:
+        """The position of ``rank`` in a fresh read of the list's ranks; None
+        when the read faults or the rank is gone (see ``append_indexed``)."""
+        try:
+            ranks = self._v2_ensure_rank_cache(force=True)
+        except Exception as e:  # folds DbError: the write landed; see append_indexed
+            logger.warning(
+                f"list '{self.name}': appended, but its index could not be read: {e}"
+            )
+            return None
+        position = bisect.bisect_left(ranks, rank)
+        if position >= len(ranks) or ranks[position] != rank:
+            return None
+        return position
 
     # -- idempotent appends ----------------------------------------------
 

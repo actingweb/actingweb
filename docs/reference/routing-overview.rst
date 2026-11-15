@@ -26,8 +26,8 @@ Core Actor Routes
 
 - `/`: Root factory (create actor via web or API). Open by default; answers 403 when the app calls `with_open_factory(False)`
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
-- `/<actor_id>/meta`: Discovery metadata
-- `/<actor_id>/properties`: Get/update/delete properties
+- `/<actor_id>/meta`: Discovery metadata. `/meta` is a JSON object; each scalar path (`/meta/id`, `/meta/version`, `/meta/actingweb/supported`, ...) is `text/plain` (3.16; Flask labelled them `text/html` and FastAPI sent no label)
+- `/<actor_id>/properties`: Get/update/delete properties. A value that is not JSON is read back as `text/plain`, a JSON value as `application/json` (3.16; both were labelled JSON). `PUT /properties` with no name is 405. List items are addressed by path (`/properties/<list>/<n>`, and `POST /properties/<list>` appends); see :doc:`../guides/property-lists`
 - `/<actor_id>/resources`: Application resources answered by `resource_<name>` callback hooks; a peer is decided by its `resources` grant (GET `read`, PUT/POST `write`, DELETE `delete`), and no hook runs on a refusal
 - `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
@@ -83,7 +83,9 @@ If not authenticated, API clients receive a 401 or 403 error response. A
 peer refused by its grant on a property route gets 403 with ``{"error":
 "forbidden"}`` (``{"error": "not_approved"}`` for a trust not yet approved);
 a refused bulk ``POST /properties`` also lists the names it refused
-(``"refused"``) and applies none of them. ``POST /properties/<name>`` is 400.
+(``"refused"``) and applies none of them. ``POST /properties/<name>``
+appends one item when the name is a list (201 with ``Location``) and is 400
+otherwise; a peer that may not write the name gets 403 either way.
 
 Browser Redirect Behavior
 -------------------------

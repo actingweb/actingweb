@@ -353,8 +353,8 @@ Check what features a peer supports before using optional protocol features:
        # Peer accepts compressed payloads
        pass
 
-   if caps.supports_batch_subscriptions():
-       # Peer supports batch subscription creation
+   if caps.supports("permissionquery"):
+       # Peer answers GET /{actor_id}/permissions/{peer_id}
        pass
 
    # Get all supported options

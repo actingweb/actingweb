@@ -187,7 +187,7 @@
      "request": null,
      "response": {
       "aw_formats": "json",
-      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www",
       "aw_trust_types": [
        "admin",
        "associate",
@@ -230,7 +230,7 @@
      },
      "response": {
       "approved": true,
-      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www",
       "aw_version": "1.0",
       "baseuri": "http://<wire_peer_app>/<B>",
       "capabilities_fetched_at": "<epoch#1>",

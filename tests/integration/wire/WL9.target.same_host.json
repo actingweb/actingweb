@@ -11,6 +11,9 @@
       {
        "id": "b",
        "text": "two"
+      },
+      {
+       "stray": 1
       }
      ],
      "A.stray": null
@@ -51,11 +54,16 @@
          "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"stray\": 1}, \"index\": 2}}",
+         "sequence": 3,
+         "timestamp": "<ts:stored>"
         }
        ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 2,
+       "sequence": 3,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -67,7 +75,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 2,
+       "sequence": 3,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -91,12 +99,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 2,
+        "last_seq": 3,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 2
+        "version": 3
        }
       ],
       "peer_permissions": {
@@ -174,6 +182,9 @@
          {
           "id": "b",
           "text": "two"
+         },
+         {
+          "stray": 1
          }
         ]
        },
@@ -185,7 +196,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 2,
+        "sequence": 3,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -205,15 +216,71 @@
     }
    },
    "result": {
-    "body": "",
-    "status": 400
+    "body": {
+     "index": 2
+    },
+    "status": 201
    },
    "step": "post an object to the list's path",
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
-     "headers": {},
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "index": 2,
+           "item": {
+            "stray": 1
+           },
+           "length": 3,
+           "list": "notes",
+           "operation": "append"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 3,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "index": 2,
+          "item": {
+           "stray": 1
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 3,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
+     "headers": {
+      "content-type": "application/json",
+      "location": "http://<wire_app>/<A>/properties/notes/2"
+     },
      "host": "wire_app",
      "method": "POST",
      "path": "/<A>/properties/notes",
@@ -221,8 +288,10 @@
      "request": {
       "stray": 1
      },
-     "response": null,
-     "status": 400
+     "response": {
+      "index": 2
+     },
+     "status": 201
     }
    ]
   }

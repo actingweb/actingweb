@@ -929,6 +929,47 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **List items are addressed by path, and ``POST`` to a list appends
+  (specification 1.5).** ``GET /properties/<list>/0`` answered the whole
+  list, ignoring the index, and ``POST /properties/<list>`` answered 400, so
+  the item paths the specification describes did nothing they said. Now
+  ``GET``, ``PUT`` and ``DELETE /properties/<list>/<n>`` read, replace (or
+  append at the length) and remove item ``n`` (404 out of range), and
+  ``POST /properties/<list>`` appends the body as one item, 201 with
+  ``Location`` naming the index it landed at. Each registers the list diff
+  of the form it copies (``?index=N`` or ``/items``) and runs the property
+  hooks with the item's path. The second segment is an item only when it is
+  a canonical non-negative integer and the first is a list; elsewhere a
+  numeric segment is a nested key as before. Access is decided on the list
+  name, and a peer that may not write a name gets 403 from the append
+  whether or not it is a list (it got 400 first). **Behavior change:** a
+  client that read the list from ``/properties/<list>/0`` now gets one item.
+  See ``docs/migration/v3.16.rst``, "List items by path, and text values".
+- **A property value that is not JSON is labelled ``text/plain``.** ``GET
+  /properties/<name>`` sent stored text as ``application/json``, which a
+  client could not parse. Now text is ``text/plain; charset=utf-8`` and a
+  JSON value ``application/json``. A subscriber accepts a text baseline
+  labelled either way. **Behavior change:** a 3.15 subscriber of a 3.16
+  publisher reads a text value at a property-name subscription as a failed
+  fetch; upgrade subscribers first.
+- **A name taken by a list or a property answers 409 on every route.** A
+  property write over a list, or a list created over a property, answered
+  400 on a nested ``PUT`` and 500 on the single ``PUT``, a ``POST`` key and
+  list creation. Now each answers 409 ``{"error": "name_taken"}`` with
+  nothing written for that name (the property hook has run; in a ``POST`` of
+  several keys, those applied before it stay and are announced), and the
+  library raises
+  ``ListNameTakenError`` (still a ``ValueError``) for both directions.
+  **Behavior change:** a client that retried a 500 there gets a 409 to act
+  on.
+- **``/meta/actingweb/supported`` no longer lists ``subscriptionbatch``, and
+  always lists ``permissioncallback`` and ``permissionquery``.** The first is
+  defined by no specification and was served by nothing; the other two were
+  listed only with peer permission caching on, though both endpoints are
+  always served. **Behavior change:** a peer that read
+  ``subscriptionbatch`` no longer finds it (nothing in the library acted
+  on it).
+
 - **Under ``with_email_as_creator`` the creator follows the stored email
   where the email is written, not when the actor is next loaded.**
   Every load of an actor read its whole ``_internal`` bucket to compare the
@@ -2103,6 +2144,11 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``ActingWebApp.with_app_version(version)``** sets the application's
+  version, served at ``/meta/version`` and in the ``/meta`` object. The
+  specification defines that value as the application's; unset it is the
+  library's version, as before, so an application should set its own.
+
 - ``actingweb-unique-creators creator-to-email [--apply]``: moves each actor
   vouched for its current creator whose stored email is another address to
   that email (conditioned on what it read, so a concurrent sign-in wins),
@@ -2494,6 +2540,13 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **The scalar ``/meta`` paths were labelled ``text/html`` (Flask) or not
+  at all (FastAPI).** ``/meta/id``, ``/meta/version``,
+  ``/meta/actingweb/supported`` and the others are ``text/plain`` on both
+  integrations; ``/meta`` itself stays ``application/json``.
+- **``PUT /properties`` without a name answered 500** (an unhandled
+  ``IndexError``). It answers 405 with ``Allow: GET, POST, DELETE``.
 
 - **Every actor load under ``with_email_as_creator`` read the whole
   ``_internal`` bucket.** The creator-equals-email check ran on every load

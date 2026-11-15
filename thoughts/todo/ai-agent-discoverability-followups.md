@@ -5,12 +5,18 @@ needs a resource this environment does not have: a live OAuth2 provider and MCP
 client, a fresh agent session in a scratch repo, or an account on a third-party
 submission form.
 
+`thoughts/plans/2026-11-15-3-16-release-validation.md` (Phase 4) takes these up
+for 3.16 and says what each needs from the owner; an item done there is
+removed here.
+
 ## 1. Submit to Context7
 
 Context7 is the third-party doc-indexing service AI coding tools query for
-library documentation. Submission needs an account and a form outside this
-repo's tooling. **Action:** submit `actingweb` — the Read the Docs build is
-live, so Context7 would index the corrected docs. Note that checking whether it
+library documentation. The owner has an account and the `context7-admin` MCP
+server is connected (teamspace "Personal", no libraries yet). **Action:** add
+and claim `actingweb` once stable 3.16 is tagged and its docs are live on Read
+the Docs, so Context7 indexes the 3.16 docs and not 3.15's; the steps are in
+`thoughts/plans/2026-11-15-3-16-release-validation.md`, "After the tag". Note that checking whether it
 is *already* listed by fetching `context7.com/actingweb/actingweb` proves
 nothing: that host returns 200 for any made-up path.
 

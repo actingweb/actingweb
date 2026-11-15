@@ -1,11 +1,20 @@
 """PostgreSQL implementation of actor database operations."""
 
+import json
 import logging
-from collections.abc import Iterator
+import time
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import psycopg
 
+from actingweb.db.creator_rename import (
+    INTERNAL_BUCKET,
+    MARKER_NAME,
+    AttrWrite,
+    RenameOutcome,
+    validate_rename_writes,
+)
 from actingweb.db.creator_rules import (
     UNIQUE_INDEX_NAME,
     dup_value,
@@ -13,7 +22,7 @@ from actingweb.db.creator_rules import (
     missing_enforcement_message,
     normalise_creator,
 )
-from actingweb.db.exceptions import CreatorTaken, DbError
+from actingweb.db.exceptions import AttributeKeyCollision, CreatorTaken, DbError
 from actingweb.db.postgresql.connection import get_connection, get_schema_name
 
 logger = logging.getLogger(__name__)
@@ -468,6 +477,207 @@ class DbActor:
         if passphrase:
             self.handle["passphrase"] = passphrase.decode("utf-8")
         return True
+
+    def rename_creator(
+        self,
+        actor_id: str,
+        *,
+        expected: str | None,
+        creator: str,
+        internal: Sequence[AttrWrite] = (),
+        marker: str | None = None,
+    ) -> RenameOutcome:
+        """See ``DbActorProtocol.rename_creator``: one transaction on one
+        connection, rolled back explicitly on anything but ``APPLIED``.
+
+        Every named ``_internal`` row (the marker's included) is locked first,
+        in key order, so a multi-row delete of the bucket cannot close a lock
+        cycle with it. Two renames crossing on each other's creator can still
+        deadlock on ``ux_actors_creator``; that is retried once."""
+        if not actor_id:
+            raise ValueError("rename_creator needs an actor id")
+        validate_rename_writes(internal, marker)
+        new_creator = normalise_creator(creator)
+        if (
+            self.unique_creator
+            and not is_exempt(new_creator)
+            and new_creator != expected
+        ):
+            _require_creator_index("actor rename")
+        for attempt in range(2):
+            try:
+                outcome = self._rename_once(
+                    actor_id, expected, new_creator, internal, marker
+                )
+            except psycopg.errors.DeadlockDetected as e:
+                if attempt == 0:
+                    continue
+                raise DbError("actor rename") from e
+            except psycopg.errors.UniqueViolation as e:
+                if _is_creator_violation(e):
+                    raise CreatorTaken(new_creator) from e
+                raise DbError("actor rename") from e
+            except (AttributeKeyCollision, CreatorTaken):
+                raise
+            except Exception as e:
+                raise DbError("actor rename") from e
+            if outcome is RenameOutcome.APPLIED:
+                if self.handle is not None and self.handle.get("id") == actor_id:
+                    self.handle["creator"] = new_creator
+            elif outcome is RenameOutcome.ROW_CHANGED:
+                logger.warning(
+                    f"Rename of actor {actor_id}: the stored creator no longer "
+                    "matches; nothing changed"
+                )
+            return outcome
+        raise DbError("actor rename")
+
+    @staticmethod
+    def _rename_once(
+        actor_id: str,
+        expected: str | None,
+        new_creator: str,
+        internal: Sequence[AttrWrite],
+        marker: str | None,
+    ) -> RenameOutcome:
+        from actingweb.db.utils import sanitize_json_data
+
+        names = {w.name for w in internal}
+        if marker is not None:
+            names.add(MARKER_NAME)
+        keys = sorted(INTERNAL_BUCKET + ":" + n for n in names)
+        now = int(time.time())
+        with get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    # Rows of the named keys, locked in key order. A key
+                    # held by another bucket is a collision, raised only
+                    # after the row and the marker have been decided, the
+                    # order DynamoDB decides them in.
+                    stored: dict[str, tuple[str, Any]] = {}
+                    if keys:
+                        cur.execute(
+                            """
+                            SELECT bucket_name, bucket, data
+                            FROM attributes
+                            WHERE id = %s AND bucket_name = ANY(%s)
+                            ORDER BY bucket_name
+                            FOR UPDATE
+                            """,
+                            (actor_id, keys),
+                        )
+                        for bucket_name, bucket, data in cur.fetchall():
+                            stored[bucket_name] = (bucket, data)
+                    collided = [
+                        bucket_name[len(INTERNAL_BUCKET) + 1 :]
+                        for bucket_name, (bucket, _d) in sorted(stored.items())
+                        if bucket != INTERNAL_BUCKET
+                    ]
+
+                    cur.execute(
+                        """
+                        UPDATE actors SET creator = %s
+                        WHERE id = %s AND creator IS NOT DISTINCT FROM %s
+                        """,
+                        (new_creator, actor_id, expected),
+                    )
+                    if cur.rowcount != 1:
+                        conn.rollback()
+                        return RenameOutcome.ROW_CHANGED
+                    if marker is not None:
+                        # As on DynamoDB, the marker's TTL is not consulted
+                        # (``_internal`` rows carry none).
+                        row = stored.get(INTERNAL_BUCKET + ":" + MARKER_NAME)
+                        if row is None or row[0] != INTERNAL_BUCKET or row[1] != marker:
+                            conn.rollback()
+                            return RenameOutcome.MARKER_CHANGED
+                    if collided:
+                        raise AttributeKeyCollision(
+                            INTERNAL_BUCKET, collided[0], actor_id
+                        )
+                    for w in internal:
+                        key = INTERNAL_BUCKET + ":" + w.name
+                        if w.value is None:
+                            cur.execute(
+                                """
+                                DELETE FROM attributes
+                                WHERE id = %s AND bucket_name = %s AND bucket = %s
+                                """,
+                                (actor_id, key, INTERNAL_BUCKET),
+                            )
+                            continue
+                        encoded = json.dumps(
+                            sanitize_json_data(w.value, log_source="attribute")
+                        )
+                        # Each condition is in the statement itself: the
+                        # locking read cannot lock a key that has no row
+                        # yet, and a row inserted since must still decide.
+                        if w.when == "equals":
+                            cur.execute(
+                                """
+                                UPDATE attributes
+                                SET data = %s::jsonb, timestamp = NULL,
+                                    ttl_timestamp = NULL
+                                WHERE id = %s AND bucket_name = %s AND bucket = %s
+                                  AND data = %s::jsonb
+                                """,
+                                (
+                                    encoded,
+                                    actor_id,
+                                    key,
+                                    INTERNAL_BUCKET,
+                                    json.dumps(w.expected),
+                                ),
+                            )
+                        else:
+                            only_expired = (
+                                " AND attributes.ttl_timestamp IS NOT NULL"
+                                " AND attributes.ttl_timestamp <= %s"
+                                if w.when == "absent"
+                                else ""
+                            )
+                            params: tuple[Any, ...] = (
+                                actor_id,
+                                key,
+                                INTERNAL_BUCKET,
+                                w.name,
+                                encoded,
+                            )
+                            if w.when == "absent":
+                                params += (now,)
+                            cur.execute(
+                                f"""
+                                INSERT INTO attributes (
+                                    id, bucket_name, bucket, name, data,
+                                    timestamp, ttl_timestamp
+                                ) VALUES (%s, %s, %s, %s, %s, NULL, NULL)
+                                ON CONFLICT (id, bucket_name)
+                                DO UPDATE SET
+                                    data = EXCLUDED.data,
+                                    timestamp = EXCLUDED.timestamp,
+                                    ttl_timestamp = EXCLUDED.ttl_timestamp
+                                WHERE attributes.bucket = EXCLUDED.bucket{only_expired}
+                                """,
+                                params,
+                            )
+                        if cur.rowcount == 0:
+                            cur.execute(
+                                "SELECT bucket FROM attributes "
+                                "WHERE id = %s AND bucket_name = %s",
+                                (actor_id, key),
+                            )
+                            other = cur.fetchone()
+                            if other and other[0] != INTERNAL_BUCKET:
+                                raise AttributeKeyCollision(
+                                    INTERNAL_BUCKET, w.name, actor_id
+                                )
+                            conn.rollback()
+                            return RenameOutcome.ATTR_CONDITION
+                conn.commit()
+                return RenameOutcome.APPLIED
+            except BaseException:
+                conn.rollback()
+                raise
 
     def delete(self) -> bool:
         """

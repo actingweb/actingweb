@@ -771,6 +771,19 @@ another bucket holds raises ``AttributeKeyCollision``. The list format itself
 is ``actingweb.list_core.ListCore`` over a ``ListStorage``; a backend does not
 implement ``ListStorage``, the library adapts these methods to it.
 
+``DbActor.rename_creator(actor_id, *, expected, creator, internal=(),
+marker=None) -> RenameOutcome`` (3.16) moves a creator together with writes
+to the actor's ``_internal`` attributes as one atomic operation: the actor
+row only if it exists with creator ``expected``; the new uniqueness record
+under ``unique_creator``; each ``AttrWrite`` in ``internal`` with its own
+condition (``always``, ``absent``, ``equals``) and the bucket condition every
+attribute write has; and, with ``marker``, only if ``_internal.auth_method``
+holds that value. Any failed condition changes nothing and answers which one
+failed (``ROW_CHANGED``, ``MARKER_CHANGED``, ``ATTR_CONDITION``); a held
+creator raises ``CreatorTaken``, a key another bucket holds
+``AttributeKeyCollision``, a fault ``DbError``. The types are in
+``actingweb.db.creator_rename``; the two built-in backends are the reference.
+
 ``DbSubscriptionSuspension.is_suspended`` must raise ``DbError`` on a read
 fault (3.16), not answer ``False``.
 

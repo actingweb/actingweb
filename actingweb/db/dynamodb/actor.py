@@ -3,13 +3,14 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Literal
 
 from pynamodb.attributes import UnicodeAttribute
 from pynamodb.connection import Connection
-from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
+from pynamodb.constants import ALL_OLD, PAY_PER_REQUEST_BILLING_MODE
 from pynamodb.exceptions import (
+    CancellationReason,
     DeleteError,
     DoesNotExist,
     PutError,
@@ -20,6 +21,13 @@ from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
 from pynamodb.models import Model
 from pynamodb.transactions import TransactWrite
 
+from actingweb.db.creator_rename import (
+    INTERNAL_BUCKET,
+    MARKER_NAME,
+    AttrWrite,
+    RenameOutcome,
+    validate_rename_writes,
+)
 from actingweb.db.creator_rules import (
     is_exempt,
     missing_enforcement_message,
@@ -27,7 +35,7 @@ from actingweb.db.creator_rules import (
 )
 from actingweb.db.dynamodb._ensure import ensure_table
 from actingweb.db.dynamodb.creator import Creator
-from actingweb.db.exceptions import CreatorTaken, DbError
+from actingweb.db.exceptions import AttributeKeyCollision, CreatorTaken, DbError
 
 """
     DbActor handles all db operations for an actor
@@ -315,6 +323,204 @@ class DbActor:
             self._release_record(old_creator, actor_id)
         return True
 
+    # PynamoDB sends a transaction's items grouped by kind, in this order,
+    # whatever order the code added them in (``TransactWrite._commit``), and
+    # a cancellation carries one reason per item in the order sent. The
+    # items are therefore built as data first, sorted into this order, and
+    # replayed by ``build`` on every attempt (``_run_transaction`` calls it
+    # once per attempt, so anything recorded inside it would accumulate).
+    _TRANSACT_KIND_ORDER = ("check", "delete", "put", "update")
+
+    def rename_creator(
+        self,
+        actor_id: str,
+        *,
+        expected: str | None,
+        creator: str,
+        internal: Sequence[AttrWrite] = (),
+        marker: str | None = None,
+    ) -> RenameOutcome:
+        """See ``DbActorProtocol.rename_creator``: one ``TransactWriteItems``
+        over the actor row, the new ``creators`` record and the ``_internal``
+        attribute rows."""
+        if not actor_id:
+            raise ValueError("rename_creator needs an actor id")
+        validate_rename_writes(internal, marker)
+        from actingweb.db.dynamodb.attribute import Attribute
+        from actingweb.db.utils import sanitize_json_data
+
+        new_creator = normalise_creator(creator)
+        claim = (
+            bool(self.unique_creator)
+            and not is_exempt(new_creator)
+            and new_creator != expected
+        )
+        if claim:
+            _require_creators_backfill("actor rename")
+        now = int(time.time())
+        owned = Attribute.id.does_not_exist() | (Attribute.bucket == INTERNAL_BUCKET)
+
+        # (kind, role, the write it is for, how to add it)
+        items: list[
+            tuple[str, str, AttrWrite | None, Callable[[TransactWrite], None]]
+        ] = [
+            (
+                "update",
+                "row",
+                None,
+                lambda t: t.update(
+                    Actor(id=actor_id),
+                    actions=[Actor.creator.set(new_creator)],
+                    condition=Actor.id.exists() & creator_is(expected),
+                ),
+            )
+        ]
+        if claim:
+            items.append(
+                (
+                    "put",
+                    "record",
+                    None,
+                    lambda t: t.save(
+                        Creator(creator=new_creator, actor_id=actor_id),
+                        condition=(
+                            Creator.creator.does_not_exist()
+                            | (Creator.actor_id == actor_id)
+                        ),
+                    ),
+                )
+            )
+        for w in internal:
+            key = INTERNAL_BUCKET + ":" + w.name
+            if w.value is None:
+                items.append(
+                    (
+                        "delete",
+                        "attr",
+                        w,
+                        lambda t, key=key: t.delete(
+                            Attribute(id=actor_id, bucket_name=key), condition=owned
+                        ),
+                    )
+                )
+                continue
+            if w.when == "absent":
+                cond = Attribute.id.does_not_exist() | (
+                    (Attribute.bucket == INTERNAL_BUCKET)
+                    & (Attribute.ttl_timestamp <= now)
+                )
+            elif w.when == "equals":
+                cond = (Attribute.bucket == INTERNAL_BUCKET) & (
+                    Attribute.data == w.expected
+                )
+            else:
+                cond = owned
+            row = Attribute(
+                id=actor_id,
+                bucket_name=key,
+                bucket=INTERNAL_BUCKET,
+                name=w.name,
+                data=sanitize_json_data(w.value, log_source="attribute"),
+            )
+            items.append(
+                (
+                    "put",
+                    "attr",
+                    w,
+                    lambda t, row=row, cond=cond: t.save(
+                        row, condition=cond, return_values=ALL_OLD
+                    ),
+                )
+            )
+        if marker is not None:
+            items.append(
+                (
+                    "check",
+                    "marker",
+                    None,
+                    lambda t: t.condition_check(
+                        Attribute,
+                        actor_id,
+                        INTERNAL_BUCKET + ":" + MARKER_NAME,
+                        condition=(Attribute.bucket == INTERNAL_BUCKET)
+                        & (Attribute.data == marker),
+                    ),
+                )
+            )
+        ordered = sorted(items, key=lambda i: self._TRANSACT_KIND_ORDER.index(i[0]))
+
+        def build(t: TransactWrite) -> None:
+            for _kind, _role, _w, add in ordered:
+                add(t)
+
+        reasons = self._run_transaction_reasons(
+            build, op="actor rename", creators="guarded" if claim else "none"
+        )
+        if reasons is None:
+            if self.handle is not None and getattr(self.handle, "id", None) == actor_id:
+                self.handle.creator = new_creator
+            # As ``_modify_unique``: the old record goes whatever the new
+            # creator is (an exempt one claims none).
+            if (
+                self.unique_creator
+                and expected
+                and not is_exempt(expected)
+                and normalise_creator(expected) != new_creator
+            ):
+                self._release_record(expected, actor_id)
+            return RenameOutcome.APPLIED
+        return self._rename_outcome(actor_id, new_creator, ordered, reasons)
+
+    def _rename_outcome(
+        self,
+        actor_id: str,
+        new_creator: str,
+        ordered: list[tuple[str, str, AttrWrite | None, Any]],
+        reasons: "list[CancellationReason | None]",
+    ) -> RenameOutcome:
+        """Which condition cancelled a rename: the first that failed of the
+        actor row, the record, the marker, an attribute write. Only
+        ``ConditionalCheckFailed`` counts; an item reported with
+        ``TransactionConflict`` was not evaluated."""
+        if len(reasons) != len(ordered):
+            raise DbError("actor rename")
+
+        def failed(role: str) -> list[int]:
+            return [
+                i
+                for i, item in enumerate(ordered)
+                if item[1] == role
+                and reasons[i] is not None
+                and reasons[i].code == "ConditionalCheckFailed"  # type: ignore[union-attr]
+            ]
+
+        if failed("row"):
+            logger.warning(
+                f"Rename of actor {actor_id}: the stored creator no longer "
+                "matches; nothing changed"
+            )
+            return RenameOutcome.ROW_CHANGED
+        if failed("record"):
+            if self._record_names_other(new_creator, actor_id):
+                raise CreatorTaken(new_creator)
+            return RenameOutcome.ROW_CHANGED
+        if failed("marker"):
+            return RenameOutcome.MARKER_CHANGED
+        attrs = failed("attr")
+        if not attrs:
+            raise DbError("actor rename")
+        for i in attrs:
+            w = ordered[i][2]
+            assert w is not None
+            if w.value is None:
+                # A delete's only condition is that this bucket owns the key.
+                raise AttributeKeyCollision(INTERNAL_BUCKET, w.name, actor_id)
+            raw = reasons[i].raw_item or {}  # type: ignore[union-attr]
+            stored_bucket = raw.get("bucket", {}).get("S")
+            if stored_bucket is not None and stored_bucket != INTERNAL_BUCKET:
+                raise AttributeKeyCollision(INTERNAL_BUCKET, w.name, actor_id)
+        return RenameOutcome.ATTR_CONDITION
+
     def create(
         self,
         actor_id: str | None = None,
@@ -538,9 +744,10 @@ class DbActor:
             )
 
     # Which condition failed is confirmed with one consistent read rather
-    # than taken from the cancellation reasons' index: DynamoDB Local reports
-    # the failure on the first item whatever failed. Only the refused path
-    # pays the read.
+    # than taken from the cancellation reasons' index. (A 2026-11-15 run of
+    # DynamoDB Local reported each failed item at its own position;
+    # ``rename_creator`` reads the positions, these callers keep the read.)
+    # Only the refused path pays the read.
     @staticmethod
     def _actor_exists(actor_id: str) -> bool:
         try:
@@ -596,6 +803,21 @@ class DbActor:
         (a transaction that never touches it, such as a property write).
         Required, so a new caller has to choose.
         """
+        reasons = cls._run_transaction_reasons(build, op=op, creators=creators)
+        if reasons is None:
+            return None
+        return [r.code if r else None for r in reasons]
+
+    @classmethod
+    def _run_transaction_reasons(
+        cls,
+        build: Callable[[TransactWrite], None],
+        *,
+        op: str,
+        creators: Literal["guarded", "unguarded", "none"],
+    ) -> "list[CancellationReason | None] | None":
+        """:meth:`_run_transaction` with the whole cancellation reason of
+        each item (its code, and the stored row when the item asked for it)."""
         token = uuid.uuid4().hex
         for attempt in range(cls.TRANSACT_ATTEMPTS):
             try:
@@ -617,7 +839,7 @@ class DbActor:
                 # On the last attempt a failed condition wins over a conflict:
                 # the caller's answer (taken, changed) is not an outage.
                 if "ConditionalCheckFailed" in codes:
-                    return codes
+                    return list(e.cancellation_reasons or [])
                 cls._log_missing_table(e, op=op, creators=creators)
                 raise DbError(op) from e
             except Exception as e:

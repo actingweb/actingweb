@@ -35,9 +35,11 @@ docstring says otherwise:
   (missing arguments or handle, an id that is taken).
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
+
+from actingweb.db.creator_rename import AttrWrite, RenameOutcome
 
 # =============================================================================
 # Actor Protocols
@@ -147,6 +149,45 @@ class DbActorProtocol(Protocol):
             A fault raises ``DbError``; a new creator another actor holds
             raises ``CreatorTaken`` (with ``unique_creator``, and on
             PostgreSQL whenever the unique index exists).
+        """
+        ...
+
+    def rename_creator(
+        self,
+        actor_id: str,
+        *,
+        expected: str | None,
+        creator: str,
+        internal: Sequence[AttrWrite] = (),
+        marker: str | None = None,
+    ) -> RenameOutcome:
+        """
+        Move the creator of ``actor_id`` from ``expected`` to ``creator``
+        together with writes to its ``_internal`` attributes, as one atomic
+        operation (since 3.16).
+
+        The actor row is changed only if it exists with creator ``expected``;
+        with ``unique_creator`` a new non-exempt creator is claimed in the
+        same operation; each ``internal`` write carries its own condition
+        (:class:`~actingweb.db.creator_rename.AttrWrite`) and the condition
+        every attribute write has, that no other bucket holds its key; with
+        ``marker`` the operation also requires ``_internal.auth_method`` to
+        hold exactly that value. ``creator`` may equal ``expected``: only the
+        attribute writes then run, under the same conditions. The old
+        creator's record is released after the commit, as ``modify`` does.
+
+        Returns:
+            ``APPLIED``, or the first condition that failed, in the order:
+            the actor row, the marker, an attribute write
+
+        Raises:
+            ValueError: a write the operation cannot run (see
+                :func:`~actingweb.db.creator_rename.validate_rename_writes`);
+                nothing was called
+            CreatorTaken: another actor holds ``creator``; nothing changed
+            AttributeKeyCollision: another bucket holds a written key;
+                nothing changed
+            DbError: on a fault. Nothing is then known; read the row back.
         """
         ...
 

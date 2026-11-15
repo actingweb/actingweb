@@ -350,6 +350,10 @@ class DbActor:
         from actingweb.db.utils import sanitize_json_data
 
         new_creator = normalise_creator(creator)
+        if expected is not None and normalise_creator(expected) == new_creator:
+            # The same creator: kept as stored (a legacy mixed-case address
+            # is not lowercased by an email write) and claims nothing.
+            new_creator = expected
         claim = (
             bool(self.unique_creator)
             and not is_exempt(new_creator)
@@ -465,7 +469,7 @@ class DbActor:
                 self.unique_creator
                 and expected
                 and not is_exempt(expected)
-                and normalise_creator(expected) != new_creator
+                and normalise_creator(expected) != normalise_creator(new_creator)
             ):
                 self._release_record(expected, actor_id)
             return RenameOutcome.APPLIED

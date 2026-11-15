@@ -934,16 +934,19 @@ CHANGED
   Every load of an actor read its whole ``_internal`` bucket to compare the
   creator with ``store.email`` and renamed the creator when they differed,
   and a vouched rename was several writes that relied on the next load to
-  finish. Now a write of a vouched actor's ``store.email`` to another
-  address (``store.email = …``, ``set_confirmed``, ``replace_if_equal``,
-  ``set_if_absent``) renames the creator, its uniqueness record and its
-  recorded vouch in the same atomic backend operation
-  (``DbActor.rename_creator``), conditioned on the creator and the
-  ``auth_method`` marker as read just before; a load is one read of the
-  actor row. **Behavior change:** a write of ``store.email`` to an address
-  another actor holds raises ``CreatorTaken`` (409 through the
-  integrations), where before the write landed and every later load logged
-  a refused rename. An email written outside the library (a backend write,
+  finish. Now a write of ``store.email`` to another address, for an actor
+  vouched for its current creator (``store.email = …``, ``set_confirmed``,
+  ``replace_if_equal``, ``set_if_absent``), renames the creator, claims its
+  new uniqueness record and moves its recorded vouch in the same atomic
+  backend operation (``DbActor.rename_creator``), conditioned on the
+  creator and the ``auth_method`` marker as read just before; the old
+  record is released right after it. A load is one read of the actor row.
+  **Behavior change:** with ``with_unique_creator()`` (the default), a
+  write of an address another actor holds is refused: ``store.email = …``
+  and ``set_if_absent`` raise ``CreatorTaken`` (409 through the
+  integrations), ``set_confirmed`` and ``replace_if_equal`` answer False
+  (logged); before, the write landed and every later load logged a refused
+  rename. An email written outside the library (a backend write,
   a restore, devtest) is no longer picked up by a load: run
   ``actingweb-unique-creators creator-to-email`` after one. The application
   refuses to start under the flag until that command has run once
@@ -956,18 +959,21 @@ CHANGED
   vouched actor used to be reverted by the next load. Now it stays, and the
   stored email is left as it was: an actor with a recorded vouched address
   then reads as unvouched for the new creator (a sign-in for it cleans the
-  actor in place), while one vouched before 3.16 with no recorded address
-  stays vouched. **Check:** callers of ``Actor.modify(creator=…)``; use
+  actor in place) and keeps it through later writes of its email, while one
+  vouched before 3.16 with no recorded address stays vouched. **Check:** callers of ``Actor.modify(creator=…)``; use
   ``ActorInterface.modify_creator`` to move the creator, the email and the
   vouch together.
 - **Behavior change: a handoff to the trustee persists under the email
   flag.** ``PUT /<id>/trust/trustee {"creator": "trustee"}`` (the creator, a
   trustee or an admin peer may send it) set the creator to ``trustee``, and
   with ``force_email_prop_as_creator`` on the next load of a vouched actor
-  moved it back to the stored email, ending the trustee's access. It now
-  stays until the trustee hands it back with ``PUT {"creator": <stored
-  email>}``, which answers 409 if the owner has meanwhile signed in to a new
-  actor holding that address.
+  moved it back to the stored email, ending the trustee's access the
+  protocol's handoff is meant to give. It now stays until the trustee hands
+  it back with ``PUT {"creator": <stored email>}``. With uniqueness on, an
+  actor that took the free address meanwhile and is not vouched for it (a
+  factory create, a typed address) is renamed to its ``#dup-`` value at a
+  handback to the address the actor's vouch was recorded for, keeping its
+  data; one vouched for it (the owner's new actor) answers 409.
 - **Breaking: a custom actor backend implements ``rename_creator``.**
   ``DbActor.rename_creator(actor_id, *, expected, creator, internal=(),
   marker=None) -> RenameOutcome`` moves a creator together with writes to

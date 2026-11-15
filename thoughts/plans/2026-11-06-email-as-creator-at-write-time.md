@@ -147,6 +147,11 @@ Deduced from those and from the review; confirm at approval:
   `Actor.modify(creator=…)` does **not** move the stored email. The first
   draft made it do so; a reviewer showed that would leave the actor vouched
   for an address nobody proved (`oauth2.py:1873-1874`).
+- [Updated 2026-11-15, owner, after verification] **The write path binds
+  the vouch to the current creator** (`is_vouched_store(fresh, current)`),
+  as the sweep does; the marker-only form below is replaced. An actor
+  renamed on purpose with `Actor.modify(creator=…)` keeps its creator
+  through later email writes.
 - **The link applies when all of these hold:** the bucket is `_internal`; the
   flag is on; the value is an address; the actor is vouched in the
   marker-only form the load uses today (`actor.py:903`,
@@ -1419,3 +1424,130 @@ docs build clean. Emm's suite on this branch is the verification's (gate 2).
   heal used to make unnecessary.
 - A full test run must not overlap edits to the tree it tests: a run that
   picked up half-written code was discarded and repeated.
+
+## Iterations
+
+### 2026-11-15, after verification thoughts/verifications/2026-11-15-email-as-creator-at-write-time.md
+
+#### 1. The trustee's handback frees the address from an unvouched holder
+
+**Category**: Verification fix (owner decision)
+
+**What changed**: Phase 2 made a handoff to `trustee` persist under the flag,
+and the rename to the exempt `trustee` frees the owner's address for its
+length; an anonymous factory create (or a typed address) could take it, the
+handback then answered 409 for good and the data stayed with the trustee.
+At the handback (the actor's creator is `trustee`, the target is its stored
+email and it is vouched for that address), a holder that is not vouched for
+the address is renamed to its `#dup-` value through a config without
+uniqueness or the email link, its stored email is cleared, its now-stale
+record released, and the handback is retried once. A holder vouched for the
+address still answers 409.
+
+**Files affected**:
+- `actingweb/actor.py` - `_evict_for_handback`, called from
+  `modify_creator_unvouched` on `CreatorTaken`
+- `tests/integration/test_unique_creator_states.py` -
+  `test_a_handback_frees_the_address_from_an_unvouched_holder` (factory and
+  `email_unverified` holders), `test_a_vouched_holder_still_answers_conflict`
+- `docs/migration/v3.16.rst`, `CHANGELOG.rst` - the handoff paragraph
+
+**Narrow check (codex and a fresh-context reviewer) and its fixes:** the
+first version decided "vouched for the address" through the stored email,
+which an application can write while the actor is with the trustee: a
+handback to such an email would have evicted its holder and handed the
+victim's next sign-in to the trustee's actor (High). The eviction now needs
+the recorded vouched address (`vouched_creator`, proven by a sign-in and not
+written during a handoff) to be the target, and uniqueness on; a pre-3.16
+actor with none records nothing and answers 409. The holder is renamed with
+`rename_creator`, conditioned on its creator and the marker it was
+classified by, so one that signs in meanwhile is not renamed; its email is
+cleared only when it is the freed address. Tests:
+`test_an_email_written_during_the_handoff_evicts_nothing`,
+`test_an_actor_with_no_recorded_address_evicts_nothing`,
+`test_a_holders_other_email_is_kept`. Accepted, Low: the eviction commits
+before the handback's retry, so an address taken again in between leaves
+the holder renamed and the handback answering 409 (logged); after a
+deliberate `Actor.modify(creator=X)`, an application that writes the email
+`X` and then `Y` moves the creator to `Y` (the stored-email vouch clause),
+an application-only sequence.
+
+**Rationale**: the owner chose this over holding the address (which needs a
+new table and migration on PostgreSQL, where only the index holds an
+address) and over documenting it, after checking it against the protocol
+specification (`docs/protocol/actingweb-spec.rst`, "Assigning and
+Forwarding To a Trustee", `:2341-2362`): the spec defines the handoff to
+`trustee` and the bearer access it gives, which persisting the handoff now
+honours; it defines no handback and no creator uniqueness (the library's
+extension), so settling a held address at the handback is the extension's
+choice. Renaming an unvouched holder is what `resolve` and adoption already
+do; the data actor holds a proven vouch for the address.
+
+#### 2. The write path binds the vouch to the current creator
+
+**Category**: Decision changed (owner)
+
+**What changed**: `write_stored_email` moves the creator only for an actor
+vouched for its current creator, as the sweep does.
+
+**Files affected**:
+- `actingweb/creator_sync.py` - `is_vouched_store(fresh, current)`
+- `tests/test_creator_follows_email.py` -
+  `test_a_direct_creator_change_is_not_undone` re-saves the old address and
+  asserts the creator stays
+
+**Rationale**: with the marker-only form an application re-saving the
+unchanged address undid a deliberate `Actor.modify(creator=…)`, which the
+guide and the changelog say no longer happens.
+
+#### 3. A same-creator write keeps a legacy mixed-case creator
+
+**Category**: Bug fix
+
+**What changed**: `rename_creator` keeps `expected` as stored when `creator`
+normalises to it, and claims nothing; the DynamoDB release compares both
+creators normalised (comparing the raw one would have deleted the actor's
+own record).
+
+**Files affected**:
+- `actingweb/db/dynamodb/actor.py`, `actingweb/db/postgresql/actor.py`
+- `tests/integration/test_rename_creator.py` -
+  `TestLegacyMixedCase::test_a_same_creator_write_keeps_a_mixed_case_creator`
+
+**Rationale**: an email write that keeps the creator lowercased it and,
+under uniqueness, claimed a record (a `CreatorTaken` when another actor held
+the lowercase address).
+
+#### 4. A dry run of the sweep changes nothing
+
+**Category**: Bug fix
+
+**What changed**: `_holder` releases a stale record only with `repair`
+(`--apply`).
+
+**Files affected**: `actingweb/maintenance/email_as_creator.py`;
+`tests/integration/test_email_as_creator_sweep.py` -
+`test_a_stale_holder_does_not_block` asserts the record after a dry run.
+
+#### 5. The SDK rename's read-back checks the email it wrote
+
+**Category**: Bug fix
+
+**What changed**: after a `DbError`, `_rename_vouched` answers True only when
+the creator and, when the operation wrote one, the email landed.
+
+**Files affected**: `actingweb/interface/actor_interface.py`;
+`tests/test_creator_follows_email.py` -
+`test_a_fault_on_a_rename_to_the_same_creator_is_not_success`.
+
+#### 6. Exact docs and a return type
+
+**Category**: Verification fix
+
+**What changed**: the guide and the changelog say the old record is
+released after the operation, that `CreatorTaken` comes only with
+uniqueness on and from which methods, and what a later email write does
+after a direct creator change. `_holder` has its return type.
+
+**Files affected**: `docs/migration/v3.16.rst`, `CHANGELOG.rst`,
+`actingweb/maintenance/email_as_creator.py`.

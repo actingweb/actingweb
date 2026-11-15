@@ -445,6 +445,13 @@ class TestTheLoad:
         # With a recorded address the actor reads unvouched for X; vouched
         # before 3.16 (none recorded) it stays vouched (owner, 2026-11-15).
         assert is_vouched_store(istore(done), x) is (not recorded)
+        if recorded:
+            # Not vouched for its creator X, so re-saving the old address
+            # (an application saving an unchanged profile) keeps X
+            # (owner, 2026-11-15: the write path binds the vouch to the
+            # creator, as the sweep does).
+            istore(done).email = old
+            assert _reload(config, actor).creator == x
 
     def test_a_handoff_to_the_trustee_persists_and_is_handed_back(self) -> None:
         config = make_config()
@@ -553,6 +560,20 @@ class TestTheSdkRename:
         assert done.creator == old
         assert istore(done).email == old
         assert getattr(istore(done), VOUCHED_CREATOR) == old
+
+    def test_a_fault_on_a_rename_to_the_same_creator_is_not_success(self) -> None:
+        """The read-back checks the email as well: a rename to the current
+        creator that faulted before its commit reads the same creator back,
+        but not the email it was to write."""
+        config = make_config()
+        old = _mail()
+        actor = _vouched(config, old)
+        get_attribute(config).set_attr(aid(actor), "_internal", "email", _mail())
+        with patch.object(
+            _rename_cls(config), "rename_creator", side_effect=DbError("x")
+        ):
+            with pytest.raises(DbError):
+                ActorInterface(_reload(config, actor)).modify_creator(old)
 
     def test_an_actor_vouched_before_3_16_is_renamed_as_it_is(self) -> None:
         config = make_config()

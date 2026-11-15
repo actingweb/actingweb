@@ -187,6 +187,24 @@ class TestApplied:
         assert row == {"id": aid, "creator": new, "passphrase": "rotated"}
 
 
+class TestLegacyMixedCase:
+    def test_a_same_creator_write_keeps_a_mixed_case_creator(
+        self, enforced_store: Any
+    ) -> None:
+        """An email write that keeps the creator does not lowercase a legacy
+        creator stored with capitals, nor claim a record for it."""
+        lower = _email()
+        aid = _vouched(enforced_store, lower)
+        mixed = lower.capitalize()
+        _plant_creator(aid, mixed)
+        outcome = _rename(
+            enforced_store, aid, mixed, mixed, internal=(AttrWrite("note", "x"),)
+        )
+        assert outcome is RenameOutcome.APPLIED
+        assert _row(enforced_store, aid)["creator"] == mixed  # type: ignore[index]
+        assert _internal(enforced_store, aid)["note"] == "x"
+
+
 class TestRefused:
     def test_a_wrong_expected_creator_changes_nothing(
         self, enforced_store: Any
@@ -615,5 +633,23 @@ def _expired_row(actor_id: str, name: str, value: Any) -> None:
                     json.dumps(value),
                     past,
                 ),
+            )
+        conn.commit()
+
+
+def _plant_creator(actor_id: str, creator: str) -> None:
+    """Write a creator past the library's normalisation (a legacy row)."""
+    if DYNAMODB:
+        from actingweb.db.dynamodb.actor import Actor as ActorRow
+
+        row = ActorRow.get(actor_id, consistent_read=True)
+        row.update(actions=[ActorRow.creator.set(creator)])
+        return
+    from actingweb.db.postgresql.connection import get_connection
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE actors SET creator = %s WHERE id = %s", (creator, actor_id)
             )
         conn.commit()

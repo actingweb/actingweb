@@ -491,7 +491,7 @@ class ActorInterface:
         """
         from ..attribute import InternalStore
         from ..creator_sync import adopt_rename, after_rename, marker_of, vouch_entries
-        from ..db import get_actor
+        from ..db import get_actor, get_attribute
         from ..db.creator_rename import AttrWrite, RenameOutcome
         from ..db.creator_rules import normalise_creator
         from ..db.exceptions import AttributeKeyCollision, CreatorTaken, DbError
@@ -544,10 +544,20 @@ class ActorInterface:
         except (CreatorTaken, AttributeKeyCollision):
             raise
         except DbError:
-            # Nothing is known: the operation is atomic, so the row says.
+            # Nothing is known: the operation is atomic, so the row and, when
+            # it wrote one, the email say.
             again = get_actor(config)
             after = again.get(actor_id=self.id)
-            if after and normalise_creator(after.get("creator")) == target:
+            email_write = next((w for w in internal if w.name == "email"), None)
+            landed = bool(after) and normalise_creator(after.get("creator")) == target
+            if landed and email_write is not None:
+                stored = get_attribute(config).get_attr_strict(
+                    self.id, "_internal", "email"
+                )
+                landed = isinstance(stored, dict) and stored.get("data") == (
+                    email_write.value
+                )
+            if landed:
                 adopt_rename(self._core_actor, again, target)
                 self._core_actor.store = InternalStore(
                     actor_id=self.id, config=config, owner=self._core_actor

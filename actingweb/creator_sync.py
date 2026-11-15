@@ -128,7 +128,7 @@ def write_stored_email(store: InternalStore, write: AttrWrite) -> RenameOutcome 
         current: str = row["creator"]
         current_n = normalise_creator(current)
         moves = (
-            is_vouched_store(fresh)
+            is_vouched_store(fresh, current)
             and current_n != "trustee"
             and not is_reserved(current)
             and current_n != target

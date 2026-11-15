@@ -161,6 +161,10 @@ class TestTheSweep:
         stale.get(actor_id=gone)
         assert stale.modify(creator=_email())
         aid = _actor(enforced_store, _pid(), email=addr)
+        recorded = get_actor(enforced_store).get_creator_holder(addr)
+        _sweep(enforced_store)
+        # A dry run changes nothing, the stale record included.
+        assert get_actor(enforced_store).get_creator_holder(addr) == recorded
         counts = _sweep(enforced_store, apply=True)
         assert counts["moved"] == 1 and counts["held"] == 0
         assert _creator(enforced_store, aid) == addr

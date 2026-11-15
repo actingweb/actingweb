@@ -41,6 +41,7 @@ from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
 from .db.creator_rules import (
+    dup_value,
     is_exempt,
     is_refused_from_callers,
     is_reserved,
@@ -1398,6 +1399,85 @@ class Actor:
             and target not in ("trustee", own_email.lower())
         )
 
+    def _evict_for_handback(self, target: str) -> bool:
+        """The trustee hands the actor back to the address its vouch was
+        recorded for, and another actor holds it: free the address when that
+        holder is not vouched for it.
+
+        A handoff to ``trustee`` persists under ``with_email_as_creator``
+        and frees the owner's address for its length, so anyone could take
+        it (an anonymous factory create, a typed address) and strand the
+        actor with the trustee. Only with ``with_unique_creator()``, and
+        only for the recorded vouched address (``vouched_creator``), which
+        a sign-in proved and nothing writes while the actor is with the
+        trustee; the stored email alone is not enough, since an application
+        can write it. Such a holder is renamed to its ``#dup-`` value in one
+        operation conditioned on its creator and its marker as classified
+        (a sign-in that vouches it meanwhile wins), and loses its stored
+        email when that is the freed address, as ``actingweb-unique-creators
+        resolve`` does; it keeps its data. A holder vouched for the address
+        (the owner's own new actor) is left, and the handback answers 409.
+        True when the address was freed. Raises ``DbError`` on a fault.
+        """
+        import copy
+
+        from actingweb.attribute import InternalStore
+        from actingweb.creator_sync import marker_of
+        from actingweb.db.creator_rename import AttrWrite, RenameOutcome
+        from actingweb.oauth2 import VOUCHED_CREATOR, classify_store, is_vouched_store
+
+        store = self.store
+        if (
+            not self.config
+            or not self.config.unique_creator
+            or not self.id
+            or self.creator != "trustee"
+            or not store
+            or not is_vouched_store(store)
+        ):
+            return False
+        recorded = getattr(store, VOUCHED_CREATOR, None)
+        if not isinstance(recorded, str) or normalise_creator(recorded) != target:
+            return False
+        holder = get_actor(self.config).get_creator_holder(target)
+        if not holder or holder == self.id:
+            return False
+        # Without uniqueness or the email link, as resolve's renames: a
+        # #dup- value is never recorded. The holder's record is then stale
+        # and released.
+        plain = copy.copy(self.config)
+        plain.unique_creator = False
+        plain.force_email_prop_as_creator = False
+        handle = get_actor(plain)
+        row = handle.get(actor_id=holder)
+        if not row or normalise_creator(row.get("creator")) != target:
+            return False
+        holder_store = InternalStore(actor_id=holder, config=plain)
+        if not holder_store.loaded or classify_store(holder_store, target) == "vouched":
+            return False
+        email = holder_store.email
+        internal = (
+            [AttrWrite("email", None)]
+            if isinstance(email, str) and normalise_creator(email) == target
+            else []
+        )
+        outcome = handle.rename_creator(
+            holder,
+            expected=row.get("creator"),
+            creator=dup_value(target, holder),
+            internal=internal,
+            marker=marker_of(holder_store),
+        )
+        if outcome is not RenameOutcome.APPLIED:
+            return False
+        get_actor(self.config).release_stale_creator(target, holder)
+        logger.warning(
+            f"Actor {self.id}: the trustee handed it back to its address, which "
+            f"unvouched actor {holder} held meanwhile; {holder} was renamed to "
+            "its #dup- value and keeps its data"
+        )
+        return True
+
     def modify_creator_unvouched(self, creator: str) -> bool:
         """Change the creator to an address nobody proved, and unvouch.
 
@@ -1456,6 +1536,15 @@ class Actor:
         try:
             if self.modify(creator=creator):
                 return True
+        except CreatorTaken as e:  # folds DbError: raised below
+            # A handback may free the address first (_evict_for_handback).
+            fault = e
+            if not unvouch and self._evict_for_handback(target):
+                try:
+                    if self.modify(creator=creator):
+                        return True
+                except DbError as again:  # folds DbError: raised below
+                    fault = again
         except DbError as e:  # folds DbError: raised after the marker restore below
             # Ambiguous: the creator may have landed. Put the marker back
             # only if the stored creator is unchanged, then raise.

@@ -498,6 +498,10 @@ class DbActor:
             raise ValueError("rename_creator needs an actor id")
         validate_rename_writes(internal, marker)
         new_creator = normalise_creator(creator)
+        if expected is not None and normalise_creator(expected) == new_creator:
+            # The same creator: kept as stored (a legacy mixed-case address
+            # is not lowercased by an email write) and claims nothing.
+            new_creator = expected
         if (
             self.unique_creator
             and not is_exempt(new_creator)

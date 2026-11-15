@@ -1148,33 +1148,52 @@ relying on the next load to finish it.
 
 In 3.16 the rule is enforced where the email is written:
 
-- **A write of a vouched actor's ``store.email`` to another address** (any of
-  ``store.email = …``, ``set_confirmed``, ``replace_if_equal``,
-  ``set_if_absent``) renames the creator, moves its uniqueness record and its
-  recorded vouched address, and writes the email, as one atomic backend
-  operation (``DbActor.rename_creator``), conditioned on the creator and the
-  ``auth_method`` marker as read just before. A write that keeps the creator
-  (an unvouched actor, a ``trustee`` creator, an address equal to the
-  creator) is conditioned on the creator the same way, so a rename
+- **A write of ``store.email`` to another address, for an actor vouched for
+  its current creator** (any of ``store.email = …``, ``set_confirmed``,
+  ``replace_if_equal``, ``set_if_absent``), renames the creator, claims its
+  new uniqueness record and moves its recorded vouched address, and writes
+  the email, as one atomic backend operation (``DbActor.rename_creator``),
+  conditioned on the creator and the ``auth_method`` marker as read just
+  before. The old creator's record is released right after the operation (a
+  fault there is logged, and ``actingweb-unique-creators report`` lists the
+  leftover). A write that keeps the creator (an unvouched actor, one not
+  vouched for its current creator, a ``trustee`` creator, an address equal
+  to the creator) is conditioned on the creator the same way, so a rename
   committing in between is not undone by it.
-- **An address another actor holds raises** ``CreatorTaken`` at the write
-  (409 through the integrations). Before, the write landed and every later
-  load logged a refused rename.
+- **With ``with_unique_creator()`` (the default), an address another actor
+  holds is refused at the write:** ``store.email = …`` and
+  ``set_if_absent`` raise ``CreatorTaken`` (409 through the integrations);
+  ``set_confirmed`` (unless ``raise_on_fault=True``) and
+  ``replace_if_equal`` answer False and log it. Before, the write landed and
+  every later load logged a refused rename. With uniqueness off nothing
+  checks the address, as before: the creator moves onto it.
 - **A load is one read** of the actor row, and renames nothing. An email
   written past the library (a backend write, a restore, devtest, a 3.15
   process) is not picked up: the sweep below moves such an actor.
 - **``Actor.modify(creator=…)`` is not undone.** The stored email is left as
   it was. An actor with a recorded vouched address then reads as unvouched
-  for the new creator, so a sign-in for it cleans the actor in place; one
-  vouched before 3.16 (no recorded address) stays vouched. Use
+  for the new creator, so a sign-in for it cleans the actor in place, and a
+  later write of its email (the old address included) keeps the new
+  creator. One vouched before 3.16 (no recorded address) stays vouched, and
+  a later write of its email moves the creator to it. Use
   ``ActorInterface.modify_creator`` to move the creator, the email and the
   vouch together.
 - **A handoff to the trustee persists.** ``PUT /<id>/trust/trustee
   {"creator": "trustee"}`` (the creator, a trustee or an admin peer may send
   it) used to be undone by the next load of a vouched actor, which ended the
-  trustee's access. It now stays until the trustee hands the actor back with
-  ``PUT {"creator": <stored email>}``; that answers 409 if the owner has
-  meanwhile signed in to a new actor holding the address.
+  trustee's access, which the protocol's handoff is meant to give. It now
+  stays until the trustee hands the actor back with ``PUT {"creator":
+  <stored email>}``. While the actor is with the trustee its address is
+  free, so another actor can take it (a factory create, a typed address).
+  With ``with_unique_creator()``, a handback to the address the actor's
+  vouch was recorded for (``vouched_creator``, which a sign-in proved) frees
+  it from a holder that is not vouched for it: that holder is renamed to its
+  ``#dup-`` value and loses its stored email when it is that address, as
+  ``resolve`` does, keeping its data, and the handback lands. A holder
+  vouched for the address (the owner's own new actor, after a sign-in in the
+  meantime) answers 409, as does a handback to any other address, the
+  stored email included, and one for an actor vouched before 3.16 (no
+  recorded address).
 
 **The sweep.** ``actingweb-unique-creators creator-to-email`` lists each
 actor vouched for its current creator whose stored email is another address

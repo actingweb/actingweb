@@ -148,11 +148,20 @@ def _in_scope(store: Any, creator: str) -> str | None:
     return target if target != current else None
 
 
-def _holder(config: Any, rename_config: Any, enforced: bool, target: str, me: str):
+def _holder(
+    config: Any,
+    rename_config: Any,
+    enforced: bool,
+    target: str,
+    me: str,
+    *,
+    repair: bool = False,
+) -> str | None:
     """Another actor holding ``target`` now, or None. A holder is confirmed
     by a consistent read of its row: a record or index entry naming an actor
     that is gone, or holds another creator now, is not one (a stale record
-    is released, as ``resolve`` does). Raises ``DbError``."""
+    is released, as ``resolve`` does, but only with ``repair`` (an
+    ``--apply`` run; a dry run changes nothing). Raises ``DbError``."""
     from actingweb.db import get_actor
     from actingweb.db.creator_rules import normalise_creator
 
@@ -167,7 +176,8 @@ def _holder(config: Any, rename_config: Any, enforced: bool, target: str, me: st
             return None
         if holds(holder):
             return holder
-        db.release_stale_creator(target, holder)
+        if repair:
+            db.release_stale_creator(target, holder)
         return None
     rows = get_actor(config).get_by_creator(creator=target, consistent=True)
     for row in rows if isinstance(rows, list) else []:
@@ -288,7 +298,9 @@ def sweep(
                 if target is None:
                     break
                 email = store.email
-                holder = _holder(config, rename_config, enforced, target, actor_id)
+                holder = _holder(
+                    config, rename_config, enforced, target, actor_id, repair=apply
+                )
                 if holder is None and target in claimed:
                     holder = claimed[target]  # moved there earlier in this run
                 if holder:
@@ -348,7 +360,9 @@ def sweep(
                 # holder as above.
                 try:
                     assert target is not None  # set before any rename
-                    taker = _holder(config, rename_config, enforced, target, actor_id)
+                    taker = _holder(
+                        config, rename_config, enforced, target, actor_id, repair=apply
+                    )
                     blocks = taker is None or _holder_blocks(config, taker, target)
                 except Exception:  # folds DbError: unknown holder blocks
                     taker, blocks = None, True

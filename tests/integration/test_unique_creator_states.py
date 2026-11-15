@@ -20,7 +20,7 @@ import pytest
 
 from actingweb import oauth2 as oauth2_module
 from actingweb.actor import Actor
-from actingweb.db import get_actor
+from actingweb.db import get_actor, get_attribute
 from actingweb.db.exceptions import CreatorTaken, DbError
 from actingweb.interface.actor_interface import ActorInterface
 from actingweb.maintenance import unique_creators
@@ -780,6 +780,96 @@ class TestTheEmailWriteMeetsAHeldAddress:
         assert store.read_strict("email") is None
         assert _holder(enforced_store, email) == holder.id
         assert _holder(enforced_store, pid) == other.id
+
+    def _handed_off(self, config: Any, address: str) -> Actor:
+        """A vouched actor for ``address`` (its stored email), handed to
+        the trustee under the flag."""
+        forced = self._forced(config)
+        owner = _actor(config, address, auth_method="google_oauth2")
+        assert owner.id
+        get_attribute(config).set_attr(owner.id, "_internal", "email", address)
+        loaded = Actor(actor_id=owner.id, config=forced)
+        assert loaded.modify_creator_unvouched("trustee")
+        assert Actor(actor_id=owner.id, config=forced).creator == "trustee"
+        return loaded
+
+    @pytest.mark.parametrize("auth_method", ["factory", "email_unverified"])
+    def test_a_handback_frees_the_address_from_an_unvouched_holder(
+        self, enforced_store: Any, auth_method: str
+    ) -> None:
+        """While the actor is with the trustee its address is free; anyone
+        can take it (a factory create, a typed address). The handback to
+        the stored, vouched address renames such a holder to its #dup-
+        value and lands."""
+        from actingweb.db.creator_rules import dup_value
+
+        address = _email()
+        owner = self._handed_off(enforced_store, address)
+        squat = _actor(enforced_store, address, auth_method=auth_method)
+        assert squat.id and owner.id
+        assert squat.store is not None
+        squat.store.email = address
+        back = Actor(actor_id=owner.id, config=self._forced(enforced_store))
+        assert back.modify_creator_unvouched(address)
+        assert Actor(actor_id=owner.id, config=enforced_store).creator == address
+        assert _holder(enforced_store, address) == owner.id
+        moved = Actor(actor_id=squat.id, config=enforced_store)
+        assert moved.creator == dup_value(address, squat.id)
+        assert moved.store is not None and moved.store.email is None
+
+    def test_an_email_written_during_the_handoff_evicts_nothing(
+        self, enforced_store: Any
+    ) -> None:
+        """While the actor is with the trustee an application can write its
+        stored email; a handback to that address must not evict its holder.
+        Only the recorded vouched address frees a held one."""
+        address, victim = _email(), _email()
+        owner = self._handed_off(enforced_store, address)
+        held = _actor(enforced_store, victim, auth_method="factory")
+        assert owner.id and held.id
+        get_attribute(enforced_store).set_attr(owner.id, "_internal", "email", victim)
+        back = Actor(actor_id=owner.id, config=self._forced(enforced_store))
+        with pytest.raises(CreatorTaken):
+            back.modify_creator_unvouched(victim)
+        assert Actor(actor_id=held.id, config=enforced_store).creator == victim
+        assert _holder(enforced_store, victim) == held.id
+
+    def test_an_actor_with_no_recorded_address_evicts_nothing(
+        self, enforced_store: Any
+    ) -> None:
+        address = _email()
+        owner = self._handed_off(enforced_store, address)
+        assert owner.id
+        get_attribute(enforced_store).set_attr(
+            owner.id, "_internal", "vouched_creator", None
+        )
+        squat = _actor(enforced_store, address, auth_method="factory")
+        back = Actor(actor_id=owner.id, config=self._forced(enforced_store))
+        with pytest.raises(CreatorTaken):
+            back.modify_creator_unvouched(address)
+        assert _holder(enforced_store, address) == squat.id
+
+    def test_a_holders_other_email_is_kept(self, enforced_store: Any) -> None:
+        address, own = _email(), _email()
+        owner = self._handed_off(enforced_store, address)
+        squat = _actor(enforced_store, address, auth_method="factory")
+        assert owner.id and squat.id
+        get_attribute(enforced_store).set_attr(squat.id, "_internal", "email", own)
+        back = Actor(actor_id=owner.id, config=self._forced(enforced_store))
+        assert back.modify_creator_unvouched(address)
+        moved = Actor(actor_id=squat.id, config=enforced_store)
+        assert moved.store is not None and moved.store.email == own
+
+    def test_a_vouched_holder_still_answers_conflict(self, enforced_store: Any) -> None:
+        address = _email()
+        owner = self._handed_off(enforced_store, address)
+        other = _actor(enforced_store, address, auth_method="google_oauth2")
+        assert owner.id and other.id
+        back = Actor(actor_id=owner.id, config=self._forced(enforced_store))
+        with pytest.raises(CreatorTaken):
+            back.modify_creator_unvouched(address)
+        assert Actor(actor_id=owner.id, config=enforced_store).creator == "trustee"
+        assert _holder(enforced_store, address) == other.id
 
     def test_a_free_address_moves_the_creator_and_its_record(
         self, enforced_store: Any

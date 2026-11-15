@@ -543,7 +543,7 @@
      }
     }
    },
-   "result": 1,
+   "result": 0,
    "step": "resume",
    "wire": [
     {

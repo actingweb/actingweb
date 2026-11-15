@@ -1321,8 +1321,8 @@ test = "test_wire_scalar_properties.py::test_ws11_resync_fetch_fails"
 topologies = ["same_host", "two_hosts"]
 owners = []
 exposure = false
-expected = "Suspend, put x, resume: B's resync baseline fetch fails (forced), B answers 503 with Retry-After, its sequence is unmoved and the rebuild owed; A's next write (y) makes B rebuild from the baseline, and B holds x and y."
-reason = ["2026-11-15 first recording (spec-1-5:3)"]
+expected = "Suspend, put x, resume: B's resync baseline fetch fails (forced), B answers 503 with Retry-After, its sequence is unmoved and the rebuild owed; A counts the resync as missed (resume returns 0) and keeps it for the next resume; A's next write (y) makes B rebuild from the baseline, and B holds x and y."
+reason = ["2026-11-15 first recording (spec-1-5:3)", "2026-11-15 a resync answered 503 is counted as missed off the loop and sent again on the next resume; resume returns 0 (spec-1-5:4)"]
 
 [rows."WS12.target"]
 test = "test_wire_scalar_properties.py::test_ws12_resync_sweeps"

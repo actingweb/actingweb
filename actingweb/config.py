@@ -57,6 +57,15 @@ LEGACY_LOOKUP_REMOVED = (
 )
 
 
+FANOUT_REMOVED = (
+    "{what}: FanOutManager and its settings (max_payload_for_high_granularity, "
+    "circuit_breaker_threshold, circuit_breaker_cooldown) were removed in "
+    "3.16; they were never on the publish path. Callbacks are sent by the "
+    "library's sender, bounded by max_concurrent_callbacks. Remove the "
+    'setting or import, and see docs/migration/v3.16.rst "Callback delivery".'
+)
+
+
 def _handle_removed_lookup_switch(what: str, enabled: bool) -> None:
     """Refuse the removed legacy-lookup switch; warn on its redundant form.
 

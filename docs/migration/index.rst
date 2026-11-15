@@ -94,7 +94,7 @@ Version Migrations
    sign-in providers.
 
 **v3.10 Migration**
-   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager, and peer capabilities.
+   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager (removed in 3.16), and peer capabilities.
 
 **v3.7 Migration**
    Guide for upgrading to ActingWeb 3.7, covering developer API extensions for SubscriptionManager and TrustManager with cleaner APIs and automatic lifecycle hooks.

@@ -4,8 +4,6 @@ from actingweb.interface import (
     ActingWebApp,
     CallbackProcessor,
     CallbackType,
-    FanOutManager,
-    FanOutResult,
     PeerCapabilities,
     ProcessResult,
     RemotePeerStore,
@@ -28,10 +26,10 @@ class TestSubscriptionProcessingConfig:
         assert config.gap_timeout_seconds == 5.0
         assert config.max_pending == 100
         assert config.storage_prefix == "remote:"
-        assert config.max_concurrent_callbacks == 10
-        assert config.max_payload_for_high_granularity == 65536
-        assert config.circuit_breaker_threshold == 5
-        assert config.circuit_breaker_cooldown == 60.0
+        assert config.max_concurrent_callbacks == 4
+        assert config.callback_delivery_budget_seconds is None
+        assert config.serialize_own_host_callbacks is True
+        assert not hasattr(config, "circuit_breaker_threshold")
 
     def test_custom_values(self) -> None:
         """Config accepts custom values."""
@@ -84,13 +82,39 @@ class TestModuleExports:
         """PeerCapabilities is exported."""
         assert PeerCapabilities is not None
 
-    def test_fanout_manager_exported(self) -> None:
-        """FanOutManager is exported."""
-        assert FanOutManager is not None
+    def test_the_removed_fanout_names_raise_their_pointer(self) -> None:
+        import importlib
 
-    def test_fanout_result_exported(self) -> None:
-        """FanOutResult is exported."""
-        assert FanOutResult is not None
+        import pytest
+
+        for name in ("FanOutManager", "FanOutResult"):
+            with pytest.raises(ImportError, match="removed in 3.16"):
+                getattr(importlib.import_module("actingweb.interface"), name)
+        with pytest.raises(ImportError, match="v3.16"):
+            importlib.import_module("actingweb.fanout")
+
+    def test_the_removed_settings_raise_their_pointer(self) -> None:
+        import pytest
+
+        app = ActingWebApp(aw_type="urn:actingweb:test:removed", fqdn="x.example")
+        with pytest.raises(RuntimeError, match="Callback delivery"):
+            app.with_subscription_processing(max_payload_for_high_granularity=1)
+        with pytest.raises(RuntimeError, match="Callback delivery"):
+            app.with_subscription_processing(circuit_breaker_threshold=5)
+        with pytest.raises(RuntimeError, match="Callback delivery"):
+            app.with_subscription_processing(circuit_breaker_cooldown=60.0)
+
+    def test_the_new_settings_reach_the_config(self) -> None:
+        app = ActingWebApp(aw_type="urn:actingweb:test:new", fqdn="x.example")
+        app.with_subscription_processing(
+            max_concurrent_callbacks=2,
+            callback_delivery_budget_seconds=20,
+            serialize_own_host_callbacks=False,
+        )
+        sub = app.get_subscription_config()
+        assert sub.max_concurrent_callbacks == 2
+        assert sub.callback_delivery_budget_seconds == 20
+        assert sub.serialize_own_host_callbacks is False
 
 
 class TestActingWebAppSubscriptionProcessing:

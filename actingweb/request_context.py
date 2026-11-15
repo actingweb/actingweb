@@ -16,6 +16,21 @@ from typing import Any
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 _actor_id: ContextVar[str | None] = ContextVar("actor_id", default=None)
 _peer_id: ContextVar[str | None] = ContextVar("peer_id", default=None)
+# When the current request's callback delivery budget runs out (a monotonic
+# time), so every diff a write registers shares one budget (3.16).
+_delivery_deadline: ContextVar[float | None] = ContextVar(
+    "delivery_deadline", default=None
+)
+
+
+def get_delivery_deadline() -> float | None:
+    """The current request's callback delivery deadline, if one started."""
+    return _delivery_deadline.get()
+
+
+def set_delivery_deadline(deadline: float | None) -> None:
+    """Start (or clear) the current request's callback delivery deadline."""
+    _delivery_deadline.set(deadline)
 
 
 def generate_request_id() -> str:
@@ -220,6 +235,7 @@ def set_request_context(
     _request_id.set(request_id)
     _actor_id.set(actor_id)
     _peer_id.set(peer_id)
+    _delivery_deadline.set(None)
 
     return request_id or ""
 
@@ -242,6 +258,7 @@ def clear_request_context() -> None:
     _request_id.set(None)
     _actor_id.set(None)
     _peer_id.set(None)
+    _delivery_deadline.set(None)
 
 
 def get_context_dict() -> dict[str, Any]:

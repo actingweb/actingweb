@@ -2488,8 +2488,8 @@ class TestTheResyncAfterReverify11:
             peerid=w.b, target="properties", granularity="high"
         )
         missed: list[str] = []
-        with mock.patch.object(
-            w.a, "_send_resync_callback_sync", return_value=True
+        with mock.patch(
+            "actingweb.callback_sender.send_sync", return_value=204
         ) as send:
             count = w.a._send_resync_callbacks("properties", None, missed=missed)
         assert send.called

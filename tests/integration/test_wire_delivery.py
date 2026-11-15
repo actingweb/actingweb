@@ -12,6 +12,7 @@ granularity ``high``, a target-level subscription, both topologies.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Any
 
@@ -51,6 +52,21 @@ def _stored_diffs(s: Scenario) -> list[dict[str, Any]]:
         actor_id=a.id, peerid=b.id, subid=_subid(s), config=a.host.config
     )
     return sub.get_diffs() or []
+
+
+@contextlib.contextmanager
+def _one_at_a_time(publisher: Any) -> Any:
+    """Send this write's callbacks one at a time (spec-1-5:4): the recorder
+    nests a request under the most recently opened one, which holds only
+    while sends do not overlap. Concurrency itself is tested by
+    ``tests/test_callback_sender.py`` and ``test_callback_delivery_shapes.py``."""
+    sub_config = publisher.host.config._subscription_config
+    saved = sub_config.max_concurrent_callbacks
+    sub_config.max_concurrent_callbacks = 1
+    try:
+        yield
+    finally:
+        sub_config.max_concurrent_callbacks = saved
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
@@ -159,10 +175,17 @@ def test_wd11_resume_none(wire_pair, topology):
 def test_wd13_two_subscribers_on_the_second_host(wire_pair):
     """WD13: B and C on the second host, both subscribed; one write."""
     s = wire_pair("two_hosts", grant=["*"])
-    wire_pair.add_subscriber(s, "C", host="peer", grant=["*"])
+    c = wire_pair.add_subscriber(s, "C", host="peer", grant=["*"])
     s.sort_callbacks = True
     a = s.publisher
-    s.step("put", lambda: _put(a, "x", {"v": 1}))
+    # Named B's then C's: the two callbacks are sent concurrently (spec-1-5:4).
+    s.subid_order = [
+        row.subscription_id
+        for peer in (s.subscribers[0], c)
+        for row in a.interface().subscriptions.get_subscriptions_from_peer(peer.id)
+    ]
+    with _one_at_a_time(a):
+        s.step("put", lambda: _put(a, "x", {"v": 1}))
     check("WD13", s.recording())
 
 
@@ -207,7 +230,14 @@ def test_wd15_target_and_subtarget(wire_pair, topology):
     wire_pair.subscribe(s, s.subscribers[0], subtarget="notes")
     s.sort_callbacks = True
     a = s.publisher
-    s.step("append (SDK)", lambda: _lst(a).append({"id": "a"}))
+    # Named the target's then the subtarget's: their callbacks are sent
+    # concurrently (spec-1-5:4).
+    rows = a.interface().subscriptions.get_subscriptions_from_peer(s.subscribers[0].id)
+    s.subid_order = [
+        r.subscription_id for r in sorted(rows, key=lambda r: r.subtarget or "")
+    ]
+    with _one_at_a_time(a):
+        s.step("append (SDK)", lambda: _lst(a).append({"id": "a"}))
     check("WD15", s.recording(), variant=topology)
 
 

@@ -69,11 +69,9 @@ class TestResyncForAGoneSubscription:
         sent: list[Any] = []
         with (
             mock.patch("actingweb.trust.Trust", return_value=trust),
-            mock.patch.object(
-                actor, "_send_resync_callback_sync", lambda *a, **k: sent.append(a)
-            ),
-            mock.patch.object(
-                actor, "_send_resync_callback_async", lambda *a, **k: sent.append(a)
+            mock.patch(
+                "actingweb.callback_sender.send_sync",
+                lambda *a, **k: sent.append(a),
             ),
         ):
             assert (

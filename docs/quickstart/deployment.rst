@@ -61,11 +61,64 @@ This makes callbacks use blocking HTTP requests instead of async tasks, guarante
 
 **Local Development:**
 
-Do NOT use ``with_sync_callbacks()`` in local/container deployments:
+``with_sync_callbacks()`` matters only where callbacks would otherwise be tasks
+on a running event loop. Off the loop (Flask, FastAPI's sync handlers) every
+write already waits for its callbacks; on a running loop, the setting blocks
+the loop while they are sent, so leave it off there.
 
-- Default async behavior prevents blocking and self-deadlock
-- Async mode allows both actors on the same server to communicate without blocking
-- Callbacks complete in the background after the response is returned
+Callback Delivery by Deployment Shape
+-------------------------------------
+
+Since 3.16 one write's callbacks are sent concurrently, at most
+``max_concurrent_callbacks`` (default 4) to subscribers on other hosts, and
+subscribers on the publisher's own host one at a time
+(``serialize_own_host_callbacks``). A send takes at most 15 s (5 s to
+connect, 10 s to read); a resync 30 s. What to set depends on how requests
+are served.
+
+**A long-running server (FastAPI or Flask).** Handler threads are shared by
+every request, and a subscriber that calls back into the same deployment (a
+low-granularity subscriber's fetch, a subscriber on another origin of the
+same process) needs one to answer. A write holds one handler thread and its
+subscribers' requests back up to the bound more, so size the pool
+(``with_thread_pool_workers`` on FastAPI) to at least the simultaneous writes
+you expect times one plus the bound. Keep the defaults: own-host subscribers
+serial, no budget. A deployment served under several origins treats a
+subscriber whose base URI uses another of them as remote.
+
+**One request per function instance behind a gateway with a response limit**
+(a function platform behind an API gateway that gives up at 30 s, say).
+Nothing is shared between requests: a callback to the same deployment is
+served by another instance. Keep ``with_sync_callbacks()`` on, and:
+
+.. code-block:: python
+
+    app.with_sync_callbacks().with_callback_delivery(
+        serialize_own_host_callbacks=False,     # each request has its own instance
+        callback_delivery_budget_seconds=20,    # under the gateway's limit
+    )
+
+With the switch off, own-host subscribers are sent under the bound, so four
+that hang cost 15 s instead of 60 s, at the price of up to the bound (plus
+one per low-granularity fetch back) function instances at once per write; an
+account's concurrency limit is the ceiling, and the bound is the setting that
+lowers it. With the budget the write answers inside the gateway's limit
+whatever the subscribers do (the budget is per request: every diff the write
+registers shares it, and each send's connect and read timeouts get half of
+what is left): sends not started are skipped and sends in
+flight end with it, and every diff is stored and numbered first, so a
+subscriber that was cut off sees the gap at its next callback, or polls; an
+undelivered resync is sent again on the next resume. Set the budget under the
+limit, not as a tuning knob: lower, it cuts deliveries that would have
+succeeded.
+
+**An event loop without** ``with_sync_callbacks()``. The write does not wait;
+the sends are tasks the library keeps until done. On a function platform the
+instance may freeze before they finish, which is why that shape sets the
+flag.
+
+The library sets neither new setting by itself and does not detect the
+platform.
 
 .. note::
    ActingWeb automatically detects Lambda environments (via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables) and logs a warning if sync callbacks are not enabled. This helps catch misconfigurations during development and deployment.
@@ -115,11 +168,9 @@ Kubernetes
             ports:
             - containerPort: 5000
 
-With several replicas, each worker process keeps its own subscription
-fan-out circuit breaker (``actingweb.fanout``): a peer that answers 429 or
-503 is backed off by each worker once that worker's own breaker trips, not
-by all of them at once. Persisted breaker state only seeds a new process (a
-pod restart). Size a peer's retry tolerance for the replica count.
+With several replicas, each write's callbacks are bounded per write, in the
+process that served the write; there is no process-wide or cross-replica
+limit and no per-peer back-off (3.16 removed the unused ``FanOutManager``).
 
 Notes
 =====

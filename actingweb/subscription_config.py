@@ -22,11 +22,13 @@ class SubscriptionProcessingConfig:
         gap_timeout_seconds: Time before triggering resync on sequence gap
         max_pending: Maximum pending callbacks before back-pressure (429)
         storage_prefix: Bucket prefix for RemotePeerStore
-        max_concurrent_callbacks: Max concurrent callback deliveries
-        max_payload_for_high_granularity: Payload size above which a callback
-            delivery logs a WARNING (sent in full; no downgrade since 3.16)
-        circuit_breaker_threshold: Failures before opening circuit
-        circuit_breaker_cooldown: Seconds before testing recovery
+        max_concurrent_callbacks: Callbacks of one write sent at once to
+            subscribers on other hosts (3.16: read by the sender; default 4)
+        callback_delivery_budget_seconds: Total time one write may spend
+            delivering its callbacks; None (the default) for no budget
+        serialize_own_host_callbacks: Send subscribers on the publisher's own
+            host one at a time (default True; turn off for a deployment that
+            serves one request per function instance)
         subscription_data_hooks: Dict mapping target names to list of hook callables
     """
 
@@ -38,11 +40,10 @@ class SubscriptionProcessingConfig:
     max_pending: int = 100
     storage_prefix: str = "remote:"
 
-    # Fan-out settings
-    max_concurrent_callbacks: int = 10
-    max_payload_for_high_granularity: int = 65536
-    circuit_breaker_threshold: int = 5
-    circuit_breaker_cooldown: float = 60.0
+    # Outbound delivery (3.16, actingweb.callback_sender)
+    max_concurrent_callbacks: int = 4
+    callback_delivery_budget_seconds: float | None = None
+    serialize_own_host_callbacks: bool = True
 
     # Hooks for subscription data processing
     subscription_data_hooks: dict[str, list[Callable[..., Any]]] = field(

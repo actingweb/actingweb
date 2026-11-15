@@ -117,6 +117,8 @@ Async Peer Communication
        # Non-blocking call to peer
        result = await proxy.get_resource_async(path="properties/public")
 
+       # The proxy's own last_response_code (unchanged); subscription
+       # callback sends no longer set the actor's (3.16).
        if proxy.last_response_code != 200:
            raise HTTPException(status_code=502, detail="Failed to reach peer")
 

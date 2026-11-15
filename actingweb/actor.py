@@ -40,6 +40,7 @@ from actingweb.permission_evaluator import (
 from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
+from . import callback_sender
 from .access_table import is_reserved_relationship
 from .db.creator_rules import (
     dup_value,
@@ -4013,19 +4014,42 @@ class Actor:
     def callback_subscription(
         self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
     ):
+        """Send one subscriber its callback for ``diff`` (prepared by
+        :meth:`_prepare_callback`, delivered by ``callback_sender``): waiting
+        with ``with_sync_callbacks`` or off the event loop, a kept task on a
+        running loop. ``register_diffs`` prepares every subscriber's and
+        delivers them together."""
+        unit = self._prepare_callback(
+            peerid=peerid, sub_obj=sub_obj, sub=sub, diff=diff, blob=blob
+        )
+        if unit is None:
+            return
+        callback_sender.deliver(
+            [unit],
+            self.config,
+            wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
+        )
+
+    def _prepare_callback(
+        self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
+    ) -> "callback_sender.Unit | None":
+        """The callback one subscriber is owed for ``diff``: its permission
+        filter applied and its body built, or None when nothing is sent
+        (granularity ``none``, no trust, an OAuth2 client's row, filtered to
+        nothing)."""
         if not peerid or not diff or not sub or not blob:
             logger.warning("Missing parameters in callbackSubscription")
-            return
+            return None
         if "granularity" in sub and sub["granularity"] == "none":
-            return
+            return None
         trust_rel = self.get_trust_relationship(peerid)
         if not trust_rel:
-            return
+            return None
         if not _has_peer_endpoint(trust_rel, self.id):
             # An OAuth2 client's row (its subscriptions are kept under it
             # since 3.16): the client reads its diffs, nothing is pushed to
             # it. Its base URI is empty or this actor's own.
-            return
+            return None
 
         # The one filter the pull paths use too: a properties diff as the
         # peer may read it; another target's diff only while the peer may
@@ -4034,7 +4058,7 @@ class Actor:
             peerid, sub, blob, snapshot=self.grant_for(peerid, row=trust_rel)
         )
         if filtered_blob is None:
-            return  # Nothing to send after filtering
+            return None  # Nothing to send after filtering
         blob = filtered_blob
 
         params = {
@@ -4078,113 +4102,30 @@ class Actor:
             "Content-Type": "application/json",
         }
 
-        # Helper function for sync callback
-        def _send_callback_sync():
-            """Send subscription callback using requests (blocking)."""
-            try:
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Doing sync callback on subscription at url("
-                        + requrl
-                        + ") with body("
-                        + summarize_payload(params, encoded_len=len(data))
-                        + ")"
-                    )
-                response = requests.post(
-                    url=requrl,
-                    data=data.encode("utf-8"),
-                    headers=headers,
-                    timeout=(5, 10),
-                )
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
-                )
-                # Log the response for debugging callback delivery issues
-                if response.status_code == 204:
-                    logger.info(
-                        f"Callback seq={diff.get('sequence')} delivered successfully (204)"
-                    )
-                else:
-                    logger.warning(
-                        f"Callback seq={diff.get('sequence')} returned {response.status_code}: "
-                        f"{self.last_response_message[:200] if self.last_response_message else 'no message'}"
-                    )
-                # NOTE: Don't clear diffs immediately after 204 response. The subscriber
-                # might have added the callback to a pending queue (due to sequence gaps),
-                # and the diff would be lost. Diffs are cleared when the subscriber
-                # explicitly confirms processing via PUT /subscriptions/{id} with sequence.
-            except (requests.RequestException, requests.Timeout, ConnectionError) as e:
-                logger.warning(
-                    f"Callback seq={diff.get('sequence')} failed - peer did not respond: {e}"
-                )
-                self.last_response_code = 0
-                self.last_response_message = (
-                    "No response from peer for subscription callback"
-                )
-
-        # Check if sync callbacks are forced (recommended for Lambda/serverless)
-        use_sync = getattr(self.config, "sync_subscription_callbacks", False)
-        if use_sync:
-            logger.info(
-                f"Sync callback seq={diff.get('sequence')} to {sub.get('peerid', 'unknown')}"
-            )
-            _send_callback_sync()
-            return
-
-        # Fire callback asynchronously to avoid blocking the caller
-        async def _send_callback_async():
-            """Send subscription callback using httpx (non-blocking)."""
-            import httpx
-
-            try:
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "Doing async callback on subscription at url("
-                        + requrl
-                        + ") with body("
-                        + summarize_payload(params, encoded_len=len(data))
-                        + ")"
-                    )
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(10.0, connect=5.0)
-                ) as client:
-                    response = await client.post(
-                        requrl, content=data.encode("utf-8"), headers=headers
-                    )
-                self.last_response_code = response.status_code
-                self.last_response_message = (
-                    response.content.decode("utf-8", "ignore")
-                    if isinstance(response.content, bytes)
-                    else str(response.content)
-                )
-                # NOTE: Don't clear diffs immediately after 204 response. The subscriber
-                # might have added the callback to a pending queue (due to sequence gaps),
-                # and the diff would be lost. Diffs are cleared when the subscriber
-                # explicitly confirms processing via PUT /subscriptions/{id} with sequence.
-            except (httpx.HTTPError, httpx.TimeoutException) as e:
-                logger.debug(f"Peer did not respond to callback on url({requrl}): {e}")
-                self.last_response_code = 0
-                self.last_response_message = (
-                    "No response from peer for subscription callback"
-                )
-
-        # Schedule the async callback without blocking (may be lost on Lambda freeze!)
-        try:
-            import asyncio
-
-            loop = asyncio.get_running_loop()
-            # We're in an async context - create a background task
-            loop.create_task(_send_callback_async())
+        if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                f"Async callback seq={diff.get('sequence')} to {sub.get('peerid', 'unknown')} (fire-and-forget)"
+                "Prepared callback on subscription at url("
+                + requrl
+                + ") with body("
+                + summarize_payload(params, encoded_len=len(data))
+                + ")"
             )
-        except RuntimeError:
-            # No running event loop - fall back to sync request
-            logger.debug("No async loop, falling back to sync callback")
-            _send_callback_sync()
+        # A diff is not cleared on a 204: the subscriber may hold it behind a
+        # gap; it confirms with PUT /subscriptions/<id> {"sequence"} or a poll.
+        return callback_sender.Unit(
+            sends=[
+                callback_sender.PreparedSend(
+                    url=requrl,
+                    body=data.encode("utf-8"),
+                    headers=headers,
+                    sequence=diff.get("sequence"),
+                    peer_id=str(sub.get("peerid") or peerid),
+                )
+            ],
+            own_host=callback_sender.is_own_host(
+                trust_rel["baseuri"], self.config.root if self.config else ""
+            ),
+        )
 
     async def create_verified_trust_async(
         self,
@@ -4903,47 +4844,75 @@ class Actor:
 
         count = 0
         fault: DbError | None = None
-        for sub in subs:
-            sub_target = sub.get("target", "")
-            sub_subtarget = sub.get("subtarget")
+        prepared: list[tuple[dict[str, Any], callback_sender.Unit]] = []
+        waited = False
+        try:
+            for sub in subs:
+                sub_target = sub.get("target", "")
+                sub_subtarget = sub.get("subtarget")
 
-            # Match target
-            if sub_target != target:
-                continue
+                # Match target
+                if sub_target != target:
+                    continue
 
-            # Match subtarget if specified
-            # Empty subtarget in subscription means "all subtargets", so it matches any filter
-            if subtarget is not None and sub_subtarget and sub_subtarget != subtarget:
-                continue
+                # Match subtarget if specified
+                # Empty subtarget in subscription means "all subtargets", so it matches any filter
+                if (
+                    subtarget is not None
+                    and sub_subtarget
+                    and sub_subtarget != subtarget
+                ):
+                    continue
 
-            # Send resync callback
-            # If we resumed a specific subtarget, use that for the resync
-            # (even if the subscription itself has no subtarget or a different one)
-            resync_subtarget = subtarget if subtarget else sub_subtarget
-            try:
-                widened = {"widen": True} if widen else {}
-                if self._callback_subscription_resync(sub, resync_subtarget, **widened):
-                    count += 1
-                elif missed is not None:
-                    missed.append(_resync_id(sub))
-            except DbError as e:  # folds DbError: transient ones raised after the loop
-                from .interface.integrations._errors import is_permanent
+                # Send resync callback
+                # If we resumed a specific subtarget, use that for the resync
+                # (even if the subscription itself has no subtarget or a different one)
+                resync_subtarget = subtarget if subtarget else sub_subtarget
+                try:
+                    widened = {"widen": True} if widen else {}
+                    if self._callback_subscription_resync(
+                        sub, resync_subtarget, collect=prepared, **widened
+                    ):
+                        count += 1
+                    elif missed is not None:
+                        missed.append(_resync_id(sub))
+                except DbError as e:  # folds DbError: raised after the loop
+                    from .interface.integrations._errors import is_permanent
 
-                if is_permanent(e):
+                    if is_permanent(e):
+                        logger.error(
+                            f"Resync of subscription {sub.get('subscriptionid')} hit a "
+                            f"permanent store error; that subscriber missed it: {e}"
+                        )
+                        if missed is not None:
+                            missed.append(_resync_id(sub))
+                        continue
                     logger.error(
-                        f"Resync of subscription {sub.get('subscriptionid')} hit a "
-                        f"permanent store error; that subscriber missed it: {e}"
+                        f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
                     )
+                    if fold_faults and missed is not None:
+                        missed.append(_resync_id(sub))
+                        continue
+                    fault = fault or e
+
+        finally:
+            # Every prepared resync, delivered together (3.16): concurrently, own
+            # host one at a time. Waiting (off the loop, or with
+            # with_sync_callbacks), one not delivered (refused, a timeout, a 503
+            # from a subscriber that could not fetch its baseline) is missed, so
+            # the next resume sends it again; on a running loop they are tasks.
+            units = [unit for _, unit in prepared]
+            waited = callback_sender.deliver(
+                units,
+                self.config,
+                wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
+            )
+        if waited:
+            for sub, unit in prepared:
+                if not unit.delivered:
+                    count -= 1
                     if missed is not None:
                         missed.append(_resync_id(sub))
-                    continue
-                logger.error(
-                    f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
-                )
-                if fold_faults and missed is not None:
-                    missed.append(_resync_id(sub))
-                    continue
-                fault = fault or e
 
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
         if fault is not None:
@@ -5015,108 +4984,13 @@ class Actor:
                 f"resume: {e}"
             )
 
-    def _send_resync_callback_sync(
-        self, callback_url: str, payload: dict, secret: str, peer_id: str
-    ) -> bool:
-        """Send resync callback synchronously (blocking).
-
-        Args:
-            callback_url: URL to send the callback to
-            payload: Callback payload
-            secret: Trust secret for authentication
-            peer_id: Peer ID (for logging)
-
-        Returns:
-            True if callback was sent successfully
-        """
-        import httpx
-
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    callback_url,
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {secret}",
-                    },
-                )
-
-            if response.status_code in (200, 204):
-                logger.info(
-                    f"Sent resync callback to {peer_id} for subscription "
-                    f"{payload.get('subscriptionid')}"
-                )
-                return True
-            else:
-                logger.warning(
-                    f"Resync callback to {peer_id} failed: {response.status_code}"
-                )
-                return False
-
-        except Exception as e:  # folds DbError: peer HTTP only
-            logger.error(f"Error sending resync callback to {peer_id}: {e}")
-            return False
-
-    def _send_resync_callback_async(
-        self, callback_url: str, payload: dict, secret: str, peer_id: str
-    ) -> None:
-        """Send resync callback asynchronously (fire-and-forget).
-
-        Args:
-            callback_url: URL to send the callback to
-            payload: Callback payload
-            secret: Trust secret for authentication
-            peer_id: Peer ID (for logging)
-        """
-
-        async def _send():
-            import httpx
-
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(
-                        callback_url,
-                        json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {secret}",
-                        },
-                    )
-
-                if response.status_code in (200, 204):
-                    logger.info(
-                        f"Sent resync callback to {peer_id} for subscription "
-                        f"{payload.get('subscriptionid')}"
-                    )
-                else:
-                    logger.warning(
-                        f"Resync callback to {peer_id} failed: {response.status_code}"
-                    )
-
-            except Exception as e:  # folds DbError: peer HTTP only
-                logger.error(f"Error sending resync callback to {peer_id}: {e}")
-
-        try:
-            import asyncio
-
-            loop = asyncio.get_running_loop()
-            loop.create_task(_send())
-            logger.debug(
-                f"Async resync callback to {peer_id} for subscription "
-                f"{payload.get('subscriptionid')} (fire-and-forget)"
-            )
-        except RuntimeError:
-            # No event loop - fallback to sync
-            logger.debug("No async loop, falling back to sync resync callback")
-            self._send_resync_callback_sync(callback_url, payload, secret, peer_id)
-
     def _callback_subscription_resync(
         self,
         subscription: dict,
         override_subtarget: str | None = None,
         *,
         widen: bool = False,
+        collect: "list[tuple[dict[str, Any], callback_sender.Unit]] | None" = None,
     ) -> bool:
         """Send a resync callback to a single subscription.
 
@@ -5381,32 +5255,38 @@ class Actor:
 
         # Get trust secret for authentication (already fetched above)
         secret = trust_data.get("secret", "")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {secret}",
+        }
 
-        # Check sync configuration (like diff callbacks do)
-        use_sync = getattr(self.config, "sync_subscription_callbacks", False)
-
-        if clear_payload is not None:
-            # The clear goes first; the receiver orders by sequence anyway.
-            if use_sync:
-                if not self._send_resync_callback_sync(
-                    callback_url, clear_payload, secret, peer_id
-                ):
-                    return False
-            else:
-                self._send_resync_callback_async(
-                    callback_url, clear_payload, secret, peer_id
-                )
-
-        if use_sync:
-            # Lambda mode: blocking call
-            logger.info(f"Sync resync callback to {peer_id}")
-            return self._send_resync_callback_sync(
-                callback_url, payload, secret, peer_id
+        def prepared(body: dict[str, Any]) -> callback_sender.PreparedSend:
+            return callback_sender.PreparedSend(
+                url=callback_url,
+                body=json.dumps(body).encode("utf-8"),
+                headers=headers,
+                sequence=body.get("sequence"),
+                peer_id=peer_id,
+                timeout=callback_sender.RESYNC_TIMEOUT,
             )
-        else:
-            # Local mode: async fire-and-forget
-            self._send_resync_callback_async(callback_url, payload, secret, peer_id)
-            return True  # Scheduled (not confirmed)
+
+        # The clear (when there is one) and then the state, in order, as one
+        # unit of the sender (3.16).
+        unit = callback_sender.Unit(
+            sends=[prepared(b) for b in (clear_payload, payload) if b is not None],
+            own_host=callback_sender.is_own_host(
+                trust_data.get("baseuri", ""), self.config.root if self.config else ""
+            ),
+        )
+        if collect is not None:
+            collect.append((subscription, unit))
+            return True
+        waited = callback_sender.deliver(
+            [unit],
+            self.config,
+            wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
+        )
+        return bool(unit.delivered) if waited else True  # scheduled on the loop
 
     def _get_full_state_for_subscription(
         self,
@@ -5829,174 +5709,188 @@ class Actor:
                 len(subs),
             )
         lost: DbError | None = None
-        for sub in subs:
-            registered = False
-            try:
-                # Skip the ones without correct subtarget
-                if subtarget and sub["subtarget"] and sub["subtarget"] != subtarget:
-                    logger.debug("     - no match on subtarget, skipping...")
-                    continue
-                # Skip the ones without correct resource
-                if resource and sub["resource"] and sub["resource"] != resource:
-                    logger.debug("     - no match on resource, skipping...")
-                    continue
-                sub_obj = self.get_subscription_obj(
-                    peerid=sub["peerid"], subid=sub["subscriptionid"]
-                )
-                if not sub_obj:
-                    continue
-                sub_obj_data = sub_obj.get()
-                logger.debug(
-                    "     - processing subscription(%s) for peer(%s) with target(%s) subtarget(%s) and resource(%s)",
-                    sub["subscriptionid"],
-                    sub["peerid"],
-                    sub_obj_data["target"],
-                    sub_obj_data["subtarget"] or "",
-                    sub_obj_data["resource"] or "",
-                )
-                # Subscription with a resource, but this diff is on a higher level
-                if (
-                    (not resource or not subtarget)
-                    and sub_obj_data["subtarget"]
-                    and sub_obj_data["resource"]
-                ):
-                    # Create a json diff on the subpart that this subscription
-                    # covers
-                    try:
-                        jsonblob = json.loads(blob)
-                        if not subtarget:
-                            subblob = json.dumps(
-                                jsonblob[sub_obj_data["subtarget"]][
-                                    sub_obj_data["resource"]
-                                ]
-                            )
-                        else:
-                            subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
-                    except (TypeError, ValueError, KeyError):
-                        if _resource_went(blob, previous, subtarget, sub_obj_data):
-                            # The resource went with its parent (3.16).
-                            subblob = json.dumps("")
-                        else:
-                            # The diff does not contain the resource
-                            logger.debug(
-                                "         - subscription has resource(%s), no matching blob found in diff",
-                                sub_obj_data["resource"],
-                            )
-                            continue
-                    logger.debug(
-                        "         - subscription has resource(%s), adding diff(%s chars)",
-                        sub_obj_data["resource"],
-                        len(subblob),
+        units: list[callback_sender.Unit] = []
+        try:
+            for sub in subs:
+                registered = False
+                try:
+                    # Skip the ones without correct subtarget
+                    if subtarget and sub["subtarget"] and sub["subtarget"] != subtarget:
+                        logger.debug("     - no match on subtarget, skipping...")
+                        continue
+                    # Skip the ones without correct resource
+                    if resource and sub["resource"] and sub["resource"] != resource:
+                        logger.debug("     - no match on resource, skipping...")
+                        continue
+                    sub_obj = self.get_subscription_obj(
+                        peerid=sub["peerid"], subid=sub["subscriptionid"]
                     )
-                    finblob = subblob
-                # The diff is on the resource, but the subscription is on a
-                # higher level
-                elif resource and not sub_obj_data["resource"]:
-                    # Since we have a resource, we know the blob is the entire resource, not a diff
-                    # If the subscription is for a sub-target, send [resource] = blob
-                    # If the subscription is for a target, send [subtarget][resource] = blob
-                    upblob: Any = {}
-                    if whole is not None:
-                        finblob = (
-                            whole
-                            if sub_obj_data["subtarget"]
-                            else json.dumps({subtarget: _parsed_value(whole)})
-                        )
-                    else:
+                    if not sub_obj:
+                        continue
+                    sub_obj_data = sub_obj.get()
+                    logger.debug(
+                        "     - processing subscription(%s) for peer(%s) with target(%s) subtarget(%s) and resource(%s)",
+                        sub["subscriptionid"],
+                        sub["peerid"],
+                        sub_obj_data["target"],
+                        sub_obj_data["subtarget"] or "",
+                        sub_obj_data["resource"] or "",
+                    )
+                    # Subscription with a resource, but this diff is on a higher level
+                    if (
+                        (not resource or not subtarget)
+                        and sub_obj_data["subtarget"]
+                        and sub_obj_data["resource"]
+                    ):
+                        # Create a json diff on the subpart that this subscription
+                        # covers
                         try:
                             jsonblob = json.loads(blob)
-                            if not sub_obj_data["subtarget"]:
-                                upblob[subtarget] = {}
-                                upblob[subtarget][resource] = jsonblob
+                            if not subtarget:
+                                subblob = json.dumps(
+                                    jsonblob[sub_obj_data["subtarget"]][
+                                        sub_obj_data["resource"]
+                                    ]
+                                )
                             else:
-                                upblob[resource] = jsonblob
+                                subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
                         except (TypeError, ValueError, KeyError):
-                            if not sub_obj_data["subtarget"]:
-                                upblob[subtarget] = {}
-                                upblob[subtarget][resource] = blob
+                            if _resource_went(blob, previous, subtarget, sub_obj_data):
+                                # The resource went with its parent (3.16).
+                                subblob = json.dumps("")
                             else:
-                                upblob[resource] = blob
+                                # The diff does not contain the resource
+                                logger.debug(
+                                    "         - subscription has resource(%s), no matching blob found in diff",
+                                    sub_obj_data["resource"],
+                                )
+                                continue
+                        logger.debug(
+                            "         - subscription has resource(%s), adding diff(%s chars)",
+                            sub_obj_data["resource"],
+                            len(subblob),
+                        )
+                        finblob = subblob
+                    # The diff is on the resource, but the subscription is on a
+                    # higher level
+                    elif resource and not sub_obj_data["resource"]:
+                        # Since we have a resource, we know the blob is the entire resource, not a diff
+                        # If the subscription is for a sub-target, send [resource] = blob
+                        # If the subscription is for a target, send [subtarget][resource] = blob
+                        upblob: Any = {}
+                        if whole is not None:
+                            finblob = (
+                                whole
+                                if sub_obj_data["subtarget"]
+                                else json.dumps({subtarget: _parsed_value(whole)})
+                            )
+                        else:
+                            try:
+                                jsonblob = json.loads(blob)
+                                if not sub_obj_data["subtarget"]:
+                                    upblob[subtarget] = {}
+                                    upblob[subtarget][resource] = jsonblob
+                                else:
+                                    upblob[resource] = jsonblob
+                            except (TypeError, ValueError, KeyError):
+                                if not sub_obj_data["subtarget"]:
+                                    upblob[subtarget] = {}
+                                    upblob[subtarget][resource] = blob
+                                else:
+                                    upblob[resource] = blob
+                            finblob = json.dumps(upblob)
+                        logger.debug(
+                            "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
+                            resource,
+                            len(finblob),
+                        )
+                    # Subscriptions with subtarget, but this diff is on a higher level
+                    elif not subtarget and sub_obj_data["subtarget"]:
+                        # Create a json diff on the subpart that this subscription
+                        # covers
+                        subblob = None
+                        try:
+                            jsonblob = json.loads(blob)
+                            subblob = json.dumps(jsonblob[sub_obj_data["subtarget"]])
+                        except (TypeError, ValueError, KeyError):
+                            # The diff blob does not contain the subtarget
+                            pass
+                        logger.debug(
+                            "         - subscription has subtarget(%s), adding diff(%s bytes)",
+                            sub_obj_data["subtarget"],
+                            len(subblob) if subblob else 0,
+                        )
+                        finblob = subblob
+                    # The diff is on the subtarget, but the subscription is on the
+                    # higher level
+                    elif subtarget and not sub_obj_data["subtarget"]:
+                        # Create a data["subtarget"] = blob diff to give correct level
+                        # of diff to subscriber
+                        upblob = {}
+                        try:
+                            jsonblob = json.loads(blob)
+                            upblob[subtarget] = jsonblob
+                        except (TypeError, ValueError, KeyError):
+                            upblob[subtarget] = blob
                         finblob = json.dumps(upblob)
-                    logger.debug(
-                        "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
-                        resource,
-                        len(finblob),
+                        logger.debug(
+                            "         - diff has subtarget(%s), subscription has not, adding diff(%s chars)",
+                            subtarget,
+                            len(finblob),
+                        )
+                    else:
+                        # The diff is correct for the subscription
+                        logger.debug(
+                            "         - exact target/subtarget match, adding diff(%s chars)",
+                            len(blob),
+                        )
+                        finblob = blob
+                    if sub_obj:
+                        diff = sub_obj.add_diff(blob=finblob)
+                    else:
+                        diff = None
+                    # add_diff returned, so it used a sequence number: a failure
+                    # from here on leaves a stored diff or a gap already.
+                    registered = True
+                    if not diff:
+                        logger.warning(
+                            "Failed when registering a diff to subscription (%s). Will not send callback.",
+                            sub["subscriptionid"],
+                        )
+                    else:
+                        # Prepared now (sequence, store, filter, body); every
+                        # subscriber's callback is delivered together after the
+                        # loop, concurrently (3.16, callback_sender).
+                        unit = self._prepare_callback(
+                            peerid=sub["peerid"],
+                            sub_obj=sub_obj,
+                            sub=sub_obj_data,
+                            diff=diff,
+                            blob=finblob,
+                        )
+                        if unit is not None:
+                            units.append(unit)
+                except DbError as e:  # folds DbError: one subscriber skipped; gap tried
+                    # One subscriber's fault must not stop the others or fail the
+                    # write that produced the diff, which has committed.
+                    logger.error(
+                        f"Diff registration for subscription {sub.get('subscriptionid')} "
+                        f"skipped on a store fault: {e}"
                     )
-                # Subscriptions with subtarget, but this diff is on a higher level
-                elif not subtarget and sub_obj_data["subtarget"]:
-                    # Create a json diff on the subpart that this subscription
-                    # covers
-                    subblob = None
-                    try:
-                        jsonblob = json.loads(blob)
-                        subblob = json.dumps(jsonblob[sub_obj_data["subtarget"]])
-                    except (TypeError, ValueError, KeyError):
-                        # The diff blob does not contain the subtarget
-                        pass
-                    logger.debug(
-                        "         - subscription has subtarget(%s), adding diff(%s bytes)",
-                        sub_obj_data["subtarget"],
-                        len(subblob) if subblob else 0,
-                    )
-                    finblob = subblob
-                # The diff is on the subtarget, but the subscription is on the
-                # higher level
-                elif subtarget and not sub_obj_data["subtarget"]:
-                    # Create a data["subtarget"] = blob diff to give correct level
-                    # of diff to subscriber
-                    upblob = {}
-                    try:
-                        jsonblob = json.loads(blob)
-                        upblob[subtarget] = jsonblob
-                    except (TypeError, ValueError, KeyError):
-                        upblob[subtarget] = blob
-                    finblob = json.dumps(upblob)
-                    logger.debug(
-                        "         - diff has subtarget(%s), subscription has not, adding diff(%s chars)",
-                        subtarget,
-                        len(finblob),
-                    )
-                else:
-                    # The diff is correct for the subscription
-                    logger.debug(
-                        "         - exact target/subtarget match, adding diff(%s chars)",
-                        len(blob),
-                    )
-                    finblob = blob
-                if sub_obj:
-                    diff = sub_obj.add_diff(blob=finblob)
-                else:
-                    diff = None
-                # add_diff returned, so it used a sequence number: a failure
-                # from here on leaves a stored diff or a gap already.
-                registered = True
-                if not diff:
-                    logger.warning(
-                        "Failed when registering a diff to subscription (%s). Will not send callback.",
-                        sub["subscriptionid"],
-                    )
-                else:
-                    # Direct call - callback_subscription handles sync/async internally
-                    self.callback_subscription(
-                        peerid=sub["peerid"],
-                        sub_obj=sub_obj,
-                        sub=sub_obj_data,
-                        diff=diff,
-                        blob=finblob,
-                    )
-            except DbError as e:  # folds DbError: one subscriber skipped; gap tried
-                # One subscriber's fault must not stop the others or fail the
-                # write that produced the diff, which has committed.
-                logger.error(
-                    f"Diff registration for subscription {sub.get('subscriptionid')} "
-                    f"skipped on a store fault: {e}"
-                )
-                if not registered:
-                    # The read faulted before the resource checks below it,
-                    # so a subscriber that would have got no diff can get a
-                    # gap too; it resyncs needlessly, which is safe.
-                    if not self._leave_sequence_gap(sub):
-                        lost = lost or e
+                    if not registered:
+                        # The read faulted before the resource checks below it,
+                        # so a subscriber that would have got no diff can get a
+                        # gap too; it resyncs needlessly, which is safe.
+                        if not self._leave_sequence_gap(sub):
+                            lost = lost or e
+        finally:
+            # Delivered even when preparing one subscriber raised: the
+            # others' diffs are stored and numbered.
+            callback_sender.deliver(
+                units,
+                self.config,
+                wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
+            )
         if lost is not None:
             # Neither a diff nor a gap for some subscriber: the change is
             # undetectable for it. The write stands; the caller answers 503.

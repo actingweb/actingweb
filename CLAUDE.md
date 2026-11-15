@@ -385,7 +385,9 @@ app = (
 **Lambda/Serverless Deployments**:
 - Use `.with_sync_callbacks()` to ensure subscription callbacks complete before the function freezes
 - Async fire-and-forget callbacks may be lost when Lambda functions freeze after returning a response
-- See `docs/quickstart/deployment.rst` for details
+- Behind a gateway with a response limit: `with_subscription_processing(callback_delivery_budget_seconds=...)` under the limit, and `serialize_own_host_callbacks=False` when each request has its own function instance
+- Callbacks of one write are sent concurrently (`max_concurrent_callbacks`, default 4); own-host subscribers one at a time by default
+- See `docs/quickstart/deployment.rst` ("Callback Delivery by Deployment Shape") for details
 
 See `docs/quickstart/configuration.rst` for all options.
 

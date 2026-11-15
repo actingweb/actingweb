@@ -220,12 +220,7 @@ SECURITY
   library's own hook names (``permissions``, ``subscription``,
   ``subscriptions``, ``www``, ``resource_*``) answer 403 on the generic
   branch. **Check:** a third party pointed at ``/callbacks/<name>`` without
-  credentials now receives 401; ``FanOutManager`` no longer downgrades a
-  payload over ``max_payload_for_high_granularity`` to a resource URL (a
-  3.16 subscriber does not fetch it): it sends it in full and logs a
-  WARNING; ``FanOutManager`` delivers only with
-  the trust's secret, to ``<baseuri>/callbacks/subscriptions/<own id>/<subid>``
-  under the trust's stored base URI (not a stored ``callback_url``); a peer
+  credentials now receives 401; a peer
   trustee's Basic retry after a refused bearer cannot succeed on the two
   peer branches.
 - **A peer could reach another peer's subscriptions, permissions and trust
@@ -921,6 +916,15 @@ SECURITY
 REMOVED
 ~~~~~~~
 
+- **``FanOutManager``, ``FanOutResult`` and three settings.** The class was
+  exported and documented but never on the publish path (one sequence for all
+  subscribers, no permission filter); ``max_payload_for_high_granularity``,
+  ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` configured it
+  only. Importing the names raises ``ImportError`` and passing a setting to
+  ``with_subscription_processing()`` raises ``RuntimeError``, both naming
+  ``docs/migration/v3.16.rst``, "Callback delivery". **Breaking:** remove the
+  import or setting.
+
 - **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
   sequence number back after a diff could not be stored, which could hand
   the number to a second change. A number whose diff is not stored now stays
@@ -949,6 +953,26 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **One write's callbacks are sent concurrently.** The publisher sent each
+  subscriber's callback in turn, so one write waited for the sum of its
+  subscribers' answers (up to 15 s each for one that hangs). Now at most
+  ``max_concurrent_callbacks`` (default 4; it was 10 and read by nothing) go
+  to subscribers on other hosts at once, subscribers on the publisher's own
+  host one at a time, and two ordered callbacks to one subscriber stay in
+  order. Off the event loop, and with ``with_sync_callbacks()``, the write
+  waits for all of them; on a running loop they are tasks the library keeps
+  until done. **Behavior change:** a FastAPI deployment whose subscribers
+  call it back through another origin sizes ``with_thread_pool_workers`` to at
+  least the simultaneous writes times one plus the bound.
+- **A missed resync is sent again without ``with_sync_callbacks()``.** A
+  resync that was refused, timed out or answered other than 2xx is recorded
+  and sent on the next resume whenever the write waited for its callbacks
+  (before, only with ``with_sync_callbacks()``; any 2xx now counts as
+  delivered, where 200 and 204 did). The full state of the fallback for a
+  peer without resync is not sent when its clear was not delivered.
+- **Callback sends no longer set ``Actor.last_response_code``**; trust and
+  peer calls still do. **Behavior change:** code that read it after a write.
 
 - **Subscribers are told of deletes at every level, of a clear in one diff,
   and of the value after the hooks (specification 1.5).** A REST delete, an
@@ -2230,6 +2254,15 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``ActingWebApp.with_callback_delivery()``, with
+  ``callback_delivery_budget_seconds`` and ``serialize_own_host_callbacks``**
+  (also accepted by ``with_subscription_processing()``): a total time one
+  request may spend delivering its callbacks, shared by every diff it
+  registers (off by default; sends not started are skipped, sends in flight
+  end with it, the diffs are stored either way), and a switch
+  to send own-host subscribers under the bound for a deployment that serves
+  one request per function instance. See ``docs/quickstart/deployment.rst``.
+
 - **``allow_anonymous`` on callback hooks, for third-party webhooks.**
   ``@app.callback_hook(name, allow_anonymous=True)`` lets an unauthenticated
   ``POST /<actor_id>/callbacks/<name>`` reach that hook (only a ``POST``
@@ -2639,6 +2672,9 @@ ADDED
 FIXED
 ~~~~~
 
+- **Callback tasks on a running event loop could be collected before they
+  ran** (no reference was kept); the sender keeps each until it is done.
+
 - **DynamoDB stamped every subscription diff of a process with one time**
   (the attribute's default was evaluated at import). Each diff is stamped
   when it is created.
@@ -2911,10 +2947,7 @@ FIXED
   answers 503 and processes nothing (it used to apply an empty diff and
   advance the sequence). With subscription processing on and
   ``auto_sequence`` at its default (on), a callback the subscriber fetches by URL (not a resync)
-  without an integer ``sequence`` answers 400. ``FanOutManager`` no longer counts
-  the in-progress answer toward opening a subscriber's circuit breaker, and
-  a half-open breaker that gets it closes; every other 503, a subscriber's
-  store-fault answer included, and a 429 still count. **Check:** the claim
+  without an integer ``sequence`` answers 400. **Check:** the claim
   holds once every instance runs 3.16 (an older instance ignores it),
   between processes with synchronised clocks, and for handlers that finish
   within the 60 seconds (the lease is not renewed).
@@ -3149,12 +3182,6 @@ FIXED
   everything was synced. The callback answers 503 now, before anything is
   stored or synced. (B10)
 
-- **A faulted read reset an open circuit breaker.** The fan-out manager read
-  a peer's persisted breaker, and a fault read as "no breaker": a fresh,
-  closed one was created and persisted over the open one. That delivery is
-  skipped now (``error="breaker_state_unreadable"``) and the stored state is
-  left as it was. (B11)
-
 - **An actor whose sign-in marker could not be read was ranked like an
   unvouched one.** With several actors sharing an address, a fault on the
   owner's vouched actor let a lower-id unvouched sibling (an attacker's
@@ -3269,10 +3296,6 @@ FIXED
 
 - **The MCP bridge counted a concurrent create as the winner when the
   tombstone could not be read.** It now answers 503.
-
-- **Two fan-out comments said the subscription circuit breaker was shared
-  through persistence.** It is per process; persisted state only seeds a new
-  process. ``docs/quickstart/deployment.rst`` says so.
 
 v3.15.1: September 29, 2026
 ---------------------------

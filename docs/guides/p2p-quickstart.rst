@@ -190,10 +190,11 @@ Production Notes
 
 - On Lambda/serverless, call ``.with_sync_callbacks()`` so subscription
   callbacks complete before the function freezes -- async fire-and-forget
-  callbacks can otherwise be lost. See ``docs/quickstart/deployment.rst``.
-- For back-pressure, gap detection, circuit-breaker behavior, and fan-out
-  tuning, see :doc:`subscriptions` -- this quickstart uses the library's
-  defaults throughout.
+  callbacks can otherwise be lost. Behind a gateway with a response limit,
+  also set ``callback_delivery_budget_seconds`` under it and turn
+  ``serialize_own_host_callbacks`` off. See ``docs/quickstart/deployment.rst``.
+- For gap detection and callback delivery tuning, see :doc:`subscriptions` --
+  this quickstart uses the library's defaults throughout.
 
 Where to Go Next
 -----------------

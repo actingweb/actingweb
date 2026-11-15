@@ -523,7 +523,7 @@ The following table maps components to their implementation files:
 +---------------------------+------------------------------------------------+----------------------------------+
 | Peer permissions          | ``actingweb/peer_permissions.py``              | Cache what peers grant us        |
 +---------------------------+------------------------------------------------+----------------------------------+
-| Fan-out                   | ``actingweb/fanout.py``                        | Parallel delivery, circuit break |
+| Callback sender           | ``actingweb/callback_sender.py``               | Concurrent delivery, per write   |
 +---------------------------+------------------------------------------------+----------------------------------+
 | Suspension                | ``actingweb/db/*/subscription_suspension.py``  | Pause diff registration          |
 +---------------------------+------------------------------------------------+----------------------------------+

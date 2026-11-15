@@ -209,11 +209,10 @@ class TestFullStateIsTwoDiffs:
                 "_increment_subscription_sequence",
                 side_effect=lambda p, s: next(seqs),
             ),
-            mock.patch.object(
-                actor,
-                "_send_resync_callback_sync",
-                side_effect=lambda url, payload, secret, peer: (
-                    payloads.append(payload) or True
+            mock.patch(
+                "actingweb.callback_sender.send_sync",
+                side_effect=lambda send, deadline=None: (
+                    payloads.append(json.loads(send.body)) or 204
                 ),
             ),
         ):
@@ -321,11 +320,10 @@ class TestVerification2:
                 "actingweb.actor._resync_url",
                 side_effect=lambda c, a, t, st: f"{t}/{st}" if st else t,
             ),
-            mock.patch.object(
-                actor,
-                "_send_resync_callback_sync",
-                side_effect=lambda url, payload, secret, peer: (
-                    payloads.append(payload) or True
+            mock.patch(
+                "actingweb.callback_sender.send_sync",
+                side_effect=lambda send, deadline=None: (
+                    payloads.append(json.loads(send.body)) or 204
                 ),
             ),
         ):

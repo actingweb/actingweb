@@ -471,7 +471,8 @@ single-row reads and raised on list reads. A caller could not tell "no such
 trust" from "the read failed", and eleven callers acted on the guess: they
 issued a new trust secret, overwrote a permission override, created a
 duplicate actor, deleted an actor without notifying its peers, reset an open
-circuit breaker. In 3.16 the decision reads raise, and those callers stop.
+circuit breaker (of ``FanOutManager``, since removed). In 3.16 the decision
+reads raise, and those callers stop.
 
 **What raises now.** On both backends, every single-row ``get``, every list
 ``fetch``, ``get_by_creator``, ``get_bucket``, ``get_attr``, the reverse
@@ -1594,9 +1595,8 @@ credentials answers 401 with a challenge. The two library branches,
 anyone else, the actor's creator and an ``admin`` peer included). Only
 ``diff`` and ``resync`` callbacks are accepted on the subscription branch
 (400). A low-granularity diff is fetched from the trust's stored base URI,
-never from the callback's ``url``; ``FanOutManager`` therefore no longer
-downgrades a large payload to a resource URL, it sends it in full and logs
-a WARNING above ``max_payload_for_high_granularity``. A permission callback's timestamp may be at most five minutes
+never from the callback's ``url`` (``FanOutManager``, which downgraded a large
+payload to such a URL, is removed; see `Callback delivery`_). A permission callback's timestamp may be at most five minutes
 ahead of the receiver's clock (400 beyond, and for one that does not
 parse): check the sender's clock if you see ``Refused a permission
 callback``. A stored permission copy is written conditionally on the row
@@ -2184,6 +2184,53 @@ application; the check follows each. The full rules are in
   callback with ``data`` and no integer ``sequence`` answers 400 (it was
   dropped as a duplicate with 204); a granularity other than ``high``,
   ``low`` or ``none`` answers 400 and the SDK refuses it before sending.
+
+Callback delivery
+-----------------
+
+**Callbacks of one write are sent concurrently.** The publisher sent each
+subscriber's callback in turn; now at most ``max_concurrent_callbacks`` (default
+4, read for the first time; it was 10 and read by nothing) go to subscribers on
+other hosts at once, and subscribers on the publisher's own host one at a time
+(``serialize_own_host_callbacks``). Each subscription's sequence still orders
+its diffs. *What to check:* a FastAPI deployment whose subscribers call it back
+through another origin (a low-granularity fetch) sizes
+``with_thread_pool_workers`` to at least the simultaneous writes times one plus
+the bound; the default pool of ten holds two such writes.
+**Behavior change.**
+
+**Two new settings, by deployment shape**, set with
+``with_callback_delivery()`` (which does not turn on incoming processing) or
+``with_subscription_processing()``. ``callback_delivery_budget_seconds``
+(off by default) caps the time one request spends delivering its callbacks,
+shared by every diff it registers:
+sends not started are skipped and sends in flight end with it, the diffs are
+stored either way. ``serialize_own_host_callbacks`` (default ``True``) can be
+turned off where every request has its own function instance. A deployment
+behind a gateway with a response limit keeps ``with_sync_callbacks()``, sets the
+budget under the limit and turns the switch off; a long-running server keeps
+the defaults. See :doc:`../quickstart/deployment`, "Callback Delivery by
+Deployment Shape".
+
+**Removed.** ``FanOutManager`` and ``FanOutResult`` (``actingweb.fanout``,
+``actingweb.interface``) and the settings ``max_payload_for_high_granularity``,
+``circuit_breaker_threshold`` and ``circuit_breaker_cooldown``: none was on the
+publish path. Importing the names raises ``ImportError``, and passing a
+setting to ``with_subscription_processing()`` raises ``RuntimeError``, both
+naming this section. The library does not act on a subscriber's 429 or 503
+(the specification makes back-off optional); the stored diff and polling are
+the recovery.
+
+**A missed resync is sent again** on the next resume whenever the write waited
+for its callbacks (off the event loop, or ``with_sync_callbacks()``): a resync
+that was refused, timed out, or answered 503 by a subscriber that could not
+fetch its baseline is recorded. Before, that happened only with
+``with_sync_callbacks()``.
+
+**``Actor.last_response_code``** is no longer written by callback sends (it
+held the last subscriber's answer, overwritten by each); trust and peer calls
+still set it. *What to check:* code that read it after a write to learn how a
+callback went.
 
 What stays the same
 ===================

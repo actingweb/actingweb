@@ -59,7 +59,7 @@ class TestA5ResumeFault:
         assert actor.suspend_subscriptions("properties")
         attempted: list[str] = []
 
-        def resync(sub: dict[str, Any], _subtarget: Any = None) -> bool:
+        def resync(sub: dict[str, Any], _subtarget: Any = None, **_: Any) -> bool:
             attempted.append(sub["peerid"])
             if sub["peerid"] == "p1":
                 raise DbError("simulated")
@@ -187,7 +187,7 @@ class TestA6C6ResumeEdges:
         cause = Exception("Item size has exceeded the maximum allowed size")
         cause.cause_response_code = "ValidationException"  # type: ignore[attr-defined]
 
-        def resync(sub: dict[str, Any], _subtarget: Any = None) -> bool:
+        def resync(sub: dict[str, Any], _subtarget: Any = None, **_: Any) -> bool:
             if sub["peerid"] == "p1":
                 raise DbError("subscription diff create") from cause
             return True

@@ -518,6 +518,19 @@ Use the standard subscription callback endpoint:
        # could not be fetched); 400: malformed (data without a sequence)
        assert response.status_code == 204
 
+Testing Callback Delivery
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``tests/test_callback_sender.py`` tests the sender without a server: it
+patches ``requests.post`` (which ``actingweb.callback_sender`` calls) with a
+fake that counts requests in flight under a lock, sleeps, and answers 204, and
+asserts the peak (the bound, one for own-host subscribers) rather than wall
+times, which vary under xdist. ``tests/integration/test_callback_delivery_shapes.py``
+covers the deployment shapes on the wire apps (a black-hole socket for a
+subscriber that never answers). The wire recordings send one at a time
+(``_one_at_a_time``), because the recorder nests a request under the most
+recently opened one.
+
 Testing Sequence Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 

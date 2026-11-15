@@ -33,7 +33,7 @@ Feature-specific tests that logically belong together.
 | Group | Description | Files |
 |-------|-------------|-------|
 | `subscription_callback_flows` | Subscription callback flow variations | test_subscription_callback_flows.py |
-| `wire_peer_paths` | The wire recordings (`wire/rows.toml`), and the files that use the wire apps | test_oauth2_trust_binding.py, test_peer_state_flow.py, test_post_stack_matrix.py, test_wire_access.py, test_wire_delivery.py, test_wire_grants.py, test_wire_harness.py, test_wire_list_properties.py, test_wire_peer_paths.py, test_wire_permissions.py, test_wire_queue_and_lifecycle.py, test_wire_scalar_properties.py, test_wire_trust.py |
+| `wire_peer_paths` | The wire recordings (`wire/rows.toml`), and the files that use the wire apps | test_callback_delivery_shapes.py, test_oauth2_trust_binding.py, test_peer_state_flow.py, test_post_stack_matrix.py, test_wire_access.py, test_wire_delivery.py, test_wire_grants.py, test_wire_harness.py, test_wire_list_properties.py, test_wire_peer_paths.py, test_wire_permissions.py, test_wire_queue_and_lifecycle.py, test_wire_scalar_properties.py, test_wire_trust.py |
 | `property_grants_flow` | A peer's grant at every level of a property | test_property_grants_flow.py |
 | `subscription_grants_flow` | Pushed and pulled diffs follow the grant at every level | test_subscription_grants_flow.py |
 | `resources_grant` | `/resources` follows the peer's grant | test_resources_grant.py |
@@ -61,7 +61,6 @@ Tests with technical isolation needs to prevent conflicts.
 | Group | Reason | Files |
 |-------|--------|-------|
 | `attribute_patching` | Both patch `actingweb.attribute.Attributes` | ../test_callback_processor.py, ../test_remote_storage.py |
-| `fanout_tests` | Asyncio event loop conflicts | ../test_fanout.py |
 
 ### Test Class Groups (Auto-Generated)
 Groups automatically created from test class names to ensure class-level isolation.

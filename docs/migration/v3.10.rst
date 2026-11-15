@@ -110,6 +110,11 @@ Stores and manages data received from peer actors:
 FanOutManager
 -------------
 
+.. note::
+   ``FanOutManager`` was removed in 3.16: it was never on the publish path,
+   and the library's own sender delivers callbacks (see
+   :doc:`v3.16`, "Callback delivery").
+
 Delivers callbacks to multiple subscribers with circuit breaker protection:
 
 .. code-block:: python

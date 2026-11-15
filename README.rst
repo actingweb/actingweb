@@ -196,7 +196,8 @@ Per-user trust relationships carry fine-grained permissions that govern what a p
 (or an AI client) may read, write, or call. Subscriptions let one actor be notified
 of another's changes, with sync or async callback delivery — use
 ``.with_sync_callbacks()`` on Lambda/serverless so callbacks complete before the
-function freezes. Start with the
+function freezes (and, behind a gateway's response limit, a
+``callback_delivery_budget_seconds`` under it). Start with the
 `peer-to-peer quickstart <https://actingweb.readthedocs.io/en/latest/docs/guides/p2p-quickstart.html>`_
 for a runnable two-actor example, or see
 `docs/guides/trust-relationships <https://actingweb.readthedocs.io/en/latest/docs/guides/trust-relationships.html>`_,

@@ -165,6 +165,9 @@ class ActingWebApp:
 
         # Subscription processing configuration
         self._subscription_config = SubscriptionProcessingConfig()
+        # Outbound delivery settings set by with_callback_delivery() (or
+        # with_subscription_processing()), kept apart so either order works.
+        self._delivery_settings: dict[str, Any] = {}
         self._subscription_data_hooks: dict[str, list[Callable[..., Any]]] = {}
 
         # Service registry for third-party OAuth2 services
@@ -1390,10 +1393,12 @@ class ActingWebApp:
         gap_timeout_seconds: float = 5.0,
         max_pending: int = 100,
         storage_prefix: str = "remote:",
-        max_concurrent_callbacks: int = 10,
-        max_payload_for_high_granularity: int = 65536,
-        circuit_breaker_threshold: int = 5,
-        circuit_breaker_cooldown: float = 60.0,
+        max_concurrent_callbacks: Any = _UNSET,
+        callback_delivery_budget_seconds: Any = _UNSET,
+        serialize_own_host_callbacks: Any = _UNSET,
+        max_payload_for_high_granularity: Any = _UNSET,
+        circuit_breaker_threshold: Any = _UNSET,
+        circuit_breaker_cooldown: Any = _UNSET,
     ) -> "ActingWebApp":
         """Enable automatic subscription processing.
 
@@ -1410,15 +1415,37 @@ class ActingWebApp:
             gap_timeout_seconds: Time before triggering resync on sequence gap
             max_pending: Maximum pending callbacks before back-pressure (429)
             storage_prefix: Bucket prefix for RemotePeerStore
-            max_concurrent_callbacks: Max concurrent callback deliveries
-            max_payload_for_high_granularity: Payload size above which a callback
-                delivery logs a WARNING (sent in full; no downgrade since 3.16)
-            circuit_breaker_threshold: Failures before opening circuit
-            circuit_breaker_cooldown: Seconds before testing recovery
+            max_concurrent_callbacks: Callbacks of one write sent at once to
+                subscribers on other hosts (default 4, 3.16). A FastAPI
+                deployment whose subscribers call it back through another
+                origin sizes its handler pool for this; see the deployment
+                guide.
+            callback_delivery_budget_seconds: Total time one write may spend
+                delivering its callbacks (off by default). Set it under a
+                gateway's response limit; sends not started are skipped and
+                sends in flight end with it, the diffs are stored either way.
+            serialize_own_host_callbacks: Send subscribers on this host one at
+                a time (default ``True``). Turn it off only where each request
+                has its own function instance.
+            max_payload_for_high_granularity: Removed in 3.16; passing it
+                raises ``RuntimeError`` naming the migration guide.
+            circuit_breaker_threshold: Removed in 3.16, as above.
+            circuit_breaker_cooldown: Removed in 3.16, as above.
 
         Returns:
             Self for method chaining
         """
+        from actingweb.config import FANOUT_REMOVED
+
+        for name, value in (
+            ("max_payload_for_high_granularity", max_payload_for_high_granularity),
+            ("circuit_breaker_threshold", circuit_breaker_threshold),
+            ("circuit_breaker_cooldown", circuit_breaker_cooldown),
+        ):
+            if value is not _UNSET:
+                raise RuntimeError(
+                    FANOUT_REMOVED.format(what=f"with_subscription_processing({name}=)")
+                )
         self._subscription_config = SubscriptionProcessingConfig(
             enabled=True,
             auto_sequence=auto_sequence,
@@ -1427,16 +1454,45 @@ class ActingWebApp:
             gap_timeout_seconds=gap_timeout_seconds,
             max_pending=max_pending,
             storage_prefix=storage_prefix,
-            max_concurrent_callbacks=max_concurrent_callbacks,
-            max_payload_for_high_granularity=max_payload_for_high_granularity,
-            circuit_breaker_threshold=circuit_breaker_threshold,
-            circuit_breaker_cooldown=circuit_breaker_cooldown,
             subscription_data_hooks=self._subscription_data_hooks,
         )
+        for name, value in (
+            ("max_concurrent_callbacks", max_concurrent_callbacks),
+            ("callback_delivery_budget_seconds", callback_delivery_budget_seconds),
+            ("serialize_own_host_callbacks", serialize_own_host_callbacks),
+        ):
+            if value is not _UNSET:
+                self._delivery_settings[name] = value
+        for name, value in self._delivery_settings.items():
+            setattr(self._subscription_config, name, value)
 
         # Cleanup is now handled automatically in core delete_reciprocal_trust()
         # No hook registration needed
 
+        return self
+
+    def with_callback_delivery(
+        self,
+        *,
+        max_concurrent_callbacks: int | None = None,
+        callback_delivery_budget_seconds: float | None = None,
+        serialize_own_host_callbacks: bool | None = None,
+    ) -> "ActingWebApp":
+        """Set how this actor's outbound subscription callbacks are delivered
+        (3.16), without turning on the processing of incoming callbacks that
+        ``with_subscription_processing()`` turns on. An argument left as
+        ``None`` keeps its value. See ``with_subscription_processing()`` for
+        what each setting does, and the deployment guide for the shapes."""
+        for name, value in (
+            ("max_concurrent_callbacks", max_concurrent_callbacks),
+            ("callback_delivery_budget_seconds", callback_delivery_budget_seconds),
+            ("serialize_own_host_callbacks", serialize_own_host_callbacks),
+        ):
+            if value is not None:
+                self._delivery_settings[name] = value
+                setattr(self._subscription_config, name, value)
+        if self._config is not None:
+            self._config._subscription_config = self._subscription_config
         return self
 
     def subscription_data_hook(self, target: str = "*") -> Callable[..., Any]:

@@ -1,5 +1,6 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-15-email-as-creator-at-write-time.md
 ---
 
 # Implementation Plan: "creator equals stored email" enforced where the email is written

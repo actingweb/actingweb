@@ -204,6 +204,78 @@ def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
     return text
 
 
+def sweep_after_baseline(
+    core_actor: Any,
+    store: Any,
+    *,
+    peer_id: str,
+    target: str,
+    subtarget: str | None,
+    resource: str | None,
+    baseline: Any,
+    applied: Any,
+    owed: list[str],
+) -> None:
+    """Delete from a replica what a baseline no longer carries, in the
+    subscription's scope (3.16): at target level every replica name it lacks
+    (properties only, and only when no subscription to another target of the
+    peer stores into the same bucket), at subtarget level the subtarget, and
+    each list recorded as out of step that it lacks. A skipped apply (a
+    whole-target subscription stores these names) sweeps nothing. Called by
+    ``rebuild_subscription`` and after a pushed resync's baseline."""
+    from ..replica_revocation import stores_another_target
+
+    carried = set(applied)
+    stale: set[str] = (
+        set() if applied.skipped else {name for name in owed if name not in carried}
+    )
+    if applied.skipped:
+        pass
+    elif (
+        target == "properties"
+        and not subtarget
+        and isinstance(baseline, dict)
+        and not stores_another_target(core_actor.config, core_actor.id or "", peer_id)
+    ):
+        # A whole-target baseline carries every name the peer may read: a
+        # replica name it lacks was deleted at the publisher.
+        stale |= {
+            name
+            for name in [*store.list_all_lists(), *store.list_scalar_names()]
+            if name not in carried
+        }
+    elif subtarget and not resource and subtarget not in carried:
+        stale.add(subtarget)
+    for name in sorted(stale):
+        if store._list_exists(name):  # noqa: SLF001
+            store.delete_list(name)
+        else:
+            store.delete_value(name)
+
+
+def _baseline_failed(response: Any, proxy: Any) -> bool:
+    """Whether a target-level baseline fetch failed, decided from the wire
+    (the status and a redirect), not from the body (3.16: a body with a
+    property named ``error`` was read as a failed fetch). A proxy whose
+    status is not a number (a test double) is judged by the body as before.
+    """
+    code = getattr(proxy, "last_response_code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        if getattr(proxy, "last_response_redirected", False) is True:
+            return True
+        if response is None or not 200 <= code <= 299:
+            return True
+        if not response:
+            # ``{}`` is an empty baseline only when the publisher answered
+            # JSON: the proxy reads any other 2xx body (a proxy's page, a
+            # 204) as ``{}``, and an empty baseline makes the sweep delete
+            # the whole replica.
+            content_type = str(getattr(proxy, "last_response_content_type", "") or "")
+            return content_type.split(";", 1)[0].strip().lower() != "application/json"
+        return False
+    return response is None or (isinstance(response, dict) and "error" in response)
+
+
 def _own_value_answer(proxy: Any) -> bool:
     """The last answer was the publisher's own property value: not
     redirected, and ``text/plain`` or ``application/json`` (any case,
@@ -1174,12 +1246,7 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if (
-                sub.target == "properties"
-                and sub.subtarget
-                and not sub.resource
-                and transformed_data is None
-            ):
+            if transformed_data is None:
                 # A failed fetch (an error, a redirect, an answer that is not
                 # the publisher's own): not a success, and the sequence stays.
                 return SubscriptionSyncResult(
@@ -1279,6 +1346,7 @@ class SubscriptionManager:
         diffs_processed = 0
         in_flight = False
         rebuild_needed = False
+        marker_seen = False
         max_sequence = 0
 
         # Set up handler based on config
@@ -1318,6 +1386,24 @@ class SubscriptionManager:
                         resource=sub.resource or None,
                     )
                     cb.out_of_step = applied.out_of_step
+            # The application's data hooks, as a pushed callback runs them
+            # (3.16: a poll, a gap resync's included, ran none).
+            if not (
+                sub.target == "properties"
+                and not sub.subtarget
+                and not isinstance(cb.data, dict)
+            ):
+                from ..handlers.callbacks import run_subscription_data_hooks
+
+                run_subscription_data_hooks(
+                    config,
+                    actor_interface,
+                    peer_id,
+                    sub.target,
+                    cb.data,
+                    cb.sequence,
+                    cb.callback_type.value,
+                )
 
         # Create callback processor if sequence tracking is enabled
         if config.auto_sequence:
@@ -1328,13 +1414,13 @@ class SubscriptionManager:
             )
 
             for diff in diffs:
+                if diff.get("type") == "resync" and config.auto_storage:
+                    # A resync marker (a ``none`` subscription's resume, or
+                    # a client's): handled as a resync, by a rebuild (3.16).
+                    marker_seen = True
+                    break
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
-                timestamp = diff.get("timestamp", "")
-
-                # Add timestamp to data for handler
-                if timestamp and isinstance(data, dict):
-                    data["timestamp"] = timestamp
 
                 result = processor.process_callback_sync(
                     peer_id=peer_id,
@@ -1365,6 +1451,11 @@ class SubscriptionManager:
         else:
             # No sequence tracking, just process all diffs
             for diff in diffs:
+                if diff.get("type") == "resync" and config.auto_storage:
+                    # A resync marker (a ``none`` subscription's resume, or
+                    # a client's): handled as a resync, by a rebuild (3.16).
+                    marker_seen = True
+                    break
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 
@@ -1385,11 +1476,23 @@ class SubscriptionManager:
                         # rebuild replaces the replica.
                         rebuild_needed = True
                         break
+                if not (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not isinstance(data, dict)
+                ):
+                    from ..handlers.callbacks import run_subscription_data_hooks
+
+                    run_subscription_data_hooks(
+                        config, actor_interface, peer_id, sub.target, data, seq, "diff"
+                    )
 
                 diffs_processed += 1
                 if seq > max_sequence:
                     max_sequence = seq
 
+        if marker_seen:
+            return self._rebuild_for_marker(peer_id, subscription_id, config)
         if rebuild_needed:
             return self.rebuild_subscription(peer_id, subscription_id, config=config)
 
@@ -1415,12 +1518,7 @@ class SubscriptionManager:
                 resource=sub.resource or None,
             )
 
-            if (
-                sub.target == "properties"
-                and sub.subtarget
-                and not sub.resource
-                and transformed_data is None
-            ):
+            if transformed_data is None:
                 # As on the no-diffs path: a single property's baseline that
                 # could not be fetched is a failed sync.
                 return SubscriptionSyncResult(
@@ -2125,12 +2223,7 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if (
-                sub.target == "properties"
-                and sub.subtarget
-                and not sub.resource
-                and transformed_data is None
-            ):
+            if transformed_data is None:
                 # A failed fetch (an error, a redirect, an answer that is not
                 # the publisher's own): not a success, and the sequence stays.
                 return SubscriptionSyncResult(
@@ -2227,6 +2320,7 @@ class SubscriptionManager:
         diffs_processed = 0
         in_flight = False
         rebuild_needed = False
+        marker_seen = False
         max_sequence = 0
 
         # Async handler for callback processing
@@ -2266,6 +2360,24 @@ class SubscriptionManager:
                         resource=sub.resource or None,
                     )
                     cb.out_of_step = applied.out_of_step
+            # The application's data hooks, as a pushed callback runs them
+            # (3.16: a poll, a gap resync's included, ran none).
+            if not (
+                sub.target == "properties"
+                and not sub.subtarget
+                and not isinstance(cb.data, dict)
+            ):
+                from ..handlers.callbacks import run_subscription_data_hooks
+
+                run_subscription_data_hooks(
+                    config,
+                    actor_interface,
+                    peer_id,
+                    sub.target,
+                    cb.data,
+                    cb.sequence,
+                    cb.callback_type.value,
+                )
 
         if config.auto_sequence:
             processor = CallbackProcessor(
@@ -2275,12 +2387,13 @@ class SubscriptionManager:
             )
 
             for diff in diffs:
+                if diff.get("type") == "resync" and config.auto_storage:
+                    # A resync marker (a ``none`` subscription's resume, or
+                    # a client's): handled as a resync, by a rebuild (3.16).
+                    marker_seen = True
+                    break
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
-                timestamp = diff.get("timestamp", "")
-
-                if timestamp and isinstance(data, dict):
-                    data["timestamp"] = timestamp
 
                 result = await processor.process_callback(
                     peer_id=peer_id,
@@ -2310,6 +2423,11 @@ class SubscriptionManager:
                     max_sequence = seq
         else:
             for diff in diffs:
+                if diff.get("type") == "resync" and config.auto_storage:
+                    # A resync marker (a ``none`` subscription's resume, or
+                    # a client's): handled as a resync, by a rebuild (3.16).
+                    marker_seen = True
+                    break
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 
@@ -2330,11 +2448,27 @@ class SubscriptionManager:
                         # rebuild replaces the replica.
                         rebuild_needed = True
                         break
+                if not (
+                    sub.target == "properties"
+                    and not sub.subtarget
+                    and not isinstance(data, dict)
+                ):
+                    from ..handlers.callbacks import run_subscription_data_hooks
+
+                    run_subscription_data_hooks(
+                        config, actor_interface, peer_id, sub.target, data, seq, "diff"
+                    )
 
                 diffs_processed += 1
                 if seq > max_sequence:
                     max_sequence = seq
 
+        if marker_seen:
+            import asyncio
+
+            return await asyncio.to_thread(
+                self._rebuild_for_marker, peer_id, subscription_id, config
+            )
         if rebuild_needed:
             return await self.rebuild_subscription_async(
                 peer_id, subscription_id, config=config
@@ -2361,12 +2495,7 @@ class SubscriptionManager:
                 resource=sub.resource or None,
             )
 
-            if (
-                sub.target == "properties"
-                and sub.subtarget
-                and not sub.resource
-                and transformed_data is None
-            ):
+            if transformed_data is None:
                 # As on the no-diffs path: a single property's baseline that
                 # could not be fetched is a failed sync.
                 return SubscriptionSyncResult(
@@ -2484,6 +2613,27 @@ class SubscriptionManager:
             in_flight=in_flight,
         )
 
+    def _rebuild_for_marker(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None",
+    ) -> SubscriptionSyncResult:
+        """A polled resync marker: mark the rebuild owed, then rebuild now
+        (fetch the baseline, apply, sweep, record the sequence, clear the
+        publisher's diffs up to it). The marker is cleared only by a rebuild
+        that succeeded; a failed fetch leaves it queued and the rebuild owed,
+        so the next poll tries again (3.16, specification 1.5)."""
+        from ..callback_processor import CallbackProcessor
+        from .actor_interface import ActorInterface
+
+        CallbackProcessor(ActorInterface(self._core_actor)).settle_rebuild(
+            peer_id, subscription_id, rebuilt=False, restart_interval=False
+        )
+        return self.rebuild_subscription(
+            peer_id, subscription_id, config=config, force=True
+        )
+
     def rebuild_subscription(
         self,
         peer_id: str,
@@ -2515,7 +2665,6 @@ class SubscriptionManager:
         """
         from ..callback_processor import CallbackProcessor
         from ..remote_storage import RemotePeerStore
-        from ..replica_revocation import stores_another_target
         from ..subscription import Subscription
         from ..subscription_config import SubscriptionProcessingConfig
         from .actor_interface import ActorInterface
@@ -2639,42 +2788,17 @@ class SubscriptionManager:
                     "could not be stored; the rebuild stays owed"
                 )
                 settled = False
-            carried = set(applied)
-            # A skipped apply (a whole-target subscription stores these
-            # names) sweeps nothing: what this baseline lacks is not stale.
-            stale: set[str] = (
-                set()
-                if applied.skipped
-                else {name for name in owed if name not in carried}
+            sweep_after_baseline(
+                self._core_actor,
+                store,
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+                baseline=baseline,
+                applied=applied,
+                owed=owed,
             )
-            if applied.skipped:
-                pass
-            elif (
-                sub.target == "properties"
-                and not sub.subtarget
-                and isinstance(baseline, dict)
-                and not stores_another_target(
-                    self._core_actor.config, self._core_actor.id or "", peer_id
-                )
-            ):
-                # A whole-target baseline carries every name the peer may
-                # read: a replica name it lacks was deleted at the publisher
-                # (perhaps in the batch this rebuild dropped). Properties
-                # only, and only when no subscription to another target of
-                # the peer stores into the same bucket (its names are not in
-                # this baseline).
-                stale |= {
-                    name
-                    for name in [*store.list_all_lists(), *store.list_scalar_names()]
-                    if name not in carried
-                }
-            elif sub.subtarget and not sub.resource and sub.subtarget not in carried:
-                stale.add(sub.subtarget)
-            for name in sorted(stale):
-                if store._list_exists(name):  # noqa: SLF001
-                    store.delete_list(name)
-                else:
-                    store.delete_value(name)
         # Read afresh: a Subscription serves its first read from a cache, and
         # the check below must see what a callback recorded meanwhile.
         sub_obj = Subscription(
@@ -2830,7 +2954,11 @@ class SubscriptionManager:
                 and not getattr(proxy, "last_response_redirected", False)
             ):
                 return {subtarget: ""}
-            if baseline_response is None or not 200 <= code <= 299:
+            if (
+                baseline_response is None
+                or not 200 <= code <= 299
+                or getattr(proxy, "last_response_redirected", False) is True
+            ):
                 logger.warning(
                     f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
                 )
@@ -2858,12 +2986,24 @@ class SubscriptionManager:
                 f"list from a value ({proxy.last_response_code})"
             )
             return None
-        if not baseline_response or "error" in baseline_response:
+        if (
+            resource
+            and getattr(proxy, "last_response_code", None) == 404
+            and getattr(proxy, "last_response_redirected", False) is not True
+        ):
+            # A resource that is gone is an empty value, not a failed fetch
+            # (3.16): the replica deletes that path.
+            return ""
+        if _baseline_failed(baseline_response, proxy):
             logger.warning(
-                f"No baseline data available for {peer_id} from {target}: "
-                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
+                f"No baseline available for {peer_id} from {target} "
+                f"({getattr(proxy, 'last_response_code', None)})"
             )
             return None
+        if not baseline_response:
+            # An empty baseline is empty, not a failed fetch (3.16: both were
+            # None, so a publisher with nothing left could never be rebuilt).
+            baseline_response = {}
 
         # For properties subscriptions, transform list metadata into actual items
         if target == "properties" and not subtarget and not resource:
@@ -2932,7 +3072,11 @@ class SubscriptionManager:
                 and not getattr(proxy, "last_response_redirected", False)
             ):
                 return {subtarget: ""}
-            if baseline_response is None or not 200 <= code <= 299:
+            if (
+                baseline_response is None
+                or not 200 <= code <= 299
+                or getattr(proxy, "last_response_redirected", False) is True
+            ):
                 logger.warning(
                     f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
                 )
@@ -2962,12 +3106,24 @@ class SubscriptionManager:
                 f"list from a value ({proxy.last_response_code})"
             )
             return None
-        if not baseline_response or "error" in baseline_response:
+        if (
+            resource
+            and getattr(proxy, "last_response_code", None) == 404
+            and getattr(proxy, "last_response_redirected", False) is not True
+        ):
+            # A resource that is gone is an empty value, not a failed fetch
+            # (3.16): the replica deletes that path.
+            return ""
+        if _baseline_failed(baseline_response, proxy):
             logger.warning(
-                f"No baseline data available for {peer_id} from {target}: "
-                f"{baseline_response.get('error') if baseline_response else 'empty response'}"
+                f"No baseline available for {peer_id} from {target} "
+                f"({getattr(proxy, 'last_response_code', None)})"
             )
             return None
+        if not baseline_response:
+            # An empty baseline is empty, not a failed fetch (3.16: both were
+            # None, so a publisher with nothing left could never be rebuilt).
+            baseline_response = {}
 
         # For properties subscriptions, transform list metadata into actual items
         if target == "properties" and not subtarget and not resource:

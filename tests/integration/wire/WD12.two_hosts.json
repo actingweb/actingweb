@@ -229,7 +229,7 @@
       "sequence": 1,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -1305,7 +1305,7 @@
       "subscriptionid": "<sub1>",
       "subtarget": "",
       "target": "properties",
-      "timestamp": "<ts:iso-offset>",
+      "timestamp": "<ts:iso-z>",
       "url": "http://<wire_app>/<A>/subscriptions/<B>/<sub1>/2"
      },
      "response": null,
@@ -1398,7 +1398,7 @@
       "subscriptionid": "<sub1>",
       "subtarget": "",
       "target": "properties",
-      "timestamp": "<ts:iso-offset>",
+      "timestamp": "<ts:iso-z>",
       "url": "http://<wire_app>/<A>/subscriptions/<B>/<sub1>/3"
      },
      "response": null,

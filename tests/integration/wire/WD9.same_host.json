@@ -415,7 +415,7 @@
         "sequence": 2,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -583,9 +583,6 @@
        "scalars": {
         "allowed": {
          "v": 3
-        },
-        "timestamp": {
-         "value": "<ts:iso-z>"
         }
        }
       },
@@ -674,6 +671,41 @@
          "status": 200
         },
         {
+         "actor": "<B>",
+         "data": {},
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 1,
+         "target": "properties",
+         "type": "diff"
+        },
+        {
+         "actor": "<B>",
+         "data": {
+          "allowed": {
+           "v": 2
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 2,
+         "target": "properties",
+         "type": "diff"
+        },
+        {
+         "actor": "<B>",
+         "data": {
+          "allowed": {
+           "v": 3
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 3,
+         "target": "properties",
+         "type": "diff"
+        },
+        {
          "auth": "bearer:trust:A-B",
          "children": [],
          "headers": {},
@@ -704,7 +736,7 @@
         "sequence": 3,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

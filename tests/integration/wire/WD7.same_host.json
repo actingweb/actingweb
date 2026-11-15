@@ -340,9 +340,6 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "timestamp": {
-         "value": "<ts:iso-z>"
-        },
         "x": {
          "v": 1
         }

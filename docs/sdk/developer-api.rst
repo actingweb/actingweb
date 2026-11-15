@@ -318,7 +318,9 @@ Creating Subscriptions
 
 .. code-block:: python
 
-    # Subscribe to peer (synchronous - includes automatic baseline sync)
+    # Subscribe to peer (synchronous - includes automatic baseline sync).
+    # granularity is "high", "low" or "none"; anything else is refused
+    # before a request is sent (3.16), and a publisher answers it 400.
     subscription_url = actor.subscriptions.subscribe_to_peer(
         peer_id="peer123",
         target="properties",

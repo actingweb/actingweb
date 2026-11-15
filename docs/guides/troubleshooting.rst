@@ -369,6 +369,33 @@ Subscriber Returning 429 (Too Many Requests)
         # FanOutManager handles retries automatically
         # For custom implementations, wait before retrying
 
+A Replica Is Missing Names After a Resync
+-----------------------------------------
+
+- **Symptom**: after a publisher resumed (or a gap resync), names the
+  subscriber's replica held are gone, and the data hook was not told which.
+- **Cause**: since 3.16 a resync removes from the replica what the
+  publisher's baseline no longer has (it was deleted while suspended, or the
+  peer's grant no longer covers it). The hook gets the baseline, not the
+  removed names.
+- **Fix**: nothing, when the publisher deleted them. If the baseline is
+  narrower than expected, check the grant the publisher gives this peer. A
+  replica bucket holds only what the peer sent: keep the application's own
+  data elsewhere.
+
+A Resync Answers 503
+--------------------
+
+- **Symptom**: a resync callback answers 503 with ``Retry-After``; the log
+  says ``Failed to fetch resync baseline``.
+- **Cause**: the subscriber could not fetch the baseline (the publisher was
+  unreachable, answered an error, or redirected). Since 3.16 that is not
+  applied as an empty baseline: the sequence stays and the rebuild is owed.
+- **Fix**: none needed when the publisher is reachable again: the next
+  callback runs the owed rebuild once a minute has passed since the last
+  attempt, a poll runs it too, and a 3.16 publisher sends the resync again on
+  its next resume.
+
 Sequence Gaps Not Resolving
 ---------------------------
 

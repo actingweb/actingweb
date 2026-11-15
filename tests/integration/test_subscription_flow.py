@@ -775,8 +775,13 @@ class TestSubscriptionActorFlow:
         assert "data" in sub_data and len(sub_data["data"]) >= 2
         assert sub_data["data"][0]["sequence"] == 1
         assert sub_data["data"][0]["data"] == "initial"
+        # change2 overwrote test with a value without resource: the
+        # resource went with its parent and its subscriber is told (3.16,
+        # specification 1.5); change3 had no resource to lose.
         assert sub_data["data"][1]["sequence"] == 2
-        assert sub_data["data"][1]["data"] == "change4"
+        assert sub_data["data"][1]["data"] == ""
+        assert sub_data["data"][2]["sequence"] == 3
+        assert sub_data["data"][2]["data"] == "change4"
 
     def test_031_get_specific_diff(self, http_client):
         """

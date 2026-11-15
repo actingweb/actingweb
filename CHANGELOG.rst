@@ -950,6 +950,47 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **Subscribers are told of deletes at every level, of a clear in one diff,
+  and of the value after the hooks (specification 1.5).** A REST delete, an
+  empty PUT and the web UI's delete registered a raw ``""`` that no
+  subscription to the deleted name received; a resource subscription was not
+  told when its key went with its parent; a nested write sent
+  ``{name: {key: value}}``, which a replica applied as the whole value; a
+  PUT's diff carried the request body before the property hooks; a clear
+  registered a diff per name. Now a delete is the encoded ``""`` at the
+  deleted level and ``{name: ""}`` above it, a resource subscription gets
+  ``""`` when its key existed and went, a subscription above a nested write
+  gets the parent's whole stored value, the diff is the stored value, and a
+  clear is one diff naming every deleted property (lists are not cleared).
+  ``Actor.register_diffs`` takes keyword-only ``previous`` and ``whole``.
+  **Behavior change:** see ``docs/migration/v3.16.rst``, "What a subscriber
+  receives", for what a subscriber application checks.
+- **One timestamp form on the wire.** Diff callbacks sent ``str()`` of the
+  stored time and resync callbacks an ISO offset; the polls sent ISO with
+  ``Z``. All now send ``2026-01-20T12:00:00.000000Z``. **Behavior change:**
+  a parser of the old callback form.
+- **A resync sweeps the replica, is fetched at the subscription's level, and
+  a failed fetch answers 503.** After a resync the replica no longer holds
+  what the baseline lacks (at most once a minute per subscription; inside
+  that minute the rebuild stays owed); the baseline is fetched at the stored
+  subscription's level, not the callback body's; a fetch that fails (decided
+  by status and redirect, so an empty baseline is empty and a property named
+  ``error`` is data) answers 503 with ``Retry-After``, records no sequence and
+  owes the rebuild, which the next callback runs once due (it was applied as
+  an empty baseline). A gone resource (404) is an empty value. **Behavior
+  change.**
+- **A ``none`` subscription polls its resync.** It was sent a resync callback
+  it could not use; the resync is now a ``type: resync`` marker in its queue,
+  and ``sync_subscription`` acts on a marker as a resync (a rebuild). The
+  poll runs the application's data hooks for what it applies when given the
+  configuration, which the gap resync now passes. **Behavior change.**
+- **Answers that follow the specification:** ``{"sequence": 0}`` clears
+  nothing (it cleared the queue); a callback with ``data`` and no integer
+  ``sequence`` answers 400 (it was dropped with 204); a granularity other
+  than ``high``, ``low`` or ``none`` answers 400, and
+  ``create_remote_subscription`` refuses it before sending. **Behavior
+  change.**
+
 - **An authenticated callback to a name nothing handles answers 403.**
   ``/callbacks/<name>`` with no hook registered for the name (and no ``"*"``
   hook) answered 200 with ``false``; a hook registry could not tell that
@@ -2597,6 +2638,16 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **DynamoDB stamped every subscription diff of a process with one time**
+  (the attribute's default was evaluated at import). Each diff is stamped
+  when it is created.
+- **The gap resync dropped the callback that triggered it and ran no data
+  hook**; it now passes the application's configuration to the poll, which
+  runs the hooks once per applied sequence, and applies the trigger when the
+  poll did not bring it.
+- **A poll wrote each diff's timestamp into the replica** (a whole-target
+  replica held a property named ``timestamp``).
 
 - **The scalar ``/meta`` paths were labelled ``text/html`` (Flask) or not
   at all (FastAPI).** ``/meta/id``, ``/meta/version``,

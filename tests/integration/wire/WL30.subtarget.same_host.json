@@ -476,7 +476,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "notes",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -754,7 +754,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "notes",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -1033,7 +1033,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "notes",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

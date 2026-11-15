@@ -49,6 +49,7 @@ from .db.creator_rules import (
     normalise_creator,
 )
 from .db.exceptions import CreatorTaken, DbError
+from .subscription import wire_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -3667,6 +3668,13 @@ class Actor:
         """Creates a new subscription at peerid."""
         if not peerid or not target:
             return False
+        if granularity and (
+            not isinstance(granularity, str)
+            or granularity not in subscription.GRANULARITIES
+        ):
+            # Refused before it is sent (3.16, specification 1.5).
+            logger.warning(f"Refused a subscription with granularity {granularity!r}")
+            return False
         relationships = self.get_trust_relationships(peerid=peerid)
         if not relationships:
             return False
@@ -4034,7 +4042,7 @@ class Actor:
             "subscriptionid": sub["subscriptionid"],
             "target": sub["target"],
             "sequence": diff["sequence"],
-            "timestamp": str(diff["timestamp"]),
+            "timestamp": wire_timestamp(diff["timestamp"]),
             "granularity": sub["granularity"],
         }
         if sub["subtarget"]:
@@ -5150,8 +5158,15 @@ class Actor:
         if not trust_data:
             logger.warning(f"No trust found for peer {peer_id}")
             return False
-        if not _has_peer_endpoint(trust_data, self.id):
-            # An OAuth2 client's row (as in callback_subscription): nothing is
+        if (
+            not _has_peer_endpoint(trust_data, self.id)
+            or subscription.get("granularity") == "none"
+        ):
+            # A subscription that is never called (3.16, specification 1.5:
+            # a ``none`` subscription is sent no resync callback either; the
+            # resync is the only record of what changed while suspended, so
+            # it waits in its queue as the marker it polls), or an OAuth2
+            # client's row (as in callback_subscription): nothing is
             # pushed to it, it reads its diffs. The changes made while
             # suspended stored none, so its next diff is a resync marker:
             # the client re-reads the URL under its own grant. No data is
@@ -5277,7 +5292,7 @@ class Actor:
                 "target": target,
                 "subtarget": sub_subtarget,
                 "sequence": new_seq,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": wire_timestamp(datetime.now(UTC)),
                 "granularity": subscription.get("granularity", "high"),
                 "type": "resync",
                 "url": resource_url,
@@ -5330,7 +5345,7 @@ class Actor:
                     "target": target,
                     "subtarget": sub_subtarget,
                     "sequence": new_seq,
-                    "timestamp": datetime.now(UTC).isoformat(),
+                    "timestamp": wire_timestamp(datetime.now(UTC)),
                     "granularity": "low",
                     "url": clear_url,
                 }
@@ -5355,7 +5370,7 @@ class Actor:
                 "target": target,
                 "subtarget": sub_subtarget,
                 "sequence": new_seq,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": wire_timestamp(datetime.now(UTC)),
                 "granularity": "low",
                 "url": diff_url,
             }
@@ -5702,10 +5717,57 @@ class Actor:
     # Diff Registration
     # =========================================================================
 
-    def register_diffs(self, target=None, subtarget=None, resource=None, blob=None):
+    def previous_for_resource_subscribers(
+        self, target: str, subtarget: str | None, read: Callable[[], Any]
+    ) -> Callable[[], Any] | None:
+        """For a write about to replace or delete ``subtarget`` (all of
+        ``target`` when None): the value before the write, as a callable to
+        pass to :meth:`register_diffs` as ``previous``, read now with
+        ``read()`` and only when a resource-level subscription would need it
+        (3.16, specification 1.5: a resource that went with its parent is
+        told). None, and nothing read, when there is no such subscription:
+        the decision uses the memoised subscription list."""
+        subs = self.get_subscriptions(
+            target=target, subtarget=None, resource=None, callback=False, strict=True
+        )
+        if not any(
+            sub.get("resource")
+            and sub.get("subtarget")
+            and (subtarget is None or sub.get("subtarget") == subtarget)
+            for sub in subs or []
+        ):
+            return None
+        value = _parsed_value(read())
+        return lambda: value
+
+    def register_diffs(
+        self,
+        target=None,
+        subtarget=None,
+        resource=None,
+        blob=None,
+        *,
+        previous: Callable[[], Any] | None = None,
+        whole: str | None = None,
+    ):
         """Registers a blob diff against all subscriptions with the correct target, subtarget, and resource.
 
         If resource is set, the blob is expected to be the FULL resource object, not a diff.
+
+        ``previous`` (3.16): what the written level held before the write
+        (:meth:`previous_for_resource_subscribers`): the subtarget's value
+        for a subtarget write, or a dict of the values a target-level write
+        replaced. A resource-level subscriber whose resource is not in the
+        new value is sent ``""`` (deleted) when ``previous`` shows the
+        resource existed; without ``previous`` it is sent nothing, as before.
+        A name a target-level blob does not carry is untouched.
+
+        ``whole`` (3.16): for a write at ``resource``, the subtarget's whole
+        stored value (JSON). A subscriber above the resource level is sent it
+        (``{subtarget: whole}`` at target level), since a receiver applies a
+        target- or subtarget-level value whole; without it such a subscriber
+        got only ``{resource: blob}`` and its replica lost the subtarget's
+        other keys.
 
         Note: Skips registration if the target/subtarget is currently suspended.
         Use suspend_subscriptions() and resume_subscriptions() to manage suspension.
@@ -5811,12 +5873,16 @@ class Actor:
                         else:
                             subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
                     except (TypeError, ValueError, KeyError):
-                        # The diff does not contain the resource
-                        logger.debug(
-                            "         - subscription has resource(%s), no matching blob found in diff",
-                            sub_obj_data["resource"],
-                        )
-                        continue
+                        if _resource_went(blob, previous, subtarget, sub_obj_data):
+                            # The resource went with its parent (3.16).
+                            subblob = json.dumps("")
+                        else:
+                            # The diff does not contain the resource
+                            logger.debug(
+                                "         - subscription has resource(%s), no matching blob found in diff",
+                                sub_obj_data["resource"],
+                            )
+                            continue
                     logger.debug(
                         "         - subscription has resource(%s), adding diff(%s chars)",
                         sub_obj_data["resource"],
@@ -5829,21 +5895,28 @@ class Actor:
                     # Since we have a resource, we know the blob is the entire resource, not a diff
                     # If the subscription is for a sub-target, send [resource] = blob
                     # If the subscription is for a target, send [subtarget][resource] = blob
-                    upblob = {}
-                    try:
-                        jsonblob = json.loads(blob)
-                        if not sub_obj_data["subtarget"]:
-                            upblob[subtarget] = {}
-                            upblob[subtarget][resource] = jsonblob
-                        else:
-                            upblob[resource] = jsonblob
-                    except (TypeError, ValueError, KeyError):
-                        if not sub_obj_data["subtarget"]:
-                            upblob[subtarget] = {}
-                            upblob[subtarget][resource] = blob
-                        else:
-                            upblob[resource] = blob
-                    finblob = json.dumps(upblob)
+                    upblob: Any = {}
+                    if whole is not None:
+                        finblob = (
+                            whole
+                            if sub_obj_data["subtarget"]
+                            else json.dumps({subtarget: _parsed_value(whole)})
+                        )
+                    else:
+                        try:
+                            jsonblob = json.loads(blob)
+                            if not sub_obj_data["subtarget"]:
+                                upblob[subtarget] = {}
+                                upblob[subtarget][resource] = jsonblob
+                            else:
+                                upblob[resource] = jsonblob
+                        except (TypeError, ValueError, KeyError):
+                            if not sub_obj_data["subtarget"]:
+                                upblob[subtarget] = {}
+                                upblob[subtarget][resource] = blob
+                            else:
+                                upblob[resource] = blob
+                        finblob = json.dumps(upblob)
                     logger.debug(
                         "         - diff has resource(%s), subscription has not, adding diff(%s bytes)",
                         resource,
@@ -5928,6 +6001,52 @@ class Actor:
             # Neither a diff nor a gap for some subscriber: the change is
             # undetectable for it. The write stands; the caller answers 503.
             raise lost
+
+
+def previous_kw(previous: Any) -> dict[str, Any]:
+    """``register_diffs``'s ``previous`` keyword, only when there is one: an
+    application's override with the older signature keeps working for every
+    write no resource-level subscriber needs it for."""
+    return {"previous": previous} if previous is not None else {}
+
+
+def _parsed_value(value: Any) -> Any:
+    """A stored value as JSON when it is JSON, else as it is."""
+    if isinstance(value, str | bytes):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, RecursionError):
+            return value
+    return value
+
+
+def _resource_went(
+    blob: str,
+    previous: Callable[[], Any] | None,
+    subtarget: str | None,
+    sub: dict[str, Any],
+) -> bool:
+    """Whether a resource-level subscription's resource existed before a
+    write whose new value does not hold it (see ``register_diffs``)."""
+    if previous is None:
+        return False
+    try:
+        new = json.loads(blob)
+    except (TypeError, ValueError, RecursionError):
+        new = blob
+    # A value stored as JSON text (an SDK write of a JSON string) is read as
+    # what it holds: a resource it still holds did not go.
+    held = _parsed_value(new) if isinstance(new, str) else new
+    if subtarget and isinstance(held, dict) and sub["resource"] in held:
+        return False
+    before = previous()
+    if not subtarget:
+        # A target-level write: only a name it carries was touched.
+        if not isinstance(new, dict) or sub["subtarget"] not in new:
+            return False
+        before = before.get(sub["subtarget"]) if isinstance(before, dict) else None
+    before = _parsed_value(before)
+    return isinstance(before, dict) and sub["resource"] in before
 
 
 def _resync_id(sub: dict[str, Any]) -> str:

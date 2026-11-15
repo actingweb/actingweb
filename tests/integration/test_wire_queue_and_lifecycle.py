@@ -51,9 +51,27 @@ def test_wq4_listings(wire_pair, topology):
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wq5_granularity_medium(wire_pair, topology):
-    """WQ5: a subscription with granularity ``medium``; a write."""
-    s = wire_pair(topology, grant=["*"], granularity="medium")
-    a = s.publisher
+    """WQ5: granularity ``medium`` (spec-1-5:3): B's own subscribe refuses it
+    before anything is sent, and A refuses B's direct request; a write then
+    reaches no one."""
+    s = wire_pair(topology, grant=["*"], subscribe=False)
+    a, b = s.publisher, s.subscribers[0]
+    s.step(
+        "B subscribes with granularity medium",
+        lambda: requests.post(
+            f"{b.url}/subscriptions",
+            json={"peerid": a.id, "target": "properties", "granularity": "medium"},
+            auth=b.basic,
+        ),
+    )
+    s.step(
+        "B asks A directly with granularity medium",
+        lambda: requests.post(
+            f"{a.url}/subscriptions/{b.id}",
+            json={"id": b.id, "target": "properties", "granularity": "medium"},
+            headers=_bearer(s),
+        ),
+    )
     s.step("put", lambda: _put(a, "x", {"v": 1}))
     check("WQ5", s.recording(), variant=topology)
 

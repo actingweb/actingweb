@@ -2130,6 +2130,61 @@ booleans, as a GET of the row does (a client that compared them with the
 string ``"true"`` compares with ``true``); and ``GET /permissions/<peer>``
 answers 404, not 500, for a relationship whose trust type is not registered.
 
+What a subscriber receives
+--------------------------
+
+Specification 1.5 says what a subscriber is told and what a receiver does;
+3.16 conforms. Every item is a **Behavior change** for a subscriber
+application; the check follows each. The full rules are in
+:doc:`../guides/subscriptions`, "What a Subscriber Is Told".
+
+- **Deletes reach every level.** A REST delete (and an empty ``PUT``, and the
+  web UI's delete) registers the encoded ``""`` the interface layer always
+  did: a subscription to the deleted name now receives ``""`` with a sequence
+  number (before, nothing), and a resource subscription receives ``""`` when
+  its key went with its parent. *Check:* a data hook that read the absence
+  of a diff as "unchanged" after a delete; sequence counting that assumed
+  deletes take no number.
+- **A nested write sends the parent's whole value** to a subscription above
+  the resource; before, ``{name: {key: value}}``, which a replica applied as
+  the whole value and lost the other keys. *Check:* a hook that read such a
+  diff as a partial patch now gets the whole value.
+- **The value after the hooks:** a ``PUT`` whose property hook transforms
+  the value sends what was stored, not the request body.
+- **A clear is one diff** naming every deleted property, one sequence and
+  one callback; it was a diff per name (and a second, dropped, registration).
+  Lists are not cleared. *Check:* a hook that expected one call per name.
+- **The callback timestamp** is ISO 8601 in UTC with ``Z``
+  (``2026-01-20T12:00:00.000000Z``), as the polls already sent it; callbacks
+  sent ``str()`` of the stored time and resync callbacks an offset. On
+  DynamoDB each diff now has its own time (the default was taken once per
+  process). *Check:* a parser that expected the space-separated form.
+- **A resync sweeps.** After a resync (pushed or polled) the replica no
+  longer holds what the baseline lacks; the resync is fetched at the stored
+  subscription's level, not the callback body's. At most once a minute per
+  subscription; inside that minute the resync is applied without the sweep
+  and the rebuild stays owed. *Check:* application data written into the
+  replica bucket (keep it elsewhere).
+- **A failed baseline fetch answers 503** with ``Retry-After``, records no
+  sequence and owes the rebuild; it was applied as an empty baseline. The next
+  callback runs an owed rebuild that is due, whatever its sequence. A
+  baseline is told failed by the answer's status and redirect, so an empty
+  baseline is empty and a property named ``error`` is data.
+- **A ``none`` subscription** is sent no resync callback; the resync waits as a
+  ``type: resync`` marker that the library's poll acts on. *Check:* a ``none``
+  subscriber that polls with its own code handles a diff of ``"type":
+  "resync"`` by re-reading the ``url``.
+- **The poll runs the data hooks** for what it applies when given the
+  application's configuration, which the gap resync now is (it ran none and
+  dropped the triggering callback). It no longer writes the diff's
+  ``timestamp`` into the data it applies (a whole-target replica held a
+  property named ``timestamp``). *Check:* a hook that now runs for polled
+  diffs.
+- **``{"sequence": 0}`` clears nothing** (it cleared the whole queue); a
+  callback with ``data`` and no integer ``sequence`` answers 400 (it was
+  dropped as a duplicate with 204); a granularity other than ``high``,
+  ``low`` or ``none`` answers 400 and the SDK refuses it before sending.
+
 What stays the same
 ===================
 

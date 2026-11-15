@@ -278,7 +278,7 @@ Regular incremental updates containing only changed data:
      "sequence": 42,
      "target": "properties",
      "data": {"status": "active"},
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 **Resync Callbacks** (``callback_type="resync"``):
@@ -312,7 +312,7 @@ Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
      "target": "properties",
      "type": "resync",
      "url": "https://example.com/actor123/properties",
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 **Low-Granularity Fallback:**
@@ -328,10 +328,70 @@ When a peer doesn't support the ``subscriptionresync`` option (per ActingWeb pro
      "target": "properties",
      "granularity": "low",
      "url": "https://example.com/actor123/subscriptions/sub456/43",
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 Note: No ``type`` field, and ``url`` points to the subscription diff endpoint. The receiver fetches the data from the URL automatically.
+
+What a Subscriber Is Told
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Since 3.16 (specification 1.5) every writer, the REST handlers, the web UI
+and ``actor.properties``, registers the same diffs:
+
+- **A delete is ``""``** at the level that was deleted, and ``{name: ""}``
+  above it. A subscription to the deleted name itself receives ``""`` with a
+  sequence number (a REST delete reached it with nothing before). A
+  subscription to a resource (``name/key``) receives ``""`` when its key went
+  with its parent: the parent was deleted, or overwritten by a value without
+  the key. It receives nothing when the key never existed. A data hook reads
+  ``""`` as "absent"; a stored empty string cannot be told from a delete.
+- **A nested write sends the parent's whole stored value** to a subscription
+  above the resource (``{name: whole}`` at target level): a receiver applies
+  a target- or subtarget-level value whole, so the partial ``{name: {key:
+  value}}`` sent before 3.16 dropped the parent's other keys from replicas.
+  A resource subscription still receives its resource.
+- **A diff carries the value stored after the property hooks**, not the
+  request body.
+- **A clear** (``DELETE /properties``, ``actor.properties.clear()``) is one
+  diff naming every deleted property (``{"a": "", "b": ""}``), one sequence
+  number and one callback per subscriber. Lists are not cleared and are not
+  in it.
+- **The timestamp** of every callback, resync callback and poll is ISO 8601
+  in UTC with ``Z`` and microseconds (``2026-01-20T12:00:00.000000Z``);
+  callbacks sent ``str()`` of the stored time and resync callbacks an offset.
+- **A ``none`` subscription** is sent no resync callback on resume: the
+  resync waits in its queue as a diff of ``"type": "resync"``, and the
+  library's poll (``sync_subscription``) acts on it as a resync: it rebuilds
+  the replica from the URL and clears the queue through it. A failed fetch
+  leaves the marker queued and the rebuild owed.
+- **The poll runs the data hooks** for each change it applies, as a pushed
+  callback does, when it is given the application's configuration; the
+  library's gap resync is. The triggering callback of a gap resync is
+  applied when the poll did not bring its sequence.
+
+What the receiver answers and does:
+
+- **A resync is fetched at the stored subscription's level**, whatever the
+  callback body names, and afterwards the replica no longer holds what the
+  baseline lacks (whole target: every name it does not carry; a subtarget:
+  that name). The sweep lists the replica, so it runs at most once a minute
+  per subscription; a resync inside that minute is applied without it and
+  leaves the rebuild owed, which the next callback or sync runs once the
+  minute has passed. The data hook gets the baseline; it is not told name by
+  name what the sweep removed.
+- **A resync whose fetch fails answers 503** with ``Retry-After``, records no
+  sequence and marks the rebuild owed. The next callback runs the owed
+  rebuild once it is due, whatever its sequence; a publisher on 3.16 sends
+  the resync again on its next resume. A gone resource (404) is an empty
+  value, not a failure.
+- **A callback with ``data`` and no integer ``sequence`` answers 400**, as a
+  low-granularity one without a sequence does (it was taken as a duplicate).
+- **``PUT /subscriptions/<peer>/<id>`` with ``{"sequence": 0}``** answers 204
+  and clears nothing; ``{"sequence": n}`` clears through ``n``.
+- **A granularity other than ``high``, ``low`` or ``none``** answers 400 at
+  the publisher, and ``create_remote_subscription`` refuses it before
+  sending anything.
 
 Peer Capability Discovery
 -------------------------

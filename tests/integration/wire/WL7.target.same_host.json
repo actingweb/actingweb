@@ -263,7 +263,7 @@
         "sequence": 3,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -321,7 +321,7 @@
         "sequence": 4,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -700,7 +700,7 @@
         "sequence": 5,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -756,7 +756,7 @@
         "sequence": 6,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -940,7 +940,7 @@
         "sequence": 7,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -1174,7 +1174,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 8
+        "version": 10
        }
       ],
       "peer_permissions": {
@@ -1584,7 +1584,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties",
-        "timestamp": "<ts:iso-offset>",
+        "timestamp": "<ts:iso-z>",
         "type": "resync",
         "url": "http://<wire_app>/<A>/properties"
        },
@@ -1834,7 +1834,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 10
+        "version": 12
        }
       ],
       "peer_permissions": {
@@ -2057,7 +2057,7 @@
         "sequence": 9,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -2113,7 +2113,7 @@
         "sequence": 10,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

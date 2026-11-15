@@ -211,6 +211,17 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   by ``"list" in value``: a property's value may carry those keys. The
   legacy ``callback_hook("subscription")`` receives the same diff in its
   ``data["data"]``.
+- A delete (3.16, specification 1.5) is ``""`` at the subscribed level:
+  ``{"name": ""}`` for a whole-target subscription, ``""`` for one to the
+  name or to a resource that went with its parent. A clear is one call with
+  every deleted name. A nested write gives a subscription above the resource
+  the parent's whole value. Treat ``""`` as absent.
+- The hook also runs for each change the library's poll applies (the gap
+  resync's poll included, 3.16; it ran for none), once per sequence, with
+  ``callback_type`` ``"diff"`` or ``"resync"``. ``data`` never carries a
+  ``timestamp`` key the publisher did not send.
+- After a resync the replica no longer holds what the baseline lacks; the
+  hook gets the baseline, not the names removed.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

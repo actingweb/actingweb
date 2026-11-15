@@ -64,6 +64,7 @@ expected = "Each PUT's callback nested in it, the data hook nested in the callba
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WL11.target"]
@@ -75,6 +76,7 @@ expected = "One top-level callback per SDK list operation (append, insert, updat
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WD6"]
@@ -86,6 +88,7 @@ expected = "A low-granularity callback with a url and no data; B fetches the dif
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WD6.subscriber"]
@@ -98,6 +101,7 @@ reason = [
   "2026-11-07 the method rule: the acknowledgement PUT answers 403; the diff was already consumed by B's GET (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WD6.subscriber_adopted"]
@@ -108,6 +112,7 @@ expected = "WD6 in a subscriber pair with the two adoption rows: identical throu
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WD8"]
@@ -119,6 +124,7 @@ expected = "The append's callback posted again with the same bearer: 204, no dat
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WD10"]
@@ -130,6 +136,8 @@ expected = "Writes while suspended send nothing and queue nothing; resume sends 
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 the resync is fetched at the subscription's level and swept (spec-1-5:3)",
 ]
 
 [rows."WD10.import"]
@@ -140,6 +148,8 @@ expected = "The consumer's import: the method answers {\"callbacks_sent\": 1, \"
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 the resync is fetched at the subscription's level and swept (spec-1-5:3)",
 ]
 
 [rows."WD12"]
@@ -151,6 +161,7 @@ expected = "A believes B lacks subscriptionresync: resume sends a clear for each
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WQ1"]
@@ -162,6 +173,7 @@ expected = "B's GET of its subscription at A lists both queued diffs with their 
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WQ2"]
@@ -173,6 +185,7 @@ expected = "The first GET of diff 1 answers 200 and consumes it; the second answ
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WQ3"]
@@ -180,10 +193,12 @@ test = "test_wire_peer_paths.py::test_wq3_clear"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "PUT {\"sequence\": 1} 204 clears diff 1; {\"sequence\": 0} 204; no sequence 400; text 400; an unknown id 404; GET ?_method=PUT&sequence=2 204 clears the rest."
+expected = "PUT {\"sequence\": 1} 204 clears diff 1; {\"sequence\": 0} 204 and clears nothing (spec-1-5:3); no sequence 400; text 400; an unknown id 404; GET ?_method=PUT&sequence=2 204 clears through 2."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 {\"sequence\": 0} clears nothing (spec-1-5:3)",
 ]
 
 [rows."WQ3.subscriber"]
@@ -196,6 +211,8 @@ reason = [
   "2026-11-07 the method rule: every clear answers 403 and the queue keeps its diffs (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-08 the owner rows bind to the path's peer (reverify-4, Issue 2, owner): admitted as in the adopted variant (peer-authorisation-fixes:2)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 {\"sequence\": 0} clears nothing (spec-1-5:3)",
 ]
 
 [rows."WQ3.subscriber_adopted"]
@@ -206,6 +223,8 @@ expected = "WQ3 in a subscriber pair with the two adoption rows: identical throu
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 {\"sequence\": 0} clears nothing (spec-1-5:3)",
 ]
 
 [rows."WC1"]
@@ -283,6 +302,7 @@ expected = "A's permission PUT with an exclusion answers 200 with the permission
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 # ---------------------------------------------------------------------------
@@ -449,6 +469,7 @@ expected = "C (friend of A) lists, reads, consumes, clears and deletes B's subsc
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:2)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WA13"]
@@ -510,6 +531,7 @@ reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
+  "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
 ]
 
 [rows."WT2"]
@@ -615,7 +637,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["grant-enforcement-per-route:1", "attribute-list-v2-port:3", "spec-1-5:3"]
 exposure = false
 expected = "F subscribed to all of A's properties: nothing is pushed for private, settings/private or settings/deep/private (a diff the peer may read none of is not pushed, and an object the filter empties is dropped rather than sent as {}, which the subscriber would store over its copy); settings is pushed as {\"theme\": \"x\"}; color is pushed. F holds a sequence gap from the first refused diff and applies no later push until its resync (the push's existing design). The pull serves the refused diffs as {} with their sequence."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)"]
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a nested write's diff is the parent's whole stored value, filtered per grant (spec-1-5:3)"]
 
 [rows."WG8"]
 test = "test_wire_grants.py::test_wg8_subtarget_push_and_pull"
@@ -623,14 +645,14 @@ topologies = ["same_host", "two_hosts"]
 owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2", "spec-1-5:3"]
 exposure = false
 expected = "F's subscription to memory_personal (resource item) and to settings with resource private: 403 at creation (no read access); to settings: 201, then A's settings write is pulled (and pushed, 403 at F, which holds no callback row) as {\"theme\": \"y\"}."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WG9"]
 test = "test_wire_grants.py::test_wg9_category_not_mentioned"
 owners = ["grant-enforcement-per-route:1", "grant-enforcement-per-route:2", "spec-1-5:1", "spec-1-5:3"]
 exposure = false
 expected = "L (no trust type, access rows only) pulls a properties subscription: color, as a direct read through the access table answers it. wire_hooked: S 403; F and L 200."
-reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)"]
+reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 exclusions hold at every level, the bulk POST is all or nothing, a stated rule that does not match denies, 403 bodies (grant-enforcement-per-route:1)", "2026-11-10 /resources, methods, actions and subscription creation follow the grant; push and pull follow the access table for a category the grant does not mention; shared_properties lists what the peer may read (grant-enforcement-per-route:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WG10"]
 test = "test_wire_grants.py::test_wg10_resources"
@@ -712,7 +734,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget color. The object arrives as the subtarget's data and is stored as the one scalar color; the string is stored as {value: blue}; the empty value deletes it. Sequences 1-3 are processed in order."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WS2.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws2_subtarget"
@@ -720,23 +742,23 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "WS1.subtarget in a wire_named pair (the trust type reads exactly color): identical to WS1.subtarget. A subtarget diff is judged once by the subtarget's name, so the object's keys are not judged and nothing is withheld or spent; no exposure."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WS3.target"]
 test = "test_wire_scalar_properties.py::test_ws3"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "p = {k: {j, i}, keep} at B first. PUT p/k sends {p: {k: <body>}} and B's p is replaced by it (keep lost); PUT p/k/j sends {p: {k: <A's merged k>}}, which carries i again although step 1's body dropped it."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "p = {k: {j, i}, keep} at B first. Each nested write sends p's whole stored value (after the hooks), and B's p equals A's (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a nested write sends a subscriber above the resource the parent's whole stored value, after the hooks (spec-1-5:3)"]
 
 [rows."WS3.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws3"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget p. Each write sends {k: ...} with subtarget p; B stores it as the one scalar p (its value replacing the seed's copy)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "Subtarget p. Each nested write sends p's whole stored value; B stores it as the one scalar p, equal to A's (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a nested write sends a subscriber above the resource the parent's whole stored value, after the hooks (spec-1-5:3)"]
 
 [rows."WS3.resource"]
 test = "test_wire_scalar_properties.py::test_ws3"
@@ -744,7 +766,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget p, resource k. Each write sends k's object with resource k; B merges it into its scalar p at the path k, keeping p's other keys."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the resource as stored, after the hooks (spec-1-5:3)"]
 
 [rows."WS4.target"]
 test = "test_wire_scalar_properties.py::test_ws4_target"
@@ -752,47 +774,47 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "POST /properties with two names: 201 echoing the body, one diff, one callback carrying both; B stores the object as sent and the string wrapped as {value}."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WS5.target"]
 test = "test_wire_scalar_properties.py::test_ws5"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "DELETE p sends {p: \"\"} and B deletes its p; DELETE q/k sends {q: {k: \"\"}} and B's q becomes {k: \"\"} (m lost)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "DELETE p sends {p: \"\"} and B deletes its p; DELETE q/k sends q's whole stored value without k, and B's q keeps m (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a nested delete sends the parent's whole stored value (spec-1-5:3)"]
 
 [rows."WS5.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget p. Neither delete stores a diff, spends a sequence or sends anything: B keeps the seeded copy of p (stored as the one scalar p)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "Subtarget p. DELETE p stores and sends the encoded \"\" with a sequence number, and B deletes its p (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a REST delete is the encoded \"\" and reaches the subscription on the name (spec-1-5:3)"]
 
 [rows."WS5.resource"]
 test = "test_wire_scalar_properties.py::test_ws5"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
-expected = "Subtarget q, resource k. Neither delete (p, then q/k) stores a diff or sends anything: B keeps the seeded copy of q/k (stored inside the scalar q)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+expected = "Subtarget q, resource k. DELETE q/k sends \"\" to the resource subscription and B removes k from q (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a REST delete reaches the resource that went with its parent (spec-1-5:3)"]
 
 [rows."WS6.target"]
 test = "test_wire_scalar_properties.py::test_ws6_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "DELETE /properties with three properties: three diffs {name: \"\"}, each its own sequence and callback (one, three, two), all nested in the request; B's replica empty."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "DELETE /properties with three properties: one diff {one: \"\", three: \"\", two: \"\"}, one sequence and one callback; B's replica empty (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a clear is one diff naming every deleted property (spec-1-5:3)"]
 
 [rows."WS7.target"]
 test = "test_wire_scalar_properties.py::test_ws7_target"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "PUT transformed \"blue\" with a hook that upper-cases it: the diff and B carry the raw body (blue); A stores the hook's value as JSON text (\"\\\"BLUE\\\"\"). Known wrong: publisher and subscriber disagree."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "PUT transformed \"blue\" with a hook that upper-cases it: the diff and B carry the stored value BLUE (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the diff carries the value stored after the hooks (spec-1-5:3)"]
 
 [rows."WS8.subtarget"]
 test = "test_wire_scalar_properties.py::test_ws8_subtarget"
@@ -808,7 +830,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "SDK on the test thread, subtarget transformed. The set sends the hook's value (BLUE), which B stores as {value: BLUE}; the delete sends \"\", which deletes it. A stores BLUE, then nothing. Unlike WS5.subtarget the delete does send."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a callback whose data is a string is applied at subtarget level (the processor read its timestamp as from an object and answered 400) (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 # ---------------------------------------------------------------------------
 # subscription-wire-baseline, Phase 1: list properties (test_wire_list_properties.py)
@@ -820,7 +842,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "POST /properties/notes/items add: 201 {index 2}; the diff {notes: {list, operation: append, item, index, length}} reaches B, which appends it; B ends with A's list and no scalar."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL1.subtarget"]
 test = "test_wire_list_properties.py::test_wl1"
@@ -828,7 +850,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: POST /properties/notes/items add: 201 {index 2}; the diff {notes: {list, operation: append, item, index, length}} reaches B, which appends it; B ends with A's list and no scalar."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL2.target"]
 test = "test_wire_list_properties.py::test_wl2"
@@ -836,7 +858,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "POST /properties/notes/items update index 0: the diff is an update with item, index and old_item; B updates the item it holds by value and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL2.subtarget"]
 test = "test_wire_list_properties.py::test_wl2"
@@ -844,7 +866,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: POST /properties/notes/items update index 0: the diff is an update with item, index and old_item; B updates the item it holds by value and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL3.target"]
 test = "test_wire_list_properties.py::test_wl3"
@@ -852,7 +874,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "POST /properties/notes/items delete index 1: the diff is a delete with the index and old_item (the item's value); B deletes the one equal item (or the one at the index among equal ones) and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL3.subtarget"]
 test = "test_wire_list_properties.py::test_wl3"
@@ -860,7 +882,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: POST /properties/notes/items delete index 1: the diff is a delete with the index and old_item (the item's value); B deletes the one equal item (or the one at the index among equal ones) and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL4.target"]
 test = "test_wire_list_properties.py::test_wl4"
@@ -868,7 +890,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "PUT /properties/notes?index=N: an update (old_item from the handle) inside the list, an append at its length; B applies each and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL4.subtarget"]
 test = "test_wire_list_properties.py::test_wl4"
@@ -876,7 +898,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: PUT /properties/notes?index=N: an update (old_item from the handle) inside the list, an append at its length; B applies each and ends with A's list."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL5.target"]
 test = "test_wire_list_properties.py::test_wl5"
@@ -884,7 +906,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "PUT /properties/notes/metadata: a metadata diff with length; B keeps its items (metadata is not replicated)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL5.subtarget"]
 test = "test_wire_list_properties.py::test_wl5"
@@ -892,7 +914,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: PUT /properties/notes/metadata: a metadata diff with length; B keeps its items (metadata is not replicated)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL6.target"]
 test = "test_wire_list_properties.py::test_wl6"
@@ -900,7 +922,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "An SDK append B applies to a real list; then DELETE /properties/notes sends delete_all with length 0: B's list is gone."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL6.subtarget"]
 test = "test_wire_list_properties.py::test_wl6"
@@ -908,7 +930,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: An SDK append B applies to a real list; then DELETE /properties/notes sends delete_all with length 0: B's list is gone."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL7.target"]
 test = "test_wire_list_properties.py::test_wl7_target"
@@ -916,7 +938,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "POST /properties with items changing 2 and 25 items: one list diff per change (updates, then a run of appends as one extend), B applies each; 26 items: no per-item diff and, since B subscribes to the whole target, one resync of the whole target after the batch (no suspension), B re-reads it; a body mixing a list and a scalar: the list's diffs on its subtarget and the scalar in its own blob. B ends with A's list and no scalar but color."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the resync sweep reserves the rebuild interval (spec-1-5:3)"]
 
 [rows."WL8.target"]
 test = "test_wire_list_properties.py::test_wl8"
@@ -924,7 +946,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "POST {notes: {_type: list}}: 201; the diff is an empty extend (items [], length 0), so B holds an empty list, not a text scalar."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL8.subtarget"]
 test = "test_wire_list_properties.py::test_wl8"
@@ -932,7 +954,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes: POST {notes: {_type: list}}: 201; the diff is an empty extend (items [], length 0), so B holds an empty list, not a text scalar."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL9.target"]
 test = "test_wire_list_properties.py::test_wl9_target"
@@ -940,7 +962,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:1", "spec-1-5:3"]
 exposure = false
 expected = "POST /properties/notes with an object: appended as one item, 201 with Location naming index 2; the append diff (sequence 3) reaches B, whose replica list holds the item."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 a POST to a list's name appends one item, 201 with Location (spec-1-5:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 a POST to a list's name appends one item, 201 with Location (spec-1-5:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL10.target"]
 test = "test_wire_list_properties.py::test_wl10_target"
@@ -948,7 +970,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "The web UI's item add, update and delete, list create, metadata edit, property create and update: each 302 and written at A, and each registers the diff its REST route does, which B applies; the /www deletes of the list and of the property send delete_all and the property's \"\". B ends with A's lists and properties."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-13 verification fixes: a REST or web-UI delete is delete by index with old_item, a bulk resync reaches a whole-target subscription as a resync of the whole target (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL11.subtarget"]
 test = "test_wire_list_properties.py::test_wl11_subtarget"
@@ -956,7 +978,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes, the SDK operations of WL11.target: each diff {list, operation, ...} for the subtarget is one list operation on B's list notes, which follows A's list and ends empty after the clear."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL12.target"]
 test = "test_wire_list_properties.py::test_wl12_target"
@@ -964,7 +986,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:2", "attribute-list-v2-port:3", "spec-1-5:3"]
 exposure = false
 expected = "SDK appends of 0, \"\", False, None, [] and {}: each sent and answered 204, and B's replica list holds each falsy item in order (0, \"\", false, null, [], {})."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stored length beside the read error (subscription-wire-baseline iteration 6)", "2026-11-13 falsy items are stored and read back: replica lists are the list core over attribute storage (attribute-list-v2-port:2)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 the stored length beside the read error (subscription-wire-baseline iteration 6)", "2026-11-13 falsy items are stored and read back: replica lists are the list core over attribute storage (attribute-list-v2-port:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL13.target"]
 test = "test_wire_list_properties.py::test_wl13_target"
@@ -972,7 +994,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "An item over the 390,000-byte span threshold, appended and updated: the diffs are references ({bytes, spanned: true}, no value); B cannot apply either, logs it out of step (asserted by the test) and rebuilds its list from the baseline, which carries the item."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 a spanned reference is out of step and rebuilds the replica (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 a spanned reference is out of step and rebuilds the replica (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL14.target"]
 test = "test_wire_list_properties.py::test_wl14_target"
@@ -980,7 +1002,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Three appends B applies; pop(-2) sends {operation: pop, index: -2, length: 2}, which B applies (the negative index normalised): its list keeps the first and last items."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL15.target"]
 test = "test_wire_list_properties.py::test_wl15_target"
@@ -996,7 +1018,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Subtarget first; POST /properties with first and second: one callback carrying only first's value; B stores it as the scalar first; second never reaches B."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL17.target"]
 test = "test_wire_list_properties.py::test_wl17_target"
@@ -1004,7 +1026,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "Suspend notes, delete the list, resume: one resync callback; B's baseline GET /properties/notes is answered 404, which B reads as the list gone, and B deletes its copy."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a resync whose subtarget answers 404 deletes it from the replica: the list deleted while suspended is gone at B after the resume (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-14 a resync whose subtarget answers 404 deletes it from the replica: the list deleted while suspended is gone at B after the resume (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the resync is fetched at the subscription's level and swept (spec-1-5:3)"]
 
 # ---------------------------------------------------------------------------
 # subscription-wire-baseline, Phase 1: delivery (test_wire_delivery.py)
@@ -1016,7 +1038,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "One write: the callback's timestamp in the space format; B's queue poll and its fetch of diff 1 both carry ISO with Z. The fetch by sequence consumes the diff (A's queue empty after it)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD3"]
 test = "test_wire_delivery.py::test_wd3_two_writes_a_second_apart"
@@ -1024,7 +1046,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "Two writes a second apart, delivered as usual. The test asserts the stored diff timestamps: equal on DynamoDB (a default evaluated at import), different on PostgreSQL; the recording carries format classes only, so one file serves both."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 DynamoDB stamps each diff when it is created (spec-1-5:3)"]
 
 [rows."WD5"]
 test = "test_wire_delivery.py::test_wd5_async_append"
@@ -1032,52 +1054,52 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:4", "spec-1-5:3"]
 exposure = false
 expected = "An SDK append on a running loop returns before its callback is answered (the replica holds nothing at return); the callback runs as a task on that loop, and once it has run B holds the item."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD7"]
 test = "test_wire_delivery.py::test_wd7_granularity_none"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "Granularity none: the write stores a diff and sends nothing. B's SDK sync_peer polls A's queue, clears it with PUT {sequence}, then fetches GET /properties, /methods and /actions; B holds x and a scalar timestamp; A's queue empty."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Granularity none: the write stores a diff and sends nothing. B's SDK sync_peer polls A's queue, clears it with PUT {sequence}, then fetches GET /properties, /methods and /actions; B holds x; A's queue empty. No timestamp property in the replica (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a poll no longer writes the diff's timestamp into the replica (spec-1-5:3)"]
 
 [rows."WD9"]
 test = "test_wire_delivery.py::test_wd9_gap_resync"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "A grant excluding denied. The write to denied spends sequence 1 and sends nothing; allowed (2) is held behind the gap, no data hook; past the 2 s gap timeout the third write's callback triggers B's poll, which A answers filtered (sequence 1 as {}), and B clears the queue. B holds allowed and a scalar timestamp; denied never reaches B, so no exposure since the security plans. The resync calls no data hook for 2 or 3 (spec-1-5's to fix)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "A grant excluding denied. The write to denied spends sequence 1 and sends nothing; allowed (2) is held behind the gap; past the 2 s gap timeout the third write's callback triggers B's poll (with the application's configuration), which A answers filtered (sequence 1 as {}); the data hook runs once for each of 1, 2 and 3, in order, and B holds allowed (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the gap resync runs the data hook for each applied diff and keeps its trigger; no timestamp in the applied data (spec-1-5:3)"]
 
 [rows."WD11"]
 test = "test_wire_delivery.py::test_wd11_resume_none"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "Granularity none: suspend, a write (nothing queued while suspended), resume: one resync callback, in which B fetches GET /properties; B holds x."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Granularity none: suspend, a write (nothing queued while suspended), resume: no resync callback; a type resync marker waits in the queue (spec-1-5:3); B's poll acts on it as a resync (GET /properties), A's queue is cleared and B holds x."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a none subscription is sent no resync callback; the marker waits in its queue and B's poll applies it (spec-1-5:3)"]
 
 [rows."WD13"]
 test = "test_wire_delivery.py::test_wd13_two_subscribers_on_the_second_host"
 owners = ["spec-1-5:4", "spec-1-5:3"]
 exposure = false
 expected = "B and C on the second host, one write: two callbacks nested in the write one after the other, each sequence 1, each replica holds x. Sibling callbacks are sorted by receiver (the send order follows random subscription ids)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD14.high"]
 test = "test_wire_delivery.py::test_wd14_five_subscribers_on_the_publishers_host"
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "Five subscribers on A's own host, one REST write: five callbacks nested in the write, one after another (the write runs in the executor); all replicas equal. Siblings sorted by receiver."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD14.low"]
 test = "test_wire_delivery.py::test_wd14_five_subscribers_on_the_publishers_host"
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "As WD14.high at granularity low: each callback carries no data, and each subscriber's fetch and acknowledgement nest in its own callback; all replicas equal. Siblings sorted by receiver."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD15"]
 test = "test_wire_delivery.py::test_wd15_target_and_subtarget"
@@ -1085,7 +1107,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3"]
 exposure = false
 expected = "B subscribed to the target and to the subtarget notes, one SDK append: two callbacks, each its own sequence 1; the whole-target subscription stores it and the subtarget subscription, which that one covers, stores nothing, so B's list notes holds the item once."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a subtarget subscription covered by a whole-target one stores nothing: one subscription per name writes the replica (attribute-list-v2-port:4)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 the replica receiver on the list core: diffs bound to their key and level, out-of-step list diffs rebuilt from a baseline (attribute-list-v2-port:3)", "2026-11-14 a subtarget subscription covered by a whole-target one stores nothing: one subscription per name writes the replica (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD16"]
 test = "test_wire_delivery.py::test_wd16_callback_row_removed"
@@ -1093,7 +1115,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "B removes its own subscription row through the SDK: B's replica and callback state are wiped with it. A's row stays: each later write stores a diff and posts again, answered 403."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD17"]
 test = "test_wire_delivery.py::test_wd17_unreachable_subscriber"
@@ -1108,7 +1130,7 @@ test = "test_wire_delivery.py::test_wd18_async_method_on_the_loop"
 owners = ["spec-1-5:4", "spec-1-5:3"]
 exposure = false
 expected = "POST /methods/wire_import with suspend false (an async method on A's loop) answers first; its callback to B is a sibling after it, and B holds the item once the step settles. A callback recorded under the method (the race an async method can lose) is moved to follow it, so the bytes do not depend on that race; the row therefore cannot tell a callback sent inside the method request from one sent after it."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WD4"]
 test = "test_wire_delivery.py::test_wd4_held_callbacks_drain"
@@ -1151,8 +1173,8 @@ test = "test_wire_queue_and_lifecycle.py::test_wq5_granularity_medium"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "Granularity medium: 201 on subscribe; a write sends a callback with neither data nor url, answered 204; the data hook gets {} and the sequence advances; B stores nothing."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+expected = "Granularity medium (spec-1-5:3): B's own subscribe refuses it (400, nothing sent), and A refuses B's direct request (400, nothing created); A's write reaches no one."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 granularity medium is refused by B before it is sent and by A (400); nothing created (spec-1-5:3)"]
 
 [rows."WQ6"]
 test = "test_wire_queue_and_lifecycle.py::test_wq6_null_sequence"
@@ -1160,7 +1182,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "PUT .../<subid> {sequence: null} with B's bearer: 500 (the handler's TypeError reaches the integration's catch-all); the diff stays queued."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WC5"]
 test = "test_wire_queue_and_lifecycle.py::test_wc5_trust_deleted"
@@ -1192,7 +1214,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "One Actor instance of A writes (its subs_list memo becomes [B], asserted); B2 subscribes over REST (baseline fetched, B2 holds x = 1); the same instance writes again and only B gets the callback: B2 keeps the old value. By design: an instance reads its subscription list once (3.16); an instance the library builds lives for one request."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 given up by subs-list-cache-lifetime:2: the per-instance rule, not a fault (text only)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-12 given up by subs-list-cache-lifetime:2: the per-instance rule, not a fault (text only)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WM2"]
 test = "test_wire_queue_and_lifecycle.py::test_wm2_empty_memo"
@@ -1200,7 +1222,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2", "spec-1-5:3"]
 exposure = false
 expected = "A pair with no subscription. One Actor instance of A writes x (its memo becomes [], asserted); B subscribes over REST (baseline fetched); the same instance writes again and B gets no callback: B keeps the baseline. A second instance then writes and B gets the diff. The per-instance rule (3.16): before 3.16 an empty list was read again on every write, so B got the first instance's second diff too. An instance the library builds lives for one request."
-reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WM3"]
 test = "test_wire_queue_and_lifecycle.py::test_wm3_recreated_publisher_sends"
@@ -1208,7 +1230,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2", "spec-1-5:3"]
 exposure = false
 expected = "WC6's setup and delete (a suspended subtarget y), then A created again under its id through the SDK (no trust, no subscription, asserted); a new subscriber B2 trusts and subscribes (set up, not recorded); a fresh instance of A writes y and B2 gets the diff. Before 3.16 the inherited suspension dropped it. The deletion removes the row (WC6), so the create-time clear of a row left by a pre-3.16 deletion has nothing to remove here; a unit test pins that case (test_subscription_list_memo.py)."
-reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WM4"]
 test = "test_wire_queue_and_lifecycle.py::test_wm4_subscriber_during_suspension"
@@ -1216,7 +1238,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["subs-list-cache-lifetime:2", "spec-1-5:3"]
 exposure = false
 expected = "A pair with no subscription. One instance of A suspends properties and writes x (its memo becomes [], asserted; nothing is sent); B subscribes over REST (baseline fetched); the same instance resumes and B gets the resync callback. The resume reads the list again (3.16); identical before 3.16, where an empty list was always read again."
-reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)"]
+reason = ["2026-11-12 first recording (subs-list-cache-lifetime:2)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 the resync sweep reserves the rebuild interval (spec-1-5:3)"]
 
 [rows."WP2"]
 test = "test_wire_permissions.py::test_wp2_grant_shrunk"
@@ -1260,7 +1282,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "GET /properties/notes/1 answers item 1 and sends nothing; PUT /properties/notes/0 replaces item 0 (204, an update diff), PUT /properties/notes/2 at the length appends (204, an append diff), DELETE /properties/notes/1 removes item 1 and the rest close up (204, a delete diff with old_item). B applies each and ends with A's list."
-reason = ["2026-11-15 first recording (spec-1-5:1)"]
+reason = ["2026-11-15 first recording (spec-1-5:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 [rows."WL30.subtarget"]
 test = "test_wire_list_properties.py::test_wl30"
@@ -1268,7 +1290,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
 expected = "Subtarget notes, the steps of WL30.target: the same list diffs on the list's subtarget; B's list follows A's."
-reason = ["2026-11-15 first recording (spec-1-5:1)"]
+reason = ["2026-11-15 first recording (spec-1-5:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
 
 # ---------------------------------------------------------------------------
 # spec-1-5, Phase 2: anonymous webhooks
@@ -1281,3 +1303,31 @@ owners = []
 exposure = false
 expected = "No credentials: a POST to B's wire_webhook (registered with allow_anonymous) runs that hook, which is given anonymous: true and the raw body, and answers 200 with its result; a GET to it and a POST to wire_ping (not flagged) answer 401 and run nothing."
 reason = ["2026-11-15 first recording (spec-1-5:2)"]
+
+# ---------------------------------------------------------------------------
+# spec-1-5, Phase 3: the clear, a failed resync fetch, the resync sweep
+# ---------------------------------------------------------------------------
+
+[rows."WS10.target"]
+test = "test_wire_scalar_properties.py::test_ws10_clear_with_a_list"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "DELETE /properties with two properties and a list at A: one diff {one: \"\", two: \"\"}, one sequence and one callback; the list notes stays at A and in B's replica (owner, 2026-11-15: a clear deletes simple properties only)."
+reason = ["2026-11-15 first recording (spec-1-5:3)"]
+
+[rows."WS11.target"]
+test = "test_wire_scalar_properties.py::test_ws11_resync_fetch_fails"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "Suspend, put x, resume: B's resync baseline fetch fails (forced), B answers 503 with Retry-After, its sequence is unmoved and the rebuild owed; A's next write (y) makes B rebuild from the baseline, and B holds x and y."
+reason = ["2026-11-15 first recording (spec-1-5:3)"]
+
+[rows."WS12.target"]
+test = "test_wire_scalar_properties.py::test_ws12_resync_sweeps"
+topologies = ["same_host", "two_hosts"]
+owners = []
+exposure = false
+expected = "B holds x and y; A suspends, deletes x (no diff), resumes: the resync's baseline lacks x and B's sweep removes it; y stays."
+reason = ["2026-11-15 first recording (spec-1-5:3)"]

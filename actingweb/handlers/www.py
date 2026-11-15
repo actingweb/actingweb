@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Any
 
+from actingweb.actor import previous_kw
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
 from actingweb.property_list import (
@@ -500,9 +501,17 @@ class WwwHandler(base_handler.BaseHandler):
                 elif lookup and myself.property:
                     # This is a regular property
                     myself.property[prop_name] = None
-                    # Register diff for subscription callbacks
+                    # Register diff for subscription callbacks: the encoded
+                    # ``""`` every writer sends for a delete (3.16)
                     myself.register_diffs(
-                        target="properties", subtarget=prop_name, blob=""
+                        target="properties",
+                        subtarget=prop_name,
+                        blob=json.dumps(""),
+                        **previous_kw(
+                            myself.previous_for_resource_subscribers(
+                                "properties", prop_name, lambda: lookup
+                            )
+                        ),
                     )
                     deleted = True
 
@@ -1608,6 +1617,11 @@ class WwwHandler(base_handler.BaseHandler):
                             500, "PropertyStore is not initialized"
                         )
                         return
+                    previous = myself.previous_for_resource_subscribers(
+                        "properties",
+                        property_name,
+                        lambda: myself.property[property_name],
+                    )
                     myself.property[property_name] = final_value
                     # 3.16: as the REST PUT registers it (nothing was sent).
                     myself.register_diffs(
@@ -1616,6 +1630,7 @@ class WwwHandler(base_handler.BaseHandler):
                         blob=final_value
                         if isinstance(final_value, str)
                         else json.dumps(final_value),
+                        **previous_kw(previous),
                     )
 
                 else:

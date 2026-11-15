@@ -31,7 +31,9 @@ class SubscriptionDiff(Model):
     id = UnicodeAttribute(hash_key=True)
     subid_seqnr = UnicodeAttribute(range_key=True)
     subid = UnicodeAttribute()
-    timestamp = UTCDateTimeAttribute(default=datetime.datetime.utcnow())
+    # Set by ``create()`` (3.16): a default here was evaluated once, at import,
+    # so every diff of a process carried the same time.
+    timestamp = UTCDateTimeAttribute()
     diff = UnicodeAttribute()
     seqnr = NumberAttribute(default=1)
 
@@ -117,6 +119,7 @@ class DbSubscriptionDiff:
             subid=subid,
             diff=diff,
             seqnr=seqnr,
+            timestamp=datetime.datetime.now(datetime.UTC),
         )
         try:
             self.handle.save(condition=SubscriptionDiff.subid_seqnr.does_not_exist())

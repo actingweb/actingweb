@@ -35,7 +35,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"k\": {\"j\": 5, \"new\": 6}}",
+         "data": "{\"k\": {\"j\": 5, \"i\": 1, \"new\": 6}, \"keep\": 2}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         }
@@ -156,9 +156,11 @@
        "scalars": {
         "p": {
          "k": {
+          "i": 1,
           "j": 5,
           "new": 6
-         }
+         },
+         "keep": 2
         }
        }
       },
@@ -203,9 +205,11 @@
          "actor": "<B>",
          "data": {
           "k": {
+           "i": 1,
            "j": 5,
            "new": 6
-          }
+          },
+          "keep": 2
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -222,9 +226,11 @@
        "request": {
         "data": {
          "k": {
+          "i": 1,
           "j": 5,
           "new": 6
-         }
+         },
+         "keep": 2
         },
         "granularity": "high",
         "id": "<A>",
@@ -232,7 +238,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -287,12 +293,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"k\": {\"j\": 5, \"new\": 6}}",
+         "data": "{\"k\": {\"j\": 5, \"i\": 1, \"new\": 6}, \"keep\": 2}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"k\": {\"j\": 7, \"i\": 1, \"new\": 6}}",
+         "data": "{\"k\": {\"j\": 7, \"i\": 1, \"new\": 6}, \"keep\": 2}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -416,7 +422,8 @@
           "i": 1,
           "j": 7,
           "new": 6
-         }
+         },
+         "keep": 2
         }
        }
       },
@@ -464,7 +471,8 @@
            "i": 1,
            "j": 7,
            "new": 6
-          }
+          },
+          "keep": 2
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -484,7 +492,8 @@
           "i": 1,
           "j": 7,
           "new": 6
-         }
+         },
+         "keep": 2
         },
         "granularity": "high",
         "id": "<A>",
@@ -492,7 +501,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

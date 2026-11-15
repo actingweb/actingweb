@@ -880,7 +880,7 @@
         "sequence": 1,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>",
+        "timestamp": "<ts:iso-z>",
         "url": "http://<wire_app>/<A>/subscriptions/<B>/<sub1>/1"
        },
        "response": null,
@@ -956,7 +956,7 @@
         "sequence": 1,
         "subscriptionid": "<sub2>",
         "target": "properties",
-        "timestamp": "<ts:space>",
+        "timestamp": "<ts:iso-z>",
         "url": "http://<wire_app>/<A>/subscriptions/<C>/<sub2>/1"
        },
        "response": null,
@@ -1032,7 +1032,7 @@
         "sequence": 1,
         "subscriptionid": "<sub3>",
         "target": "properties",
-        "timestamp": "<ts:space>",
+        "timestamp": "<ts:iso-z>",
         "url": "http://<wire_app>/<A>/subscriptions/<D>/<sub3>/1"
        },
        "response": null,
@@ -1108,7 +1108,7 @@
         "sequence": 1,
         "subscriptionid": "<sub4>",
         "target": "properties",
-        "timestamp": "<ts:space>",
+        "timestamp": "<ts:iso-z>",
         "url": "http://<wire_app>/<A>/subscriptions/<E>/<sub4>/1"
        },
        "response": null,
@@ -1184,7 +1184,7 @@
         "sequence": 1,
         "subscriptionid": "<sub5>",
         "target": "properties",
-        "timestamp": "<ts:space>",
+        "timestamp": "<ts:iso-z>",
         "url": "http://<wire_app>/<A>/subscriptions/<F>/<sub5>/1"
        },
        "response": null,

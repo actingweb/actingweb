@@ -82,6 +82,67 @@ def _still_granted(permissions: Any, names: list[str]) -> list[str]:
     ]
 
 
+_HOOK_TASKS: set[Any] = set()
+
+
+def _hook_task_done(task: Any) -> None:
+    """A data hook run as a task finished: drop the reference and log an
+    error it raised (folded, as a synchronous hook's error is)."""
+    _HOOK_TASKS.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(f"Error in subscription_data_hook: {error}")
+
+
+def run_subscription_data_hooks(
+    config: Any,
+    actor_interface: Any,
+    peer_id: str,
+    target: str,
+    data: Any,
+    sequence: int,
+    callback_type: str,
+) -> None:
+    """Run the application's subscription data hooks for one applied
+    change: the target's own, then the wildcard ones. A hook's error is
+    logged and folded (at most once: it must not get the change applied
+    twice). Shared by the callback handler and the poll (3.16: a gap resync's
+    poll ran none)."""
+    hooks = getattr(config, "subscription_data_hooks", None) or {}
+    if not hooks:
+        return
+    import asyncio
+    import inspect
+
+    for name in (target, "*"):
+        for hook in hooks.get(name, []):
+            try:
+                args = (actor_interface, peer_id, target, data, sequence, callback_type)
+                if inspect.iscoroutinefunction(hook):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is None:
+                        # Can't await in sync context, run via asyncio.run
+                        asyncio.run(hook(*args))
+                    else:
+                        # A poll run on the loop: the hook is a task, kept
+                        # until done.
+                        task = loop.create_task(hook(*args))
+                        _HOOK_TASKS.add(task)
+                        task.add_done_callback(_hook_task_done)
+                else:
+                    hook(*args)
+            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
+                logger.error(
+                    f"Error in subscription_data_hook "
+                    f"{'wildcard' if name == '*' else 'for ' + target}: {e}"
+                )
+
+
 class CallbacksHandler(base_handler.BaseHandler):
     """``/<actor>/callbacks/<name>``.
 
@@ -133,6 +194,57 @@ class CallbacksHandler(base_handler.BaseHandler):
         logger.debug(f"Refused callback to the reserved name {name!r}")
         if self.response:
             self.response.set_status(403, "Forbidden")
+        return True
+
+    def _resync_fetch_failed(
+        self, actor_interface: Any, peer_id: str, subscription_id: str
+    ) -> None:
+        """A resync whose baseline could not be fetched: answer 503 with
+        ``Retry-After`` (the handler's retry-later answer) and mark the
+        rebuild owed (3.16)."""
+        from ..callback_processor import CallbackProcessor
+
+        self._callback_retry_later = True
+        try:
+            CallbackProcessor(actor_interface).settle_rebuild(
+                peer_id, subscription_id, rebuilt=False, restart_interval=False
+            )
+        except DbError as e:  # folds DbError: the 503 stands; logged
+            logger.error(
+                f"Could not mark the rebuild of {peer_id}:{subscription_id} "
+                f"owed after a failed resync fetch: {e}"
+            )
+
+    @staticmethod
+    def _sweep_after_resync(
+        processor: Any,
+        store: Any,
+        peer_id: str,
+        subscription_id: str,
+        level: dict[str, Any],
+        baseline: Any,
+        applied: Any,
+    ) -> bool:
+        """After a pushed resync's baseline: remove from the replica what the
+        baseline no longer has (3.16, specification 1.5), under the rebuild's
+        limit of one attempt a minute per subscription, since it lists the
+        replica. False when the limit holds it back."""
+        from ..interface.subscription_manager import sweep_after_baseline
+
+        if not processor.begin_rebuild(peer_id, subscription_id):
+            return False
+        owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
+        sweep_after_baseline(
+            store._actor._core_actor,  # noqa: SLF001
+            store,
+            peer_id=peer_id,
+            target=level["target"],
+            subtarget=level["subtarget"],
+            resource=level["resource"],
+            baseline=baseline,
+            applied=applied,
+            owed=owed,
+        )
         return True
 
     def _refuse_unhandled_name(self, name: str) -> bool:
@@ -888,6 +1000,36 @@ class CallbacksHandler(base_handler.BaseHandler):
         # But low-granularity/resync with URL only → must send PUT to acknowledge
         fetched_from_url = bool(callback_url and not callback_data)
 
+        if "data" in params and callback_type != "resync":
+            carried_seq = params.get("sequence")
+            if not isinstance(carried_seq, int) or isinstance(carried_seq, bool):
+                # A diff with data and no sequence (3.16, specification 1.5):
+                # 400, as a low-granularity one without a sequence is; it was
+                # taken as sequence 0, a duplicate, and dropped with 204.
+                logger.warning(
+                    f"Callback from {peer_id} for {subscription_id}: data "
+                    "without an integer sequence"
+                )
+                return False
+
+        if callback_type != "resync" and config.auto_storage:
+            # An owed rebuild that is due runs on the next callback, whatever
+            # its sequence (3.16): after a resync whose fetch failed, the
+            # next diff arrives behind a gap and would otherwise wait. The
+            # baseline is read after the publisher stored this callback's
+            # change, so the rebuild carries it.
+            from ..interface.subscription_manager import SubscriptionManager
+
+            mgr = SubscriptionManager(actor_interface._core_actor)  # noqa: SLF001
+            if mgr._rebuild_owed_and_due(peer_id, subscription_id, config):  # noqa: SLF001
+                rebuilt = mgr.rebuild_subscription(
+                    peer_id, subscription_id, config=config
+                )
+                if rebuilt.success:
+                    return True
+                self._callback_retry_later = True
+                return False
+
         if fetched_from_url and callback_type != "resync":
             fetched_seq = params.get("sequence")
             if not isinstance(fetched_seq, int) or isinstance(fetched_seq, bool):
@@ -925,9 +1067,13 @@ class CallbacksHandler(base_handler.BaseHandler):
             if callback_type == "resync":
                 # Resync callback - use shared baseline fetch method for consistency
                 # This ensures proper handling of ?metadata=true and property list transformations
-                target = params.get("target", "properties")
-                subtarget = params.get("subtarget")
-                resource = params.get("resource")
+                # At the stored subscription's level, not the body's (3.16):
+                # the fetch and the sweep after it have one scope.
+                target = subscription.get("target") or params.get(
+                    "target", "properties"
+                )
+                subtarget = subscription.get("subtarget") or None
+                resource = subscription.get("resource") or None
 
                 try:
                     # Use SubscriptionManager's baseline fetch helper
@@ -962,17 +1108,21 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"{'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
-                        # An empty baseline and a failed fetch look the same
-                        # here (both None); applying {} moves the sequence on.
-                        # Telling them apart is in the subscriber-hardening
-                        # todo.
+                        # A failed fetch (3.16): not applied as an empty
+                        # baseline. 503 with Retry-After, the sequence not
+                        # written, and the rebuild owed so the next callback
+                        # or sync rebuilds the replica.
                         logger.warning(f"Failed to fetch resync baseline for {target}")
-                        callback_data = {}
+                        self._resync_fetch_failed(
+                            actor_interface, peer_id, subscription_id
+                        )
+                        return False
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error fetching resync baseline: {e}")
-                    callback_data = {}
+                    self._resync_fetch_failed(actor_interface, peer_id, subscription_id)
+                    return False
             else:
                 # Low-granularity diff callback - fetch from subscription diff endpoint
                 try:
@@ -1088,6 +1238,22 @@ class CallbacksHandler(base_handler.BaseHandler):
                     }
                     if cb.callback_type == CallbackType.RESYNC:
                         applied = store.apply_resync_data(cb.data, **level)
+                        if not applied.failed and not self._sweep_after_resync(
+                            processor,
+                            store,
+                            peer_id,
+                            subscription_id,
+                            level,
+                            cb.data,
+                            applied,
+                        ):
+                            # Inside the rebuild interval: applied without the
+                            # sweep, and the rebuild stays owed (it sweeps).
+                            out_of_step = {
+                                "list": "",
+                                "operation": "resync",
+                                "why": "the sweep waits for the rebuild interval",
+                            }
                         # A baseline settles an owed rebuild only when every
                         # entry was stored and it carried each list owed
                         # (one it lacks may be stale); otherwise it stays
@@ -1125,71 +1291,15 @@ class CallbacksHandler(base_handler.BaseHandler):
                     )
                     cb.out_of_step = out_of_step
                     return
-                if config.subscription_data_hooks:
-                    import inspect
-
-                    # Invoke target-specific hooks
-                    if target in config.subscription_data_hooks:
-                        for hook in config.subscription_data_hooks[target]:
-                            try:
-                                if inspect.iscoroutinefunction(hook):
-                                    # Can't await in sync context, run via asyncio.run
-                                    import asyncio
-
-                                    asyncio.run(
-                                        hook(
-                                            actor_interface,
-                                            peer_id,
-                                            target,
-                                            cb.data,
-                                            cb.sequence,
-                                            cb.callback_type.value,
-                                        )
-                                    )
-                                else:
-                                    hook(
-                                        actor_interface,
-                                        peer_id,
-                                        target,
-                                        cb.data,
-                                        cb.sequence,
-                                        cb.callback_type.value,
-                                    )
-                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
-                                logger.error(
-                                    f"Error in subscription_data_hook for {target}: {e}"
-                                )
-
-                    # Invoke wildcard hooks
-                    if "*" in config.subscription_data_hooks:
-                        for hook in config.subscription_data_hooks["*"]:
-                            try:
-                                if inspect.iscoroutinefunction(hook):
-                                    import asyncio
-
-                                    asyncio.run(
-                                        hook(
-                                            actor_interface,
-                                            peer_id,
-                                            target,
-                                            cb.data,
-                                            cb.sequence,
-                                            cb.callback_type.value,
-                                        )
-                                    )
-                                else:
-                                    hook(
-                                        actor_interface,
-                                        peer_id,
-                                        target,
-                                        cb.data,
-                                        cb.sequence,
-                                        cb.callback_type.value,
-                                    )
-                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
-                                logger.error(
-                                    f"Error in subscription_data_hook wildcard: {e}"
-                                )
+                run_subscription_data_hooks(
+                    config,
+                    actor_interface,
+                    peer_id,
+                    target,
+                    cb.data,
+                    cb.sequence,
+                    cb.callback_type.value,
+                )
 
                 # Invoke legacy callback hooks (for backward compatibility)
                 if self.hooks:
@@ -1338,12 +1448,30 @@ class CallbacksHandler(base_handler.BaseHandler):
                     from ..interface.subscription_manager import SubscriptionManager
 
                     mgr = SubscriptionManager(actor_interface._core_actor)
-                    sync_result = mgr.sync_subscription(peer_id, subscription_id)
+                    # With the application's configuration (3.16): its data
+                    # hooks run for each change the poll applies.
+                    sync_result = mgr.sync_subscription(
+                        peer_id, subscription_id, config=config
+                    )
                     if sync_result.success:
                         logger.info(
                             f"Resync completed: {sync_result.diffs_processed} diffs, "
                             f"sequence now at {sync_result.final_sequence}"
                         )
+                        if (
+                            isinstance(sequence, int)
+                            and sync_result.final_sequence < sequence
+                        ):
+                            # The poll did not bring the change that triggered
+                            # it (3.16: it was dropped): apply it now.
+                            processor.process_callback_sync(
+                                peer_id=peer_id,
+                                subscription_id=subscription_id,
+                                sequence=sequence,
+                                data=callback_data,
+                                callback_type=callback_type,
+                                handler=handler,
+                            )
                     else:
                         logger.warning(
                             f"Resync failed: {sync_result.error or 'unknown error'}"

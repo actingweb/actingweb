@@ -104,6 +104,8 @@ block:
 
    @app.subscription_data_hook("properties")
    def on_properties_changed(actor, peer_id, target, data, sequence, callback_type):
+       # A delete arrives as "" ({"name": ""} for this whole-target
+       # subscription); treat "" as absent.
        print(f"[{actor.id}] update from {peer_id} ({callback_type} #{sequence}): {data}")
 
 Run It

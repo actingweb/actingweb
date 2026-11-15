@@ -223,7 +223,7 @@
       "sequence": 1,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -459,7 +459,7 @@
       "sequence": 2,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -701,7 +701,7 @@
       "sequence": 3,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -949,7 +949,7 @@
       "sequence": 4,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -1203,7 +1203,7 @@
       "sequence": 5,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -1463,7 +1463,7 @@
       "sequence": 6,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204

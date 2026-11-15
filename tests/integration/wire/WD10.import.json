@@ -237,7 +237,7 @@
       "sequence": 1,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -287,7 +287,7 @@
       "sequence": 2,
       "subscriptionid": "<sub1>",
       "target": "properties",
-      "timestamp": "<ts:space>"
+      "timestamp": "<ts:iso-z>"
      },
      "response": null,
      "status": 204
@@ -377,7 +377,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 3
+        "version": 5
        }
       ],
       "peer_permissions": {
@@ -537,6 +537,25 @@
        },
        "host": "wire_app",
        "method": "GET",
+       "path": "/<A>/properties",
+       "query": "",
+       "request": null,
+       "response": {
+        "memories": {
+         "_list": true,
+         "count": 3
+        }
+       },
+       "status": 200
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [],
+       "headers": {
+        "content-type": "application/json"
+       },
+       "host": "wire_app",
+       "method": "GET",
        "path": "/<A>/properties/memories",
        "query": "",
        "request": null,
@@ -590,7 +609,7 @@
       "subscriptionid": "<sub1>",
       "subtarget": "memories",
       "target": "properties",
-      "timestamp": "<ts:iso-offset>",
+      "timestamp": "<ts:iso-z>",
       "type": "resync",
       "url": "http://<wire_app>/<A>/properties/memories"
      },

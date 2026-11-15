@@ -35,7 +35,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"j\": 5, \"new\": 6}",
+         "data": "{\"j\": 5, \"i\": 1, \"new\": 6}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         }
@@ -156,6 +156,7 @@
        "scalars": {
         "p": {
          "k": {
+          "i": 1,
           "j": 5,
           "new": 6
          }
@@ -202,6 +203,7 @@
         {
          "actor": "<B>",
          "data": {
+          "i": 1,
           "j": 5,
           "new": 6
          },
@@ -219,6 +221,7 @@
        "query": "",
        "request": {
         "data": {
+         "i": 1,
          "j": 5,
          "new": 6
         },
@@ -229,7 +232,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -284,7 +287,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"j\": 5, \"new\": 6}",
+         "data": "{\"j\": 5, \"i\": 1, \"new\": 6}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         },
@@ -486,7 +489,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

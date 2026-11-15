@@ -12,7 +12,6 @@ granularity ``high``, a target-level subscription, both topologies.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
@@ -73,8 +72,8 @@ def test_wd2_timestamp_formats(wire_pair, topology):
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wd3_two_writes_a_second_apart(wire_pair, topology):
     """WD3: two writes a second apart. One recording for both backends; the
-    stored timestamps are asserted per backend (DynamoDB stamps every diff
-    with one value, PostgreSQL each with its own)."""
+    stored timestamps differ on both (spec-1-5:3: DynamoDB stamped every diff
+    of a process with the one value its default took at import)."""
     s = wire_pair(topology, grant=["*"])
     a = s.publisher
     s.step("put one", lambda: _put(a, "x", {"v": 1}))
@@ -82,13 +81,7 @@ def test_wd3_two_writes_a_second_apart(wire_pair, topology):
     s.step("put two", lambda: _put(a, "x", {"v": 2}))
     stamps = [d.get("timestamp") for d in _stored_diffs(s)]
     assert len(stamps) == 2, stamps
-    if os.environ.get("DATABASE_BACKEND", "dynamodb") == "postgresql":
-        # A difference spec-1-5:3 owns: PostgreSQL stamps each diff.
-        assert stamps[0] != stamps[1], stamps
-    else:
-        # A difference spec-1-5:3 owns: DynamoDB's default is evaluated once,
-        # at import, so every diff carries the same value.
-        assert stamps[0] == stamps[1], stamps
+    assert stamps[0] != stamps[1], stamps
     check("WD3", s.recording(), variant=topology)
 
 
@@ -145,12 +138,21 @@ def test_wd9_gap_resync(wire_pair, topology):
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wd11_resume_none(wire_pair, topology):
-    """WD11: granularity ``none``: SDK suspend, a write, resume."""
+    """WD11: granularity ``none``: SDK suspend, a write, resume, then B's
+    poll (spec-1-5:3: no resync callback; the resync waits as a marker,
+    which B's poll acts on, and B holds x)."""
     s = wire_pair(topology, grant=["*"], granularity="none")
-    a = s.publisher
+    a, b = s.publisher, s.subscribers[0]
     s.step("suspend", lambda: a.interface().subscriptions.suspend("properties"))
     s.step("put", lambda: _put(a, "x", {"v": 1}))
     s.step("resume", lambda: a.interface().subscriptions.resume("properties"))
+    subid = (
+        b.interface().subscriptions.get_subscriptions_to_peer(a.id)[0].subscription_id
+    )
+    s.step(
+        "B polls",
+        lambda: b.interface().subscriptions.sync_subscription(a.id, subid).success,
+    )
     check("WD11", s.recording(), variant=topology)
 
 

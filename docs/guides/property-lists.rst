@@ -1087,6 +1087,10 @@ relying on batch semantics:
   # already used) -- as of 3.14 this replace is a conditional write, not
   # an unconditional overwrite of whatever it finds.
 
+``DELETE /{actor_id}/properties`` (all properties) deletes the simple
+properties only: lists stay, and the clear's one diff names only what it
+deleted. Delete a list with its own DELETE.
+
 **DELETE entire list**::
 
   DELETE /{actor_id}/properties/{list_name}

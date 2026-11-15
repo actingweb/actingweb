@@ -113,8 +113,14 @@ class TestPropertyStoreNotifications:
         )
         store.clear()
 
-        # Should call register_diffs for each key + one for "clear all"
-        assert mock_actor.register_diffs.call_count >= 2
+        # One diff carrying every deleted name, registered once before the
+        # deletes (3.16, specification 1.5).
+        assert mock_actor.register_diffs.call_count == 1
+        kwargs = mock_actor.register_diffs.call_args.kwargs
+        assert kwargs["subtarget"] is None
+        import json
+
+        assert json.loads(kwargs["blob"]) == {"key1": "", "key2": ""}
 
     def test_set_without_notification_does_not_register_diff(self):
         """Test that set_without_notification doesn't call register_diffs."""

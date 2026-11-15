@@ -7,6 +7,7 @@ import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
+from actingweb.actor import previous_kw
 from actingweb.db import get_property_list
 from actingweb.handlers import base_handler
 from actingweb.list_core import ListNameTakenError
@@ -311,17 +312,19 @@ def _value_at(value: Any, path: list[str]) -> Any:
 def _resource_blob(stored: Any, path: list[str], blob: str) -> str:
     """The diff blob for a write at ``path`` (``<name>/<resource>/...``).
 
-    ``register_diffs`` takes a resource's blob as the whole resource object.
-    For a two-segment path that is the request body; deeper, it is the
-    resource as now stored (3.16: the body alone put a value three levels
-    down at the second level of every subscriber's copy, under a path no
-    exclusion named). A resource that is no longer there (a deleted one) is
-    an empty blob, as before.
+    ``register_diffs`` takes a resource's blob as the whole resource object:
+    the resource as now stored, after the hooks, at any depth (3.16: the body
+    alone put a value three levels down at the second level of every
+    subscriber's copy, and a two-segment write sent the request body before
+    the hooks). A resource that is no longer there (a deleted one) is the
+    encoded ``""``.
     """
-    if len(path) <= 2:
-        return blob
     if not isinstance(stored, dict) or path[1] not in stored:
-        return ""
+        # Gone: the one delete representation, the encoded ``""`` (3.16; a
+        # raw ``""`` was dropped before it reached a subscriber).
+        return json.dumps("")
+    # The resource as stored, after the hooks (3.16; a two-segment write sent
+    # the request body).
     return json.dumps(stored[path[1]])
 
 
@@ -645,14 +648,12 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
     def _may_delete_every_name(
         self, actor_id: str, auth_obj: Any, actor_interface: Any
     ) -> bool:
-        """Whether the peer may delete each stored property and list, and
-        none holds a part its grant excludes (one grant read for all)."""
+        """Whether the peer may delete each stored property, and none holds
+        a part its grant excludes (one grant read for all). Lists are not
+        cleared (owner, 2026-11-15), so no delete right on them is asked."""
         request_decision = self._decision
         try:
             names = list(actor_interface.properties.to_dict())
-            lists = actor_interface.property_lists
-            if lists is not None:
-                names.extend(lists.list_all())
             for name in names:
                 if not self._check_property_permission(
                     actor_id, auth_obj, name, "delete"
@@ -1709,17 +1710,26 @@ class PropertiesHandler(_PropertyHandlerBase):
                     else:
                         self.response.set_status(400, "Payload is not accepted")
                         return
+            previous = myself.previous_for_resource_subscribers(
+                "properties",
+                name,
+                lambda: myself.property[name] if myself.property else None,
+            )
+            stored = json.dumps(new) if is_json or not isinstance(new, str) else new
             try:
-                if is_json:
-                    if myself and myself.property:
-                        myself.property[name] = json.dumps(new)
-                else:
-                    if myself and myself.property:
-                        myself.property[name] = new
+                if myself and myself.property:
+                    myself.property[name] = stored
             except ListNameTakenError as e:
                 self._respond_name_taken(e)
                 return
-            myself.register_diffs(target="properties", subtarget=name, blob=body)
+            # The value stored, after the hooks (3.16; the request body
+            # before them); an empty text is the encoded ``""`` a delete is.
+            myself.register_diffs(
+                target="properties",
+                subtarget=name,
+                blob=stored if stored != "" else json.dumps(""),
+                **previous_kw(previous),
+            )
             self.response.set_status(204)
             return
         # Keep text blob for later diff registration
@@ -1777,6 +1787,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             subtarget=name,
             resource=resource,
             blob=_resource_blob(final_res, path, blob),
+            whole=res,
         )
         self.response.set_status(204)
 
@@ -2645,8 +2656,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if result is None:
                     self.response.set_status(403)
                     return
+            # One diff for every deleted name, registered before the deletes
+            # (PropertyStore.clear, 3.16); lists are not cleared.
             actor_interface.properties.clear()
-            myself.register_diffs(target="properties", subtarget=None, blob="")
             self.response.set_status(204)
             return
         if len(path) == 1:
@@ -2719,7 +2731,18 @@ class PropertiesHandler(_PropertyHandlerBase):
                         return
             if myself and myself.property:
                 myself.property[name] = None
-            myself.register_diffs(target="properties", subtarget=name, blob="")
+            # The encoded ``""`` (3.16): a raw one was dropped, so a REST
+            # delete reached no subscription on the name itself.
+            myself.register_diffs(
+                target="properties",
+                subtarget=name,
+                blob=json.dumps(""),
+                **previous_kw(
+                    myself.previous_for_resource_subscribers(
+                        "properties", name, lambda: old_prop
+                    )
+                ),
+            )
             self.response.set_status(204)
             return
         orig = myself.property[name] if myself and myself.property else None
@@ -2758,6 +2781,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             subtarget=name,
             resource=resource,
             blob=_resource_blob(orig, path, ""),
+            whole=res,
         )
         self.response.set_status(204)
 

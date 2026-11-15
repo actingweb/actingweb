@@ -1037,7 +1037,7 @@ reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]
 [rows."WD7"]
 test = "test_wire_delivery.py::test_wd7_granularity_none"
 topologies = ["same_host", "two_hosts"]
-owners = []
+owners = ["spec-1-5:3"]
 exposure = false
 expected = "Granularity none: the write stores a diff and sends nothing. B's SDK sync_peer polls A's queue, clears it with PUT {sequence}, then fetches GET /properties, /methods and /actions; B holds x and a scalar timestamp; A's queue empty."
 reason = ["2026-11-11 first recording (subscription-wire-baseline:1)"]

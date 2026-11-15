@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 ---
 
 # Implementation Plan: "creator equals stored email" enforced where the email is written
@@ -1376,3 +1376,45 @@ Medium, six Low. All are folded in above, marked 2026-11-15.
 - The read-before, bucket-after straddle of a sign-in across a rename on
   PostgreSQL: the plan adds a test that records the outcome and does not
   claim to close it.
+
+## Implementation Summary
+
+**Completed:** 2026-11-15
+**All phases:** Complete (`2a356e5`, `dd2062f`, `68da643`, `62f16f8`)
+**Test status:** All passing. Final Full tier on `62f16f8`: DynamoDB 7,593
+passed, PostgreSQL 7,364 passed; ruff, pyright, `verify_groups.py` and the
+docs build clean. Emm's suite on this branch is the verification's (gate 2).
+
+### Deviations from Plan
+
+- Phase 1: the types live in `actingweb/db/creator_rename.py`; `equals`
+  takes a string only; PostgreSQL puts every condition in its statement and
+  locks rows in key order, as `delete_bucket` and the whole-actor attribute
+  delete now do too; the old record is released on a rename to an exempt
+  creator.
+- Phase 2: every email write the link applies to is one conditional
+  operation, not only the ones that move the creator; a fault reads back;
+  the create-time shortcut is spent by its first write; the owner accessor
+  is `_owning_actor()`.
+- Phase 3: only a holder vouched for the address blocks; holders are
+  confirmed by a read; the sweep's scope is "vouched for the current
+  creator"; `--clear-held-email` is conditional; `--email-as-creator`
+  resets only an address creator's email.
+- Phase 4: the upgrade order is stated against Step 0's numbers instead of
+  renumbering it.
+- Each phase's notes give the detail and what the codex reviews found.
+
+### Learnings
+
+- PynamoDB sends a transaction's items grouped by kind (checks, deletes,
+  puts, updates), whatever order they are added in, and DynamoDB Local
+  reports each failed item at its own position; a failed put can return the
+  stored row (`ALL_OLD`) inside the cancellation.
+- A PostgreSQL locking read cannot lock a key that has no row: a condition
+  on an absent key belongs in the write statement, not in Python after the
+  read.
+- Removing a load-time heal turns every unconditional write near the
+  invariant into a way to break it for good; each needs the condition the
+  heal used to make unnecessary.
+- A full test run must not overlap edits to the tree it tests: a run that
+  picked up half-written code was discarded and repeated.

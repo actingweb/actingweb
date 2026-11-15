@@ -321,3 +321,16 @@ def test_an_sdk_none_is_a_delete_every_level_receives(pub: _Pub) -> None:
     actor.properties["x"] = None
     assert pub.diffs("subtarget") == [""]
     assert pub.diffs("target") == [{"x": ""}]
+
+
+def test_a_post_that_overwrites_the_parent_tells_the_resource(pub: _Pub) -> None:
+    r = pub.request("POST", f"/{pub.actor_id}/properties", json={"x": {"s": 9}})
+    assert r.status_code == 201, r.status_code
+    assert pub.diffs("resource") == [""]
+    assert pub.diffs("subtarget") == [{"s": 9}]
+
+
+def test_a_post_that_keeps_the_resource_sends_it_its_value(pub: _Pub) -> None:
+    r = pub.request("POST", f"/{pub.actor_id}/properties", json={"x": {"r": 7}})
+    assert r.status_code == 201
+    assert pub.diffs("resource") == [7]

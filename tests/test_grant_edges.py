@@ -169,6 +169,8 @@ def test_a_bulk_post_that_faults_registers_what_it_applied() -> None:
 
     myself = mock.Mock()
     myself.property = _Props()
+    # No resource-level subscriber: no ``previous`` is passed.
+    myself.previous_for_resource_subscribers.return_value = None
     auth = mock.Mock()
     auth.acl = {"peerid": ""}
     result = mock.Mock(success=True, actor=myself, auth_obj=auth)
@@ -206,6 +208,8 @@ def _bulk_handler(params: dict[str, Any] | None, body: Any, fail_on: str) -> Any
 
     myself = mock.Mock()
     myself.property = _Props()
+    # No resource-level subscriber: no ``previous`` is passed.
+    myself.previous_for_resource_subscribers.return_value = None
     auth = mock.Mock()
     auth.acl = {"peerid": ""}
     result = mock.Mock(success=True, actor=myself, auth_obj=auth)

@@ -325,12 +325,9 @@ class TestTrustWithOAuth2Data:
             # These are optional - only present if established via OAuth2
 
     def test_006_get_trust_by_type(self, http_client):
-        """Get trust relationships filtered by type query parameter.
-
-        Note: Uses ?type= instead of ?relationship= because FastAPI has a routing
-        conflict when a query param name matches a path param name in another route.
-        The handler supports both 'type' and 'relationship' query params.
-        """
+        """Get trust relationships filtered by ``?type=``, which filters on the
+        peer's mini-application type (its ``type`` field), not on the
+        relationship; ``?relationship=`` filters on the relationship."""
         response = requests.get(
             f"{self.actor_url}/trust?type=friend",
             auth=(self.creator, self.passphrase),  # type: ignore[arg-type]

@@ -4,7 +4,7 @@ Protocol Specification
 
 **Audience**: Protocol implementers and those who want to understand the ActingWeb protocol itself.
 
-The ActingWeb protocol is an implementation-agnostic specification for building distributed, actor-based systems. Each actor instance has a unique URL and communicates with other actors through RESTful endpoints.
+The ActingWeb protocol is an implementation-agnostic specification for building distributed, actor-based systems. The current version is 1.5, the version this library announces at ``/meta/actingweb/version``. Each actor instance has a unique URL and communicates with other actors through RESTful endpoints.
 
 Overview
 ========

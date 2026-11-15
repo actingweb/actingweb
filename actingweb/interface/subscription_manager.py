@@ -937,7 +937,7 @@ class SubscriptionManager:
                 "subtarget": "...",
                 "resource": "...",
                 "granularity": "...",
-                "sequence": 1
+                "sequence": 0
             }
             Returns None if creation failed.
         """

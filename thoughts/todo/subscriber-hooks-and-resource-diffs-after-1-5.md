@@ -14,11 +14,6 @@ says; these paths were left as they were, each with a reason.
   never takes the marker path, so it loses nothing; an `auto_storage`
   application's hooks miss what the rebuild applied. Run the hooks once
   with the baseline as `callback_type="resync"` after a successful rebuild.
-- **`POST /properties` passes no previous value.** A resource subscriber
-  whose resource went with its parent because of a POST (not a PUT) is not
-  told. The POST applies its keys one by one inside `_apply_post_params`;
-  the previous values would have to be read before the apply pass, for the
-  names that have a resource-level subscriber.
 - **`SubscriptionManager.notify_subscribers(resource=...)`** still sends
   `{resource: blob}` to a subscription above the resource, which a receiver
   applies as the whole value. Pass `whole` (the subtarget's stored value)

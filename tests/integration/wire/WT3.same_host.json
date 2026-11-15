@@ -198,7 +198,7 @@
        "subscriber_adopted",
        "viewer"
       ],
-      "aw_version": "1.0",
+      "aw_version": "1.5",
       "desc": "ActingWeb app: urn:actingweb:test:integration",
       "id": "<A>",
       "info": "http://actingweb.org/",
@@ -267,7 +267,7 @@
          "subscriber_adopted",
          "viewer"
         ],
-        "aw_version": "1.0",
+        "aw_version": "1.5",
         "desc": "ActingWeb app: urn:actingweb:test:integration",
         "id": "<N>",
         "info": "http://actingweb.org/",

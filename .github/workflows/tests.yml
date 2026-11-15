@@ -91,6 +91,13 @@ jobs:
                 code=true
                 docs=true
                 ;;
+              # The specification is a Sphinx source AND a test input:
+              # tests/test_spec_option_tags.py checks that every option tag the
+              # library can advertise is defined in it (spec-1-5). Before *.rst.
+              docs/protocol/actingweb-spec.rst)
+                code=true
+                docs=true
+                ;;
               # Sphinx sources. source_suffix is .rst only — docs/ no longer
               # contains any .md files (the last two were converted or deleted
               # in the AI-agent-discoverability plan's Phase 9), but a future

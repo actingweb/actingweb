@@ -1082,6 +1082,8 @@ Both backends support optimistic locking for concurrent callback handling.
 See Also
 --------
 
+- :doc:`../protocol/actingweb-spec` - The ActingWeb specification (version
+  1.5), the normative rules for subscriptions, diffs and callbacks
 - :doc:`trust-relationships` - Trust lifecycle and subscription cleanup
 - :doc:`troubleshooting` - Subscription troubleshooting guide
 - :doc:`../migration/v3.10` - Migration guide for subscription processing

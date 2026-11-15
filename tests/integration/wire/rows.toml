@@ -181,7 +181,7 @@ test = "test_wire_peer_paths.py::test_wq2_single_diff"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "The first GET of diff 1 answers 200 and consumes it; the second answers 404. The specification forbids a consuming GET (actingweb-spec.rst:1207, :2885-2887)."
+expected = "The first GET of diff 1 answers 200 and consumes it; the second answers 404. Specification 1.5 says a fetched diff is consumed (S11; 1.4 forbade it)."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
@@ -532,6 +532,7 @@ reason = [
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
   "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-15 the announced specification version is 1.5 (spec-1-5:5)",
 ]
 
 [rows."WT2"]
@@ -558,6 +559,7 @@ reason = [
   "2026-11-09 the 202 answer to a request that waits carries no secret or verification_token (reverify-8 Issue 7, iteration 73) (peer-authorisation-fixes:3)",
   "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
   "2026-11-15 the answer to a trust request carries its flags as booleans (spec-1-5:2)",
+  "2026-11-15 the announced specification version is 1.5 (spec-1-5:5)",
 ]
 
 [rows."WT4"]
@@ -571,6 +573,7 @@ reason = [
   "2026-11-08 the initiator refuses a different relationship before sending (outside voice on Phase 3) (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-15 subscriptionbatch is no longer advertised (spec-1-5:1)",
+  "2026-11-15 the announced specification version is 1.5 (spec-1-5:5)",
 ]
 
 [rows."WT5"]

@@ -954,6 +954,19 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **ActingWeb announces and conforms to specification version 1.5.**
+  ``/meta/actingweb/version`` answered ``1.0`` while the library followed most
+  of 1.4 and departed from it in places the specification did not describe.
+  ``docs/protocol/actingweb-spec.rst`` is now version 1.5: rewritten where the
+  library's behaviour is the working design, with the library fixed where it
+  was a defect (the entries above), and generic (it describes the protocol,
+  not this library). Its changelog block lists each normative difference from
+  1.4 as an addition, a clarification or a change; back-pressure, a circuit
+  breaker, payload limits and compression become optional mechanisms (two
+  1.4 MUSTs are now MAYs). **Behavior change:** a peer that compared the
+  version with ``"1.0"``. ``docs/migration/v3.16.rst``, "Specification 1.5",
+  tables every changed answer by endpoint.
+
 - **One write's callbacks are sent concurrently.** The publisher sent each
   subscriber's callback in turn, so one write waited for the sum of its
   subscribers' answers (up to 15 s each for one that hangs). Now at most
@@ -986,6 +999,8 @@ CHANGED
   ``""`` when its key existed and went, a subscription above a nested write
   gets the parent's whole stored value, the diff is the stored value, and a
   clear is one diff naming every deleted property (lists are not cleared).
+  The previous value is read only when a resource-level subscription exists,
+  by ``PUT``, ``DELETE``, ``POST /properties``, the web UI and the SDK alike.
   ``Actor.register_diffs`` takes keyword-only ``previous`` and ``whole``.
   **Behavior change:** see ``docs/migration/v3.16.rst``, "What a subscriber
   receives", for what a subscriber application checks.

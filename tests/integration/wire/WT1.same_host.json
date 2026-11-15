@@ -198,7 +198,7 @@
        "subscriber_adopted",
        "viewer"
       ],
-      "aw_version": "1.0",
+      "aw_version": "1.5",
       "desc": "ActingWeb app: urn:actingweb:test:integration",
       "id": "<A>",
       "info": "http://actingweb.org/",
@@ -231,7 +231,7 @@
      "response": {
       "approved": true,
       "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www",
-      "aw_version": "1.0",
+      "aw_version": "1.5",
       "baseuri": "http://<wire_app>/<B>",
       "capabilities_fetched_at": "<epoch#1>",
       "created_at": "<ts:iso-offset>",

@@ -170,8 +170,9 @@ class Config:
         # Only applies when peer_permissions_caching is enabled
         self.auto_delete_on_revocation: bool = False
         # When True, automatically notify peers when their permissions change
-        # Sends a callback to /callbacks/permissions/{actor_id} on the peer
-        # Only applies when peer_permissions_caching is enabled
+        # Sends a callback to /callbacks/permissions/{actor_id} on the peer,
+        # whether or not peer_permissions_caching is on (that setting is about
+        # what this actor caches of peers' grants, not what it sends)
         self.notify_peer_on_change: bool = True
         #########
         # Configurable ActingWeb settings for this app
@@ -439,7 +440,9 @@ class Config:
         # ActingWeb settings for this app
         #########
         # This app follows the actingweb specification specified
-        self.aw_version = "1.0"
+        # The specification version this library conforms to (3.16: it
+        # announced 1.0).
+        self.aw_version = "1.5"
 
         self.mcp: bool = kwargs.get("mcp", False)
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")

@@ -14,9 +14,11 @@ Start here
 3.16 closes a squat on the actor factory, makes a database fault an error
 instead of a guess, makes creator uniqueness (on by default) a guarantee the
 database enforces, binds every peer to its own paths, and adds ``prompt``
-to the SPA sign-in. Most applications need to check only the first three
-items, item 11 and item 18; an application with ``with_email_as_creator``
-also item 25.
+to the SPA sign-in. It also conforms to specification 1.5, which changes
+what subscribers are told and several answers, sends a write's callbacks
+concurrently, and removes ``FanOutManager``. Most applications need to check
+only the first three items, item 11, item 18 and items 26 to 30; an
+application with ``with_email_as_creator`` also item 25.
 
 .. warning::
 
@@ -35,7 +37,11 @@ also item 25.
    **With ``with_email_as_creator`` it also does not start until
    ``actingweb-unique-creators creator-to-email --apply`` has run**
    (``EmailAsCreatorNotReady``; see `The creator follows the stored
-   email`_).
+   email`_). **An application that passes ``max_payload_for_high_granularity``,
+   ``circuit_breaker_threshold`` or ``circuit_breaker_cooldown`` to
+   ``with_subscription_processing()``, or imports ``FanOutManager`` or
+   ``FanOutResult``, does not start**: the setting raises ``RuntimeError`` and
+   the import ``ImportError``, both naming `Callback delivery`_. Remove them.
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -141,7 +147,9 @@ also item 25.
     without credentials answers 401; an access row admits only the method a
     request performs; a peer's own subscription and trust row are admitted
     by the built-in ``owner`` rows, so a GET-only subscriber type needs no
-    new rows. A trust request for a peer that already has a
+    new rows. A third party's webhook reaches a hook registered with
+    ``allow_anonymous=True``, which verifies its caller itself (see
+    :doc:`../reference/hooks-reference`, "Anonymous webhooks"). A trust request for a peer that already has a
     trust is a re-pair that must carry the current secret. After every
     instance runs 3.16, run ``actingweb-peer-state report`` (then ``prune
     --apply``) and restart.
@@ -187,6 +195,27 @@ also item 25.
     holds raises ``CreatorTaken``; a creator changed with
     ``Actor.modify(creator=…)`` is no longer undone by a load; a custom actor
     backend implements ``rename_creator``.
+26. **Removed subscription-processing settings stop startup** (see `Callback
+    delivery`_): remove ``max_payload_for_high_granularity``,
+    ``circuit_breaker_threshold``, ``circuit_breaker_cooldown`` and any
+    ``FanOutManager`` import.
+27. **What a subscriber receives changed** (see `What a subscriber
+    receives`_): deletes reach every level as ``""``, a nested write sends the
+    parent's whole value, a clear is one diff, the callback timestamp is ISO
+    with ``Z``, and a resync removes from the replica what its baseline
+    lacks.
+28. **List items are addressed by path and text values are ``text/plain``**
+    (see `List items by path, and text values`_): ``GET
+    /properties/<list>/0`` returns one item, ``POST /properties/<list>``
+    appends, and a name taken by a list or a property answers 409.
+29. **The passphrase is no longer returned to a peer, and only the creator
+    and the trustee change the trustee root or the creator** (see `The
+    passphrase and the trustee`_); an admin peer of an earlier version may hold
+    the passphrase: rotate it where that matters.
+30. **A write's callbacks are sent concurrently** (see `Callback delivery`_):
+    size a FastAPI handler pool for it; behind a gateway with a response
+    limit set ``with_callback_delivery(callback_delivery_budget_seconds=...)``.
+    The protocol changes are tabled in `Specification 1.5`_.
 
 
 What changed and why
@@ -2231,6 +2260,158 @@ fetch its baseline is recorded. Before, that happened only with
 held the last subscriber's answer, overwritten by each); trust and peer calls
 still set it. *What to check:* code that read it after a write to learn how a
 callback went.
+
+Specification 1.5
+-----------------
+
+3.16 announces specification version 1.5 (``/meta/actingweb/version``; it
+announced ``1.0``) and conforms to it; the specification's own changelog
+(:doc:`../protocol/actingweb-spec`, "Version 1.5") lists every normative
+difference from 1.4. The answers that changed, by endpoint, with who is
+affected and the section that says what to check:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 20 26 12 18
+
+   * - Request
+     - Before
+     - After
+     - Affects
+     - Check in
+   * - ``GET /properties/<list>/<n>``
+     - the whole list
+     - item ``n``; 404 out of range
+     - client
+     - `List items by path, and text values`_
+   * - ``PUT``/``DELETE /properties/<list>/<n>``
+     - a nested key under a list name (400, 404)
+     - replace (or append at the length) / remove item ``n``
+     - client
+     - `List items by path, and text values`_
+   * - ``POST /properties/<list>``
+     - 400
+     - 201 with ``Location``, one item appended
+     - client
+     - `List items by path, and text values`_
+   * - A write over a name of the other kind
+     - 400 or 500
+     - 409 ``name_taken``
+     - client
+     - `List items by path, and text values`_
+   * - ``GET /properties/<text value>``, scalar ``/meta`` paths
+     - ``application/json`` (Flask ``text/html`` on ``/meta``)
+     - ``text/plain``
+     - client, peer
+     - `List items by path, and text values`_
+   * - ``PUT /properties`` (no name)
+     - 500
+     - 405
+     - client
+     - `List items by path, and text values`_
+   * - ``/meta/actingweb/supported``
+     - ``subscriptionbatch``; permission tags only with caching
+     - no ``subscriptionbatch``; ``permissioncallback`` and
+       ``permissionquery`` always
+     - peer
+     - `Advertised option tags`_
+   * - ``/meta/actingweb/version``
+     - ``1.0``
+     - ``1.5``
+     - peer
+     - this section
+   * - ``/callbacks/<name>`` (no hook, authenticated)
+     - 200 ``false``
+     - 403
+     - peer, third party
+     - `Peer paths are bound to their peer`_
+   * - ``POST /callbacks/<name>`` without credentials
+     - 401
+     - 401, or the hook's answer when it is registered with
+       ``allow_anonymous``
+     - third party
+     - :doc:`../reference/hooks-reference`
+   * - ``/www/<unknown path>``
+     - 200 ``False``
+     - 404
+     - browser
+     - `Peer paths are bound to their peer`_
+   * - ``GET /<actor_id>`` as a peer
+     - with ``passphrase``
+     - without it
+     - peer, operator
+     - `The passphrase and the trustee`_
+   * - ``PUT``/``DELETE /trust/trustee`` as a peer
+     - admitted for ``admin``
+     - 403
+     - peer, operator
+     - `The passphrase and the trustee`_
+   * - A trust named ``creator``, ``trustee``, ``owner``, ``any``
+     - accepted
+     - 400
+     - peer
+     - `The passphrase and the trustee`_
+   * - Trust ``PUT`` with ``approved`` not true
+     - 204, nothing changed
+     - 400
+     - client
+     - `The passphrase and the trustee`_
+   * - The answer to a trust request
+     - flags as strings
+     - flags as booleans
+     - peer
+     - `The passphrase and the trustee`_
+   * - ``GET /permissions/<peer>``, unregistered type
+     - 500
+     - 404
+     - peer
+     - `The passphrase and the trustee`_
+   * - A delete, a clear, a nested write, a hook's transform
+     - see the section
+     - deletes at every level, one diff, the whole parent, the stored value
+     - subscriber
+     - `What a subscriber receives`_
+   * - Callback and resync ``timestamp``
+     - ``str()`` / an offset
+     - ISO 8601, UTC, ``Z``
+     - subscriber
+     - `What a subscriber receives`_
+   * - ``PUT /subscriptions/<peer>/<id>`` ``{"sequence": 0}``
+     - cleared the queue
+     - clears nothing
+     - subscriber
+     - `What a subscriber receives`_
+   * - A subscription with another granularity
+     - accepted
+     - 400
+     - subscriber
+     - `What a subscriber receives`_
+   * - A callback with data and no ``sequence``
+     - 204, dropped
+     - 400
+     - publisher
+     - `What a subscriber receives`_
+   * - A resync whose baseline cannot be fetched
+     - applied as empty
+     - 503 with ``Retry-After``
+     - publisher
+     - `What a subscriber receives`_
+   * - Resume of a ``none`` subscription
+     - a resync callback
+     - a ``type: resync`` marker in its queue
+     - subscriber
+     - `What a subscriber receives`_
+   * - Callbacks of one write
+     - one after another
+     - concurrently, bounded per write
+     - operator
+     - `Callback delivery`_
+
+Changes 3.16 made before specification 1.5 was written, which a second
+implementation also checks: callbacks without credentials answer 401 and a
+peer reaches only its own paths (`Peer paths are bound to their peer`_), a
+repeated trust request is a re-pair, and a grant's stated rule denies what it
+does not match (`Grants hold at every level`_, `Every other way in`_).
 
 What stays the same
 ===================

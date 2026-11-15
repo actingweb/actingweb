@@ -708,7 +708,11 @@ class PropertiesHandler(_PropertyHandlerBase):
         lists = getattr(self, "_post_lists", {})
         scalars = {k: v for k, v in pair.items() if k not in lists}
         if scalars:
-            myself.register_diffs(target="properties", blob=json.dumps(scalars))
+            myself.register_diffs(
+                target="properties",
+                blob=json.dumps(scalars),
+                **previous_kw(getattr(self, "_post_previous", None)),
+            )
         for recorder in lists.values():
             recorder.register(myself, self.config)
 
@@ -1846,6 +1850,19 @@ class PropertiesHandler(_PropertyHandlerBase):
             if self.response:
                 self.response.set_status(400)
             return
+        # What the posted names held, read before anything is applied and
+        # only when a resource-level subscription needs it (3.16): a resource
+        # that goes with its parent's overwrite is told.
+        names = [n for n, _ in (self._post_entries() or [])]
+        self._post_previous = (
+            myself.previous_for_resource_subscribers(
+                "properties",
+                None,
+                lambda: {n: myself.property[n] for n in names if myself.property},
+            )
+            if names
+            else None
+        )
         try:
             self._post_root(actor_id, myself, check)
         except ListNameTakenError as e:

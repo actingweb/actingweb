@@ -71,7 +71,7 @@ class FakeCoreActor:
             {"id": actor_id, "creator": "user@example.com"} if actor_id else None
         )
 
-    def get(self, actor_id=None, *, rewrite_email=True):
+    def get(self, actor_id=None):
         """What ``_load_actor`` calls: every actor id has a row."""
         self.id = actor_id or self.id
         self.actor = {"id": self.id, "creator": "user@example.com"}

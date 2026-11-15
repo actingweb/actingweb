@@ -433,7 +433,10 @@ class TestK4Folds:
         assert signed_in is not None and signed_in.id == aid(owner)
 
 
-class TestLoadRewrite:
+class TestTheEmailWriteRenames:
+    """Under the flag the creator follows the stored email where it is
+    written (3.16), for a vouched actor only; a load reads no email."""
+
     def test_an_unvouched_actors_email_does_not_rename_it(self) -> None:
         config = make_config()
         config.force_email_prop_as_creator = True
@@ -443,7 +446,7 @@ class TestLoadRewrite:
         loaded = Actor(actor_id=aid(actor), config=config)
         assert loaded.creator == creator
 
-    def test_a_vouched_actors_email_still_does(self) -> None:
+    def test_a_vouched_actors_email_does(self) -> None:
         config = make_config()
         config.force_email_prop_as_creator = True
         actor = create_core_actor(config, uuid_email(), auth_method="google_oauth2")

@@ -1042,6 +1042,18 @@ class DbAttribute:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Locked in key order first, the order
+                    # ``DbActor.rename_creator`` locks ``_internal`` rows in,
+                    # so the two cannot deadlock on each other.
+                    cur.execute(
+                        """
+                        SELECT 1 FROM attributes
+                        WHERE id = %s AND bucket = %s
+                        ORDER BY bucket_name
+                        FOR UPDATE
+                        """,
+                        (actor_id, bucket),
+                    )
                     cur.execute(
                         """
                         DELETE FROM attributes
@@ -1286,6 +1298,16 @@ class DbAttributeBucketList:
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Key order first, as ``delete_bucket`` (see there).
+                    cur.execute(
+                        """
+                        SELECT 1 FROM attributes
+                        WHERE id = %s
+                        ORDER BY bucket_name
+                        FOR UPDATE
+                        """,
+                        (actor_id,),
+                    )
                     cur.execute(
                         """
                         DELETE FROM attributes

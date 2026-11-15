@@ -48,9 +48,9 @@ while the rewrite removes items); seen from a test's poll under parallel load.
 - Drop the fallback: every supported version advertises resync.
 
 Whichever is chosen, `WD12`'s recording changes; `rows.toml` must name the
-phase that owns it. The `ListAttribute` plan
-(`thoughts/plans/2026-11-13-attribute-list-v2-port.md`) rewrites the replica's
-list application and is the natural owner of the list half.
+phase that owns it. The list half was done by
+`thoughts/plans/2026-11-13-attribute-list-v2-port.md` (see the top of this
+file).
 
 ## Two more, found 2026-11-09 (reverify-13 of `peer-authorisation-fixes`)
 

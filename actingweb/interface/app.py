@@ -31,7 +31,8 @@ class StoreNotReady(RuntimeError):
     :meth:`ActingWebApp.check_ready`).
 
     The base of :class:`UniqueCreatorNotReady`,
-    :class:`PropertyLookupNotReady` and :class:`AttributeSchemaNotReady`.
+    :class:`PropertyLookupNotReady`, :class:`AttributeSchemaNotReady` and
+    :class:`EmailAsCreatorNotReady`.
     ``check_ready()`` raises the specific subclass when one check refuses
     and a plain ``StoreNotReady`` listing every message when more do, so an
     operator fixes them in one deploy window; catch this class to handle
@@ -56,6 +57,13 @@ class AttributeSchemaNotReady(StoreNotReady):
     ``attributes.bucket_name`` and ``name`` and indexes list rows has not
     run, or its index is INVALID; on any backend, a custom attribute backend
     lacks one of the list primitives."""
+
+
+class EmailAsCreatorNotReady(StoreNotReady):
+    """``with_email_as_creator`` is on, but the actors that existed before
+    3.16 have not been moved to their stored email
+    (``actingweb-unique-creators creator-to-email``), or the actor backend
+    lacks ``rename_creator`` (see :meth:`ActingWebApp.check_ready`)."""
 
 
 class ActingWebApp:
@@ -1590,6 +1598,14 @@ class ActingWebApp:
           is missing or INVALID: run ``alembic upgrade head`` (revision
           ``a7b8c9d0e1f2``). It applies to every deployment: replicas of
           peers' lists live in attribute lists.
+        - **Creator follows the stored email.** Raises
+          :class:`EmailAsCreatorNotReady` when the actor backend lacks
+          ``rename_creator`` (a custom backend; flag on or off, since
+          ``ActorInterface.modify_creator`` uses it), and with
+          ``with_email_as_creator`` on when the store has actors but no
+          marker that ``actingweb-unique-creators creator-to-email
+          --apply`` completed (one point read; an empty store marks itself
+          ready). With the flag off nothing is read.
 
         When more than one refuses, a single :class:`StoreNotReady` carries
         every message. Catch :class:`StoreNotReady` to handle any.
@@ -1600,6 +1616,7 @@ class ActingWebApp:
             self._check_property_lookup_ready,
             self._check_unique_creator_ready,
             self._check_attribute_schema_ready,
+            self._check_email_as_creator_ready,
         ):
             try:
                 check()
@@ -1706,6 +1723,32 @@ class ActingWebApp:
                 "with_unique_creator(False)."
             )
         self._unique_creator_checked = True
+
+    def _check_email_as_creator_ready(self) -> None:
+        if getattr(self, "_email_as_creator_checked", False):
+            return
+        config = self.get_config()
+        backend = getattr(getattr(config, "DbActor", None), "DbActor", None)
+        if not callable(getattr(backend, "rename_creator", None)):
+            raise EmailAsCreatorNotReady(
+                "The actor backend lacks rename_creator, which every creator "
+                "change of a vouched actor goes through since 3.16. Implement "
+                'it (DbActorProtocol, docs/migration/v3.16.rst, "Custom '
+                'database backends").'
+            )
+        from ..maintenance import email_as_creator
+
+        try:
+            problem = email_as_creator.settle(config)
+        except Exception as e:  # folds DbError: fails closed, like absence
+            raise EmailAsCreatorNotReady(
+                "Whether the actors were moved to their stored email "
+                f"(with_email_as_creator) could not be read: {type(e).__name__}. "
+                "Re-run when the database answers."
+            ) from e
+        if problem:
+            raise EmailAsCreatorNotReady(problem)
+        self._email_as_creator_checked = True
 
     def _check_attribute_schema_ready(self) -> None:
         if getattr(self, "_attribute_schema_checked", False):

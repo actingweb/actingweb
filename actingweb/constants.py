@@ -103,6 +103,11 @@ OAUTH2_SYSTEM_ACTOR = "_actingweb_oauth2"
 # cannot be destroyed by the deletion it describes.
 DELETED_ACTORS_STORE = "_actingweb_deleted"
 
+# Readiness markers the startup checks read (3.16), kept under an id that is
+# never an actor for the same reason: no actor deletion can wipe them.
+READINESS_STORE = "_actingweb_readiness"
+READINESS_BUCKET = "_readiness"
+
 # Standard Bucket Names for Global Data
 # =====================================
 # These bucket names are used consistently across the system

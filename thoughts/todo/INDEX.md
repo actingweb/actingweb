@@ -32,17 +32,16 @@ moderate problem outranks an expensive fix to a slightly worse one.
 ## Planned for 3.16: order, dependencies and gates
 
 Seven plans: six from 2026-11-06, plus `grant-enforcement-per-route` (0b,
-2026-11-10). Four have merged; three are `status: proposed`. **This section is
+2026-11-10). Five have merged; two are `status: proposed`. **This section is
 the one copy of the order, of what depends on what between the plans, and of
 the gates between them.** Each plan keeps a pointer here and its own "This
 plan" paragraph, which says what that plan uses from the others and wins on
 that detail. One PR per plan, one commit per phase. A plan starts when the one
 before it has merged and its gates are met, because the checks allow one test
 run at a time. The 3.16 tag stays held until all seven have merged. Proposed
-is not approved: `attribute-list-v2-port` was redrafted on 2026-11-13 as a
-new plan file (the 2026-11-06 one is `superseded`), and `spec-1-5` says in
-its "Readiness" paragraph that it needs another draft first. The history of the
-merged plans is in their plans and verifications, not here.
+is not approved: `spec-1-5` says in its "Readiness" paragraph that it needs
+another draft first. The history of the merged plans is in their plans and
+verifications, not here.
 
 | Order | Plan | Todo it closes | Needs first |
 | --- | --- | --- | --- |
@@ -51,15 +50,12 @@ merged plans is in their plans and verifications, not here.
 | 0b | [`grant-enforcement-per-route`](../plans/2026-11-10-grant-enforcement-per-route.md) | — | **Merged** (#172, 2026-11-11) |
 | 1 | [`subscription-wire-baseline`](../plans/2026-11-06-subscription-wire-baseline.md) | — | **Merged** (#173, 2026-11-12) |
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md) | — | **Merged** (#175, 2026-11-13) |
-| 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md): one list implementation for properties and attributes, the replica on it, list diffs from REST and web-UI edits | `ListAttribute` shift-loop design (deleted: the replica is on the list core) | **Implemented** on its branch, all four phases, unpushed until its PR (security fixes; owner 2026-11-07). Ahead of plan 4 because the specification plan waits on it |
-| 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md): one read per actor load under the email flag, the vouched rename as one transaction | [The vouched SDK rename](vouched-rename-one-transaction.md) | Nothing from plan 3; the two could swap places |
-| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | None; it files `outbound-callback-backpressure.md` | Plan 3, and its redraft |
+| 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md) | — | **Merged** (#176, 2026-11-15) |
+| 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md): one read per actor load under the email flag, the vouched rename as one transaction | The vouched SDK rename (its todo deleted: the rename is one transaction) | **Implementing** on `release/3.16.0-email-as-creator-at-write-time` (from 2026-11-15) |
+| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | None; it files `outbound-callback-backpressure.md` | Its redraft (plan 3, which it waited on, has merged) |
 
-Todos these plans edit without closing:
-[whole-list rewrite atomicity](whole-list-rewrite-atomicity.md),
-[subscriber fault hardening](subscription-subscriber-fault-hardening.md) and
-[the key-prefix scheme](prop-list-key-prefix-scheme.md) (plan 3);
-[subscriber fault hardening](subscription-subscriber-fault-hardening.md) again
+A todo these plans edit without closing:
+[subscriber fault hardening](subscription-subscriber-fault-hardening.md)
 (plan 5).
 
 ### What the remaining plans must carry from the merged ones
@@ -67,16 +63,16 @@ Todos these plans edit without closing:
 | Plan | From | What |
 | --- | --- | --- |
 | `spec-1-5` | `attribute-list-v2-port` | Hard: it documents the list diffs that plan creates and edits the same functions after it |
-| `attribute-list-v2-port` | `peer-authorisation-fixes` | Its `remote:<peer>$aux` side bucket must be added to `actingweb-peer-state`'s whitelist (`maintenance/peer_state.py`, `_remote_peer`), or the command reports it as `remote-unknown` |
 | `email-as-creator-at-write-time` | `subs-list-cache-lifetime` | The MCP loads go through `_load_actor` (`handlers/mcp.py`), which passes `rewrite_email=False` to `Actor.get`; this plan removes that keyword and must remove the argument there too |
-| `email-as-creator-at-write-time` | `attribute-list-v2-port` | Both add a check to `check_ready()` and reword the same lines of `interface/app.py`; the second to land rebases on the first |
-| `spec-1-5` | `attribute-list-v2-port` | It edits the resync block of `callback_processor.py` (`_reset_state` and the handler's fault paths) after this plan makes that block keep the owed rebuild |
-| `attribute-list-v2-port`, `spec-1-5` | `subscription-wire-baseline` | Their phases name the recordings they re-record and the ones that must stay identical (gate 5). `email-as-creator-at-write-time` re-records nothing; the recordings confirm it |
+| `email-as-creator-at-write-time` | `attribute-list-v2-port` | Its attribute writes carry the bucket condition every attribute write now has, and its check is the fourth in `check_ready()` (its plan, Update Log 2026-11-15) |
+| `spec-1-5` | `email-as-creator-at-write-time` | Its trustee text ("access ends only when the passphrase, creator or trustee root changes") rests on this plan's change that a handoff to a trustee persists under the email flag; its redraft cites that entry |
+| `spec-1-5` | `attribute-list-v2-port` | It edits the resync block of `callback_processor.py` (`_reset_state` and the handler's fault paths), which now keeps the owed rebuild |
+| `spec-1-5` | `subscription-wire-baseline` | Its phases name the recordings they re-record and the ones that must stay identical (gate 5). `email-as-creator-at-write-time` re-records nothing; the recordings confirm it |
 
-Plans 3 and 5 edit the same publisher and receiver code (`register_diffs`,
+Plan 5 edits the same publisher and receiver code (`register_diffs`,
 `callback_subscription`, `apply_callback_data`, `handlers/subscription.py`)
-that plan 2 just changed; a fault one introduces and the next exposes is the
-case the gates below are for.
+that plans 2 and 3 just changed; a fault one introduces and the next exposes
+is the case the gates below are for.
 
 ### Gates
 
@@ -92,7 +88,7 @@ kept because verifications cite them.
 3. **Before any plan re-records a wire recording:** that recording has been
    shown byte-identical over repeated runs on both backends. One that is not
    cannot tell a regression from noise and stays out of the regression set.
-5. **In every commit of plans 3 to 5:** the only changed recordings are the
+5. **In every commit of plans 4 and 5:** the only changed recordings are the
    ones `tests/integration/wire/rows.toml` assigns to that plan and phase
    (the only copy of that list, owner 2026-11-07; `verify_groups.py` checks
    it, in CI too since #173); any other is a regression to explain before
@@ -116,11 +112,10 @@ owner-chosen approach and a proposed plan (2026-11-06).
 | [MCP OAuth connector conformance follow-ups](mcp-oauth-connector-conformance-followups.md) | Nine audit items with no live failure behind them: loopback redirect URIs, RFC 8707 audience, CIMD, `openid-configuration`, the protected-resource `resources` flag, `resources/templates/list`, the never-sent `listChanged`, shared-registration name flips, a post-auth hook for app middleware | Same audit, verified 2026-09-25. Each is small; none is blocking a client today. Pick the ones a connector-directory submission requires when that is next attempted. CIMD moved up: claude.ai's connector dialog now recommends it (DCR fallback works, seen on rc1 2026-09-28) |
 | [A conditional write retried by the SDK can report False for a write that landed](conditional-write-ambiguous-after-sdk-retry.md) | Closes the last documented way an unkeyed v2 list operation can silently duplicate (`append`, `extend`, `insert`) or double-remove (`pop`) under sustained backend trouble alone, no concurrent writer needed; keyed `append_once` and spanned heads already read their own write back | Traced, not reproduced, during the 2026-09-14 touch-fault triage; a strict `xfail` test pins the `append` duplicate. Needs a way to recognise an unkeyed plain write (its bytes are not unique to the call), plus whether PostgreSQL has an equivalent |
 | [`set_description()`/`set_explanation()` still create the meta row unconditionally](meta-row-create-unconditional-for-description-writers.md) | Makes every v2 meta-row creation conditional, one creation path — closes the narrower last-writer-wins race the 2026-09-14 first-mutation fix left on `count_hint` (never on the description itself, and self-repaired by the next rank-counting mutation) | Found while implementing that fix; explicitly out of scope for the 3.14.7 patch. Needs a decision on whether the shared `_save_metadata()` creation branch (also used by v1's `create_if_absent=False` writers and `clear()`'s replace) routes through `_v2_create_meta_row()` or grows its own conditional create |
-| [The full-state fallback corrupts a subscriber's replica](full-state-fallback-replica.md) | A subscriber whose publisher thinks it lacks resync stops getting list items twice and objects stored as JSON strings after a `resume()` | Recorded by wire row `WD12` (2026-11-07). Reached only for an older peer or a stale capability cache, since every 3.16 library advertises resync. The `ListAttribute` plan is the natural owner of the list half |
+| [The full-state fallback corrupts a subscriber's replica](full-state-fallback-replica.md) | A subscriber whose publisher thinks it lacks resync stops getting list items twice and objects stored as JSON strings after a `resume()` | Recorded by wire row `WD12` (2026-11-07). Reached only for an older peer or a stale capability cache, since every 3.16 library advertises resync. The list half is fixed; the scalar, deleted-property and single-property cases remain |
 | [Old-layout attribute lists: remove the reader](attribute-list-old-layout-removal.md) | One list layout to read and test, not two | Filed 2026-11-13 by `attribute-list-v2-port`: 3.16 reads the pre-3.16 attribute list layout in place and converts on the first change; the reader and converter go once a release has been live long enough that no deployment holds old-layout lists (`actingweb-verify-property-lists --attributes` reports them) |
 | [Subscription docs: callback status codes and `FanOutManager` samples](subscription-docs-status-codes-and-fanout-samples.md) | The subscriptions guide, the testing guide and troubleshooting say what the callback handler and `FanOutManager` actually do | Filed 2026-11-13 by `attribute-list-v2-port` (its docs pass found them; outside its change). Docs only |
 | [Subscription subscriber: recover cleanly from a store fault](subscription-subscriber-fault-hardening.md) | A subscriber that faulted mid-callback re-applies only what it has not applied, records the callbacks that finished, and a quiet subscription recovers without waiting for its next change | Filed 2026-10-29 when 3.16 made the publisher side spec-conformant (plan entry 32). Beyond the spec's minimum; a re-applied `append` can use 3.16's `ListProperty.append_once()` once each diff carries a stable key |
-| [The vouched SDK rename is several writes, not one transaction](vouched-rename-one-transaction.md) | Concurrent renames of one actor, a fault past the commit point and a provider-id rename racing a sign-in all end coherently today, but not atomically; one cross-table write would make the rename all-or-nothing | **Planned for 3.16**: `thoughts/plans/2026-11-06-email-as-creator-at-write-time.md` (proposed), whose first phase is the one-transaction rename |
 | [Promote `chain_id` to a top-level attribute with a GSI on DynamoDB](dynamodb-chain-id-gsi.md) | Makes SPA logout and revoke a query by chain instead of a scan of the two shared token buckets, so their cost stops growing with the number of live sessions | Raised by the PR #153 review; 3.15.1 accepted the scan (42 rows, about 3 RCU per call) with a WARNING at 1,000 rows per bucket. Trigger: that WARNING firing, or a partition projected past about 2,000 rows |
 | [`output_schema` on `action_hook` never reaches MCP](action-hook-output-schema-not-visible-to-mcp.md) | Closes an ergonomic trap: an author who declares `output_schema=` or annotates a `TypedDict` return reasonably believes their MCP tool advertises `outputSchema`, and it does not | Merging the two metadata paths **by default** would newly advertise `outputSchema` for every TypedDict-annotated tool and break the ones that return no `structuredContent`, so it is not an independent decision. Decide it with the structuredContent research (`thoughts/research/2026-08-03-structuredcontent-promotion-drops-tool-text.md`, option C), not on its own |
 | [Whole-list rewrite atomicity](whole-list-rewrite-atomicity.md) | An interrupted `compact()` stops leaving a double of the list that `--repair` will not itself remove | Two designs died under adversarial review and the file carries the constraints they established — chiefly that `fetch_all_including_lists` is a paginated Query, not a snapshot. Do not propose a third without reading them. Reachability is low (`compact()` is an operator action) and the current failure is loud, which is what makes the wait defensible |

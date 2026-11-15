@@ -1042,7 +1042,7 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
 
     app = (
         ActingWebApp(...)
-        .with_email_as_creator(enable=True)  # Requires email addresses (default)
+        .with_email_as_creator(enable=True)  # off on ActingWebApp until called; on in a bare Config()
         .with_unique_creator(enable=True)  # the default since 3.16; False opts out
     )
 
@@ -1055,8 +1055,15 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
    ``resolve --apply`` first if actors already share a creator. See
    :doc:`../migration/v3.16` ("Creator uniqueness").
 
-When enabled (default):
+When enabled:
     - Actor ``creator`` field must be a valid email address
+    - A vouched actor's creator follows its stored ``_internal`` email, renamed
+      in the same atomic operation where the email is written (since 3.16; a
+      load no longer reads the email). A write of an address another actor
+      holds raises ``CreatorTaken``. Existing actors are moved once by
+      ``actingweb-unique-creators creator-to-email --apply``, and the
+      application refuses to start until it has run (see
+      :doc:`../migration/v3.16`, "The creator follows the stored email")
     - System validates email ownership via OAuth provider OR verification link
     - Suitable for applications requiring email for notifications, billing, etc.
 

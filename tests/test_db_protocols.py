@@ -50,6 +50,26 @@ class TestPhase2ProtocolCompliance:
         instance = mod.DbActor()
         assert isinstance(instance, DbActorProtocol)
 
+    def test_rename_creator_has_the_protocol_signature(self, backend: str) -> None:
+        """Both backends implement ``rename_creator`` (3.16) with the
+        protocol's parameters."""
+        import inspect
+
+        mod = importlib.import_module(f"actingweb.db.{backend}.actor")
+        wanted = inspect.signature(DbActorProtocol.rename_creator).parameters
+        got = inspect.signature(mod.DbActor.rename_creator).parameters
+        assert [(n, p.kind) for n, p in got.items()] == [
+            (n, p.kind) for n, p in wanted.items()
+        ]
+        assert list(wanted) == [
+            "self",
+            "actor_id",
+            "expected",
+            "creator",
+            "internal",
+            "marker",
+        ]
+
     def test_actor_list_protocol_compliance(self, backend: str) -> None:
         """Verify DbActorList implements DbActorListProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.actor")

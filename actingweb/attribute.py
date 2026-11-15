@@ -1,7 +1,9 @@
 import logging
+import weakref
 from typing import Any, cast
 
 from actingweb.db import get_attribute, get_attribute_bucket_list
+from actingweb.db.creator_rename import AttrWrite, RenameOutcome
 from actingweb.db.exceptions import DbError
 from actingweb.property_list_span import AUX_SUFFIX
 
@@ -16,10 +18,18 @@ class InternalStore:
         actor_id: str | None = None,
         config: Any | None = None,
         bucket: str | None = None,
+        *,
+        owner: Any | None = None,
     ) -> None:
+        """``owner`` is the ``Actor`` this store belongs to, held weakly:
+        when a write of ``email`` renames the actor (``with_email_as_creator``,
+        :mod:`actingweb.creator_sync`), the owner's creator and backend handle
+        follow, so a later ``modify`` on it is not conditioned on the old
+        creator. A store built without one updates only itself."""
         if not bucket:
             bucket = "_internal"
         self._db = Attributes(actor_id=actor_id, bucket=bucket, config=config)
+        self._owner = weakref.ref(owner) if owner is not None else None
         # The bucket is loaded lazily on first access: constructing the
         # store (which happens on every Actor construction) must not cost a
         # database query when the attributes are never touched.
@@ -60,11 +70,25 @@ class InternalStore:
         self._ensure_loaded()
         return bool(self.__dict__.get("_read_ok", False))
 
-    def mark_empty(self) -> None:
+    def _owning_actor(self) -> Any | None:
+        """The ``Actor`` this store belongs to, if it was built with one and
+        still exists. A method with a leading underscore: any other name
+        would shadow a stored attribute of that name."""
+        ref = self.__dict__.get("_owner")
+        return ref() if ref is not None else None
+
+    def mark_empty(self, creator: str | None = None) -> None:
         """Treat the bucket as read and empty, without a database read.
 
         For an actor that was just created: its bucket has nothing in it yet.
+        ``creator`` is the creator it was created with: a write of that
+        address as its ``email`` is then a plain write, with no read (the
+        OAuth create's ``store.email = identifier``).
         """
+        if creator:
+            from actingweb.db.creator_rules import normalise_creator
+
+            self.__dict__["_created_for"] = normalise_creator(creator)
         self.__dict__["_loaded"] = True
         self.__dict__["_read_ok"] = True
         self.__dict__["_db"].mark_loaded_empty()
@@ -81,6 +105,10 @@ class InternalStore:
         mismatch still answers False).
         """
         db = self.__dict__["_db"]
+        if k == "email" and v is not None:
+            linked = self._write_email(AttrWrite("email", v), raise_on_fault)
+            if linked is not None:
+                return linked is RenameOutcome.APPLIED
         try:
             self._ensure_loaded()
             if v is None:
@@ -137,6 +165,13 @@ class InternalStore:
         answers None for ``k``. Never raises."""
         self._ensure_loaded()
         db = self.__dict__["_db"]
+        if k == "email" and isinstance(expected, str) and v is not None:
+            linked = self._write_email(AttrWrite("email", v, "equals", expected), False)
+            if linked is RenameOutcome.APPLIED:
+                return True
+            if linked is not None:
+                self._reread(k)
+                return False
         if db.conditional_update_attr(name=k, old_data=expected, new_data=v):
             self.__dict__[k] = v
             return True
@@ -163,6 +198,14 @@ class InternalStore:
         ``DbError`` on a fault."""
         self._ensure_loaded()
         db = self.__dict__["_db"]
+        if k == "email" and v is not None:
+            linked = self._write_email(AttrWrite("email", v, "absent"), True)
+            if linked is RenameOutcome.APPLIED:
+                return True
+            if linked is RenameOutcome.ATTR_CONDITION:
+                return self._reread(k) == v
+            if linked is not None:
+                raise DbError("stored email write", db.actor_id)
         won = db.create_attr_if_absent(name=k, data=v)
         if won:
             self.__dict__[k] = v
@@ -194,10 +237,55 @@ class InternalStore:
             if k in self.__dict__:
                 self.__delattr__(k)
         else:
+            if k == "email":
+                linked = self._write_email(AttrWrite("email", v), True)
+                if linked is RenameOutcome.APPLIED:
+                    return
+                if linked is not None:
+                    raise DbError("stored email write", self.__dict__["_db"].actor_id)
             # Write first: the write raises DbError on a fault, and the store
             # must not then answer the value storage never got.
             self.__dict__["_db"].set_attr(name=k, data=v)
             self.__dict__[k] = v
+
+    def _write_email(self, write: Any, raise_on_fault: bool) -> Any:
+        """The linked write of ``email``
+        (:func:`actingweb.creator_sync.write_stored_email`): None when it is
+        a plain write, else the rename's outcome. With ``raise_on_fault``
+        False a fault, a held address included, is logged and answered as a
+        failed outcome."""
+        from actingweb.creator_sync import write_stored_email
+
+        try:
+            return write_stored_email(self, write)
+        except DbError as e:  # folds DbError: a failed outcome unless raise_on_fault
+            if raise_on_fault:
+                raise
+            logger.error(
+                f"The stored email of {self.__dict__['_db'].actor_id} was not "
+                f"written: {type(e).__name__}"
+            )
+            return RenameOutcome.ROW_CHANGED
+
+    def _reread(self, k: str) -> Any:
+        """Read ``k`` strictly into this instance; None when absent or on a
+        fault (the key then reads None)."""
+        self.__dict__.pop(k, None)
+        db = self.__dict__["_db"]
+        try:
+            row = (
+                db.dbprop.get_attr_strict(
+                    actor_id=db.actor_id, bucket=db.bucket, name=k
+                )
+                if db.dbprop
+                else None
+            )
+        except DbError:  # folds DbError: the key forgotten, as replace_if_equal does
+            return None
+        if isinstance(row, dict) and "data" in row:
+            self.__dict__[k] = row["data"]
+            return row["data"]
+        return None
 
     def __getattr__(self, k: str) -> Any:
         # Only reached when k is not in __dict__. Avoid triggering a load

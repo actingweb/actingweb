@@ -41,6 +41,7 @@ from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
 from .db.creator_rules import (
+    dup_value,
     is_exempt,
     is_refused_from_callers,
     is_reserved,
@@ -613,7 +614,9 @@ class Actor:
         else:
             self.handle = None
         if actor_id and config:
-            self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+            self.store = attribute.InternalStore(
+                actor_id=actor_id, config=config, owner=self
+            )
             self.property = property.PropertyStore(actor_id=actor_id, config=config)
             self.property_lists = property.PropertyListStore(
                 actor_id=actor_id, config=config
@@ -841,31 +844,12 @@ class Actor:
         except Exception as e:  # folds DbError: best-effort cleanup of an unused id
             logger.warning(f"Marker for {actor_id} left behind: {e}")
 
-    def _email_held_elsewhere(self, email: str) -> bool:
-        """Under ``with_unique_creator()``, whether another actor holds
-        ``email`` (its ``creators`` record), so the force-email rewrite in
-        :meth:`get` is skipped instead of refused on every load. One
-        consistent read; a fault raises ``DbError``, as the rewrite does."""
-        if not self.config or not self.config.unique_creator or is_exempt(email):
-            return False
-        holder = get_actor(self.config).get_creator_holder(email)
-        if holder and holder != self.id:
-            # INFO: a record naming an actor that is gone (an orphan) blocks
-            # the rewrite too; ``actingweb-unique-creators report`` lists it.
-            logger.info(
-                f"Actor {self.id}: stored email is held by {holder}; creator "
-                "left unchanged"
-            )
-            return True
-        return False
-
-    def get(
-        self, actor_id: str | None = None, *, rewrite_email: bool = True
-    ) -> dict[str, Any] | None:
+    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
         """Retrieves an actor from storage or initialises if it does not exist.
 
-        ``rewrite_email=False`` skips the ``force_email_prop_as_creator``
-        rewrite, for a lookup that just matched the stored creator.
+        One read of the actor row. Under ``with_email_as_creator`` the
+        creator follows the stored email where the email is written
+        (:mod:`actingweb.creator_sync`), not here (3.16).
         """
         if not actor_id and not self.id:
             return None
@@ -881,36 +865,13 @@ class Actor:
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
-            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.store = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             self.property_lists = property.PropertyListStore(
                 actor_id=self.id, config=self.config
             )
-            if (
-                rewrite_email
-                and self.config
-                and self.config.force_email_prop_as_creator
-            ):
-                em = self.store.email
-                from .oauth2 import is_vouched_store
-
-                # Only a vouched actor's stored email decides its creator: an
-                # unvouched actor's email may be a previous creator's, and
-                # adoption, not a load, decides who it belongs to.
-                if (
-                    em
-                    and em.lower() != self.creator
-                    and is_vouched_store(self.store)
-                    and not self._email_held_elsewhere(em.lower())
-                ):
-                    try:
-                        self.modify(creator=em.lower())
-                    except CreatorTaken:  # folds DbError: email held elsewhere
-                        # Taken between the holder read and the rename.
-                        logger.warning(
-                            f"Actor {self.id}: stored email is another actor's "
-                            "creator; creator left unchanged"
-                        )
         else:
             self.id = None
             self.creator = None
@@ -990,8 +951,7 @@ class Actor:
             self.creator_ids = [holder] if holder else []
             if not holder:
                 return False
-            # The row as stored, read consistently, before any force-email
-            # rewrite could change the creator being looked up.
+            # The row as stored, read consistently.
             row = get_actor(self.config).get(actor_id=holder)
             if not row or normalise_creator(row.get("creator")) != lookup_creator:
                 # A stale record: its actor is gone, or holds another creator
@@ -1007,7 +967,7 @@ class Actor:
                 )
                 self.creator_ids = []
                 return False
-            self.get(actor_id=holder, rewrite_email=False)
+            self.get(actor_id=holder)
             if self.id and normalise_creator(self.creator) != lookup_creator:
                 # Renamed between the check and the load: not this identity's
                 # actor any more. The create that follows settles the record.
@@ -1176,8 +1136,8 @@ class Actor:
                         victim.delete()
             # Actors left with the default creator are moved to their stored
             # email by ``actingweb-unique-creators resolve
-            # --default-creator-to-email`` (and by get()'s rewrite as each is
-            # loaded), not by every create.
+            # --default-creator-to-email`` and ``creator-to-email``, not by
+            # every create.
 
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
@@ -1198,8 +1158,10 @@ class Actor:
         # after the row (below).
         pre_marked: attribute.InternalStore | None = None
         if self.handle and not actor_id and auth_method and self.config:
-            pre_marked = attribute.InternalStore(actor_id=self.id, config=self.config)
-            pre_marked.mark_empty()
+            pre_marked = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
+            pre_marked.mark_empty(self.creator)
             try:
                 marked = self._write_marker(pre_marked, auth_method)
             except DbError:  # folds DbError: re-raised (503), nothing created
@@ -1298,12 +1260,14 @@ class Actor:
         if pre_marked is not None:
             self.store = pre_marked
         else:
-            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.store = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
             if not actor_id:
                 # A generated id is new, so its bucket is empty; skip the
                 # read. A caller-supplied one (a system actor) can own older
                 # buckets.
-                self.store.mark_empty()
+                self.store.mark_empty(self.creator)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
             actor_id=self.id, config=self.config
@@ -1417,9 +1381,11 @@ class Actor:
     def creator_change_pinned(self, creator: str) -> bool:
         """Whether ``force_email_prop_as_creator`` refuses changing the creator
         to ``creator``: on, with a stored email that ``creator`` is not (nor
-        ``"trustee"``). :meth:`get` would put the stored email back on the next
-        load, and a sign-in for the new address in between would resolve to
-        this actor. False when ``_internal`` cannot be read."""
+        ``"trustee"``). The creator and the stored email are kept equal
+        for a vouched actor (:mod:`actingweb.creator_sync`); a creator moved
+        away from the email would leave the actor in a state the flag says
+        does not exist, and a sign-in for the email would no longer find it.
+        False when ``_internal`` cannot be read."""
         store = self.store
         if not self.config or not self.config.force_email_prop_as_creator:
             return False
@@ -1432,6 +1398,85 @@ class Actor:
             and bool(own_email)
             and target not in ("trustee", own_email.lower())
         )
+
+    def _evict_for_handback(self, target: str) -> bool:
+        """The trustee hands the actor back to the address its vouch was
+        recorded for, and another actor holds it: free the address when that
+        holder is not vouched for it.
+
+        A handoff to ``trustee`` persists under ``with_email_as_creator``
+        and frees the owner's address for its length, so anyone could take
+        it (an anonymous factory create, a typed address) and strand the
+        actor with the trustee. Only with ``with_unique_creator()``, and
+        only for the recorded vouched address (``vouched_creator``), which
+        a sign-in proved and nothing writes while the actor is with the
+        trustee; the stored email alone is not enough, since an application
+        can write it. Such a holder is renamed to its ``#dup-`` value in one
+        operation conditioned on its creator and its marker as classified
+        (a sign-in that vouches it meanwhile wins), and loses its stored
+        email when that is the freed address, as ``actingweb-unique-creators
+        resolve`` does; it keeps its data. A holder vouched for the address
+        (the owner's own new actor) is left, and the handback answers 409.
+        True when the address was freed. Raises ``DbError`` on a fault.
+        """
+        import copy
+
+        from actingweb.attribute import InternalStore
+        from actingweb.creator_sync import marker_of
+        from actingweb.db.creator_rename import AttrWrite, RenameOutcome
+        from actingweb.oauth2 import VOUCHED_CREATOR, classify_store, is_vouched_store
+
+        store = self.store
+        if (
+            not self.config
+            or not self.config.unique_creator
+            or not self.id
+            or self.creator != "trustee"
+            or not store
+            or not is_vouched_store(store)
+        ):
+            return False
+        recorded = getattr(store, VOUCHED_CREATOR, None)
+        if not isinstance(recorded, str) or normalise_creator(recorded) != target:
+            return False
+        holder = get_actor(self.config).get_creator_holder(target)
+        if not holder or holder == self.id:
+            return False
+        # Without uniqueness or the email link, as resolve's renames: a
+        # #dup- value is never recorded. The holder's record is then stale
+        # and released.
+        plain = copy.copy(self.config)
+        plain.unique_creator = False
+        plain.force_email_prop_as_creator = False
+        handle = get_actor(plain)
+        row = handle.get(actor_id=holder)
+        if not row or normalise_creator(row.get("creator")) != target:
+            return False
+        holder_store = InternalStore(actor_id=holder, config=plain)
+        if not holder_store.loaded or classify_store(holder_store, target) == "vouched":
+            return False
+        email = holder_store.email
+        internal = (
+            [AttrWrite("email", None)]
+            if isinstance(email, str) and normalise_creator(email) == target
+            else []
+        )
+        outcome = handle.rename_creator(
+            holder,
+            expected=row.get("creator"),
+            creator=dup_value(target, holder),
+            internal=internal,
+            marker=marker_of(holder_store),
+        )
+        if outcome is not RenameOutcome.APPLIED:
+            return False
+        get_actor(self.config).release_stale_creator(target, holder)
+        logger.warning(
+            f"Actor {self.id}: the trustee handed it back to its address, which "
+            f"unvouched actor {holder} held meanwhile; {holder} was renamed to "
+            "its #dup- value and keeps its data"
+        )
+        return True
 
     def modify_creator_unvouched(self, creator: str) -> bool:
         """Change the creator to an address nobody proved, and unvouch.
@@ -1491,6 +1536,15 @@ class Actor:
         try:
             if self.modify(creator=creator):
                 return True
+        except CreatorTaken as e:  # folds DbError: raised below
+            # A handback may free the address first (_evict_for_handback).
+            fault = e
+            if not unvouch and self._evict_for_handback(target):
+                try:
+                    if self.modify(creator=creator):
+                        return True
+                except DbError as again:  # folds DbError: raised below
+                    fault = again
         except DbError as e:  # folds DbError: raised after the marker restore below
             # Ambiguous: the creator may have landed. Put the marker back
             # only if the stored creator is unchanged, then raise.

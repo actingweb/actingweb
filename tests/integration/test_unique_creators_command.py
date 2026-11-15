@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from actingweb.actor import Actor
-from actingweb.db import get_actor
+from actingweb.db import get_actor, get_attribute
 from actingweb.db.creator_rules import dup_value
 from actingweb.db.exceptions import CreatorTaken
 from actingweb.maintenance import unique_creators
@@ -174,12 +174,10 @@ class TestResolve:
         assert _creator(fresh_store, owner) == creator
         assert _creator(fresh_store, squatter) == dup_value(creator, squatter)
         assert f"keep creator={creator!r} id={owner} (unvouched)" in logs.text
-        # The stored email is cleared, so force_email_prop_as_creator cannot
-        # undo the rename on the next load.
-        forced = copy.copy(fresh_store)
-        forced.force_email_prop_as_creator = True
-        assert Actor(actor_id=squatter, config=forced).creator == dup_value(
-            creator, squatter
+        # The stored email is cleared: it no longer claims the address.
+        assert (
+            get_attribute(fresh_store).get_attr_strict(squatter, "_internal", "email")
+            is None
         )
 
     def test_two_vouched_actors_are_decided_by_age_and_logged(

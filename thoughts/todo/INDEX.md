@@ -39,9 +39,9 @@ the gates between them.** Each plan keeps a pointer here and its own "This
 plan" paragraph, which says what that plan uses from the others and wins on
 that detail. One PR per plan, one commit per phase. A plan starts when the one
 before it has merged and its gates are met, because the checks allow one test
-run at a time. The 3.16 tag stays held until all eight have merged. Proposed
-is not approved: `spec-1-5` says in its "Readiness" paragraph that it needs
-another draft first. The history of the merged plans is in their plans and
+run at a time. The 3.16 tag stays held until all eight have merged.
+`spec-1-5` was approved on 2026-11-15 and is being
+implemented. The history of the merged plans is in their plans and
 verifications, not here.
 
 | Order | Plan | Todo it closes | Needs first |
@@ -53,7 +53,7 @@ verifications, not here.
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md) | — | **Merged** (#175, 2026-11-13) |
 | 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md) | — | **Merged** (#176, 2026-11-15) |
 | 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md) | The vouched SDK rename | **Merged** (#177, 2026-11-15) |
-| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | None; it files `outbound-callback-backpressure.md` | Its redraft (`/update_plan`, from 2026-11-15, on `release/3.16.0-spec-1-5`); it is next |
+| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | [Subscription docs: status codes and `FanOutManager` samples](subscription-docs-status-codes-and-fanout-samples.md); it files `outbound-callback-backpressure.md` and `callback-oauth-handler-unrouted.md` | Approved 2026-11-15; `/implement_plan` in progress on `release/3.16.0-spec-1-5` |
 | 6 | [`3-16-release-validation`](../plans/2026-11-15-3-16-release-validation.md): the release read as one before its tag: changelog and migration guide, Emm's questions and coverage of its uses, the demo and `actingwebdemo`, the wire between 3.15 and 3.16, agent discoverability | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md), as far as the owner's resources reach; [Emm's suite](emm-suite-against-master.md) with its last run | `spec-1-5` merged; `/update_plan` (a first draft, not evaluated) |
 
 A todo these plans edit without closing:

@@ -20,7 +20,7 @@ import pytest
 
 from actingweb.actor import Actor
 from actingweb.config import Config
-from actingweb.db import get_actor
+from actingweb.db import get_attribute
 from actingweb.db.exceptions import DbError
 from actingweb.handlers import mcp as mcp_mod
 from actingweb.handlers.async_mcp import AsyncMCPHandler
@@ -134,9 +134,10 @@ class TestWarmRequests:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         cfg.force_email_prop_as_creator = flag
-        # A vouched email that differs: with the check on, a load would read
-        # _internal and rename the creator.
-        istore(actor).email = uuid_email()
+        # A vouched email that differs, written past the store (no link):
+        # before 3.16 a load under the flag read _internal and renamed the
+        # creator; now no load does.
+        get_attribute(cfg).set_attr(aid(actor), "_internal", "email", uuid_email())
         token = _token()
         _seed_token(cfg, token, aid(actor))
         _seed_trust(cfg, aid(actor))
@@ -493,11 +494,10 @@ class TestNoSecondLoad:
         assert modify.call_count == 2
         assert counts["actor_get"] == 0
 
-    def test_load_actor_hit_keeps_the_stored_creator(
+    def test_load_actor_hit_is_the_constructors(
         self, cfg: Config, actor: Actor
     ) -> None:
         cfg.force_email_prop_as_creator = True
-        istore(actor).email = uuid_email()
 
         with count_reads(cfg) as counts:
             loaded = mcp_mod._load_actor(aid(actor), cfg)
@@ -508,26 +508,13 @@ class TestNoSecondLoad:
         assert loaded.store is not None
         assert loaded.property is not None
         assert loaded.property_lists is not None
-        # The constructor would have renamed it: the check is on.
-        assert Actor(aid(actor), cfg).creator != actor.creator
+        assert Actor(aid(actor), cfg).creator == loaded.creator
 
     def test_load_actor_miss_has_no_id(self, cfg: Config) -> None:
         with count_reads(cfg) as counts:
             loaded = mcp_mod._load_actor(f"mcp{uuid.uuid4().hex}", cfg)
         assert counts["actor_get"] == 1
         assert loaded.id is None
-
-    def test_the_race_winner_load_does_not_rename(
-        self, cfg: Config, actor: Actor
-    ) -> None:
-        cfg.force_email_prop_as_creator = True
-        istore(actor).email = uuid_email()
-        handler = make_mcp_handler(cfg=cfg)
-
-        assert handler._race_winner(aid(actor)) is True
-        # Read the row itself: Actor(id, cfg) would run the rename.
-        row = get_actor(cfg).get(actor_id=aid(actor))
-        assert row is not None and row["creator"] == actor.creator
 
 
 class TestPhase1ReviewFixes:

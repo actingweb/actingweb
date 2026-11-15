@@ -169,19 +169,17 @@ def _trust_cache_key(actor_id: str, client_id: str) -> tuple[str, str]:
 
 
 def _load_actor(actor_id: str, config: Any) -> Any:
-    """Load ``actor_id`` for an MCP request, without the email-as-creator check.
+    """Load ``actor_id`` for an MCP request: one read of the actor row.
 
-    MCP authentication never compares the creator, so the load skips the
-    ``force_email_prop_as_creator`` rewrite (``Actor.get(rewrite_email=False)``)
-    and its ``_internal`` read. A hit is attribute for attribute what
-    ``Actor(actor_id, config)`` gives; on a miss ``id`` is ``None``.
+    A hit is attribute for attribute what ``Actor(actor_id, config)`` gives;
+    on a miss ``id`` is ``None``.
     ``actingweb.actor.Actor`` is read when called, so a test's patch of it
     lands here.
     """
     from .. import actor as actor_module
 
     core_actor = actor_module.Actor(config=config)
-    core_actor.get(actor_id=actor_id, rewrite_email=False)
+    core_actor.get(actor_id=actor_id)
     return core_actor
 
 

@@ -613,7 +613,9 @@ class Actor:
         else:
             self.handle = None
         if actor_id and config:
-            self.store = attribute.InternalStore(actor_id=actor_id, config=config)
+            self.store = attribute.InternalStore(
+                actor_id=actor_id, config=config, owner=self
+            )
             self.property = property.PropertyStore(actor_id=actor_id, config=config)
             self.property_lists = property.PropertyListStore(
                 actor_id=actor_id, config=config
@@ -841,31 +843,12 @@ class Actor:
         except Exception as e:  # folds DbError: best-effort cleanup of an unused id
             logger.warning(f"Marker for {actor_id} left behind: {e}")
 
-    def _email_held_elsewhere(self, email: str) -> bool:
-        """Under ``with_unique_creator()``, whether another actor holds
-        ``email`` (its ``creators`` record), so the force-email rewrite in
-        :meth:`get` is skipped instead of refused on every load. One
-        consistent read; a fault raises ``DbError``, as the rewrite does."""
-        if not self.config or not self.config.unique_creator or is_exempt(email):
-            return False
-        holder = get_actor(self.config).get_creator_holder(email)
-        if holder and holder != self.id:
-            # INFO: a record naming an actor that is gone (an orphan) blocks
-            # the rewrite too; ``actingweb-unique-creators report`` lists it.
-            logger.info(
-                f"Actor {self.id}: stored email is held by {holder}; creator "
-                "left unchanged"
-            )
-            return True
-        return False
-
-    def get(
-        self, actor_id: str | None = None, *, rewrite_email: bool = True
-    ) -> dict[str, Any] | None:
+    def get(self, actor_id: str | None = None) -> dict[str, Any] | None:
         """Retrieves an actor from storage or initialises if it does not exist.
 
-        ``rewrite_email=False`` skips the ``force_email_prop_as_creator``
-        rewrite, for a lookup that just matched the stored creator.
+        One read of the actor row. Under ``with_email_as_creator`` the
+        creator follows the stored email where the email is written
+        (:mod:`actingweb.creator_sync`), not here (3.16).
         """
         if not actor_id and not self.id:
             return None
@@ -881,36 +864,13 @@ class Actor:
             self.id = self.actor["id"]
             self.creator = self.actor["creator"]
             self.passphrase = self.actor["passphrase"]
-            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.store = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
             self.property = property.PropertyStore(actor_id=self.id, config=self.config)
             self.property_lists = property.PropertyListStore(
                 actor_id=self.id, config=self.config
             )
-            if (
-                rewrite_email
-                and self.config
-                and self.config.force_email_prop_as_creator
-            ):
-                em = self.store.email
-                from .oauth2 import is_vouched_store
-
-                # Only a vouched actor's stored email decides its creator: an
-                # unvouched actor's email may be a previous creator's, and
-                # adoption, not a load, decides who it belongs to.
-                if (
-                    em
-                    and em.lower() != self.creator
-                    and is_vouched_store(self.store)
-                    and not self._email_held_elsewhere(em.lower())
-                ):
-                    try:
-                        self.modify(creator=em.lower())
-                    except CreatorTaken:  # folds DbError: email held elsewhere
-                        # Taken between the holder read and the rename.
-                        logger.warning(
-                            f"Actor {self.id}: stored email is another actor's "
-                            "creator; creator left unchanged"
-                        )
         else:
             self.id = None
             self.creator = None
@@ -990,8 +950,7 @@ class Actor:
             self.creator_ids = [holder] if holder else []
             if not holder:
                 return False
-            # The row as stored, read consistently, before any force-email
-            # rewrite could change the creator being looked up.
+            # The row as stored, read consistently.
             row = get_actor(self.config).get(actor_id=holder)
             if not row or normalise_creator(row.get("creator")) != lookup_creator:
                 # A stale record: its actor is gone, or holds another creator
@@ -1007,7 +966,7 @@ class Actor:
                 )
                 self.creator_ids = []
                 return False
-            self.get(actor_id=holder, rewrite_email=False)
+            self.get(actor_id=holder)
             if self.id and normalise_creator(self.creator) != lookup_creator:
                 # Renamed between the check and the load: not this identity's
                 # actor any more. The create that follows settles the record.
@@ -1176,8 +1135,8 @@ class Actor:
                         victim.delete()
             # Actors left with the default creator are moved to their stored
             # email by ``actingweb-unique-creators resolve
-            # --default-creator-to-email`` (and by get()'s rewrite as each is
-            # loaded), not by every create.
+            # --default-creator-to-email`` and ``creator-to-email``, not by
+            # every create.
 
         if passphrase and len(passphrase) > 0:
             self.passphrase = passphrase
@@ -1198,8 +1157,10 @@ class Actor:
         # after the row (below).
         pre_marked: attribute.InternalStore | None = None
         if self.handle and not actor_id and auth_method and self.config:
-            pre_marked = attribute.InternalStore(actor_id=self.id, config=self.config)
-            pre_marked.mark_empty()
+            pre_marked = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
+            pre_marked.mark_empty(self.creator)
             try:
                 marked = self._write_marker(pre_marked, auth_method)
             except DbError:  # folds DbError: re-raised (503), nothing created
@@ -1298,12 +1259,14 @@ class Actor:
         if pre_marked is not None:
             self.store = pre_marked
         else:
-            self.store = attribute.InternalStore(actor_id=self.id, config=self.config)
+            self.store = attribute.InternalStore(
+                actor_id=self.id, config=self.config, owner=self
+            )
             if not actor_id:
                 # A generated id is new, so its bucket is empty; skip the
                 # read. A caller-supplied one (a system actor) can own older
                 # buckets.
-                self.store.mark_empty()
+                self.store.mark_empty(self.creator)
         self.property = property.PropertyStore(actor_id=self.id, config=self.config)
         self.property_lists = property.PropertyListStore(
             actor_id=self.id, config=self.config
@@ -1417,9 +1380,11 @@ class Actor:
     def creator_change_pinned(self, creator: str) -> bool:
         """Whether ``force_email_prop_as_creator`` refuses changing the creator
         to ``creator``: on, with a stored email that ``creator`` is not (nor
-        ``"trustee"``). :meth:`get` would put the stored email back on the next
-        load, and a sign-in for the new address in between would resolve to
-        this actor. False when ``_internal`` cannot be read."""
+        ``"trustee"``). The creator and the stored email are kept equal
+        for a vouched actor (:mod:`actingweb.creator_sync`); a creator moved
+        away from the email would leave the actor in a state the flag says
+        does not exist, and a sign-in for the email would no longer find it.
+        False when ``_internal`` cannot be read."""
         store = self.store
         if not self.config or not self.config.force_email_prop_as_creator:
             return False

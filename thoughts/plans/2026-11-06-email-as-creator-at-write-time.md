@@ -754,14 +754,73 @@ a load does to it today.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time
-- [ ] `grep -rn "rewrite_email\|_email_held_elsewhere\|_rename_pinned\|_restore_email" actingweb`
+- [x] `grep -rn "rewrite_email\|_email_held_elsewhere\|_rename_pinned\|_restore_email" actingweb`
       returns nothing
-- [ ] Codex review of the phase's diff
+- [x] Codex review of the phase's diff
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings (2026-11-15):**
+
+- **Every write the link applies to is one conditional operation**, not
+  only the ones that move the creator (from the codex review of this
+  phase). When the actor is unvouched, its creator is `trustee` or
+  reserved, or the address equals the creator, the email is still written
+  through `rename_creator` with the creator unchanged, conditioned on the
+  creator and the marker just read. As planned, those were plain writes:
+  a rename that committed between the fresh read and the write was undone
+  by it (a clean-in-place racing `modify_creator`), and with the load-time
+  rewrite gone nothing repaired the mismatch. The plan's "read, then a
+  plain write" rows therefore read "read, then a write that keeps the
+  creator". The no-read cases (flag off, another bucket, `None`, not an
+  address, the create-time shortcut) are plain writes as planned.
+- **After a fault the linked write reads back**, as `_rename_vouched` does:
+  the row and the email, strictly; a write that landed answers `APPLIED`
+  and the store and owner follow the handle that read it.
+- **The create-time shortcut is spent by its first email write**
+  (`mark_empty(creator)` records it; `applies()` consumes it), so an
+  instance kept after a create is not exempt for its life.
+- **The owner accessor is `InternalStore._owning_actor()`**, a method with
+  a leading underscore: a property named `owner` would have shadowed a
+  stored attribute of that name in every bucket a store serves (the
+  store's `__getattr__` answers None for underscore names, so no stored
+  attribute can have one).
+- **`tests/test_rename_pending_vouch.py` is deleted and replaced** by
+  `tests/test_creator_follows_email.py` (47 tests), organised by the
+  outcome table; the old file tested the deleted protocol throughout.
+  `TestForceEmailRewriteHeld` is replaced by
+  `TestTheEmailWriteMeetsAHeldAddress` (both backends, enforced
+  uniqueness). Of the MCP tests, `test_the_race_winner_load_does_not_rename`
+  is deleted (no load renames) and `test_load_actor_hit_keeps_the_stored_creator`
+  became `test_load_actor_hit_is_the_constructors`; the warm-request test
+  sets up its mismatch through the backend.
+- **Tests not as planned:** the trustee handoff and its handback are tested
+  through `modify_creator_unvouched` (what `PUT trust/trustee` calls), not
+  over HTTP; request authentication after a linked write is tested as the
+  sign-in lookup (`get_from_creator`) finding the renamed actor; the
+  PostgreSQL row/bucket straddle test was not written (the straddle is
+  unchanged by this plan, recorded under Failure Scenarios). A load's cost
+  is pinned as `{GetItem: 1}` on DynamoDB.
+- **Accepted, with the outside voice's findings recorded:**
+  - The vouch check is the marker-only form, as the load used (plan
+    Decision). After a direct `Actor.modify(creator=X)` a later email
+    write still renames the actor and now also rewrites `vouched_creator`;
+    the stored-email rule (`oauth2.py:1873-1874`) vouched that address
+    before, so the outcome is the one the load reached.
+  - The rename is conditioned on the creator and `auth_method`, not on
+    `email_verified` or `vouched_creator`. `email_verified` is written
+    `"false"` only at an email-form create (`handlers/oauth_email.py:969`)
+    and cleared by the emailed link (`oauth2.py:1776`), neither racing a
+    rename of a vouched actor in practice.
+  - `marker=None` (an actor with no `auth_method`, a pre-3.16 actor) means
+    "no marker check", not "still absent": `rename_creator` has no
+    absent-marker condition. Such an actor is unvouched, so a linked write
+    never moves its creator; only `modify_creator` renames it, as before.
+
+---
 
 ---
 
@@ -1217,9 +1276,11 @@ Medium, six Low. All are folded in above, marked 2026-11-15.
   scoped per table and action would fail at the first linked write, not at
   start. Phase 4's changelog entry names the actions; whether Emm's policy
   needs a change is found by its suite's IAM coverage test.
-- Whether the native and JWT-bearer sign-in paths
-  (`handlers/oauth2_spa.py:1494`, `:1593`) refuse a sign-in without an
-  address under the flag, as the two callers named in the vouching table do.
+- [Settled 2026-11-15, Phase 2 review] Every caller of the OAuth create
+  passes `require_email` under the flag (`handlers/oauth2_callback.py:389`,
+  `handlers/oauth2_spa.py:1154`, `:1494`, `:1593`,
+  `handlers/oauth2_server.py:479`), so the branch at `oauth2.py:1941-1945`
+  is not reached with it on.
 - The item order is PynamoDB's and was run against DynamoDB Local only; that
   AWS answers with one code per item in request order is from its
   documentation, not from a run.

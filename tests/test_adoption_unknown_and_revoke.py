@@ -142,6 +142,11 @@ class TestSecondRevoke:
 
 
 class TestSeedMissingEmail:
+    """The flag is stated per case (3.16): under ``with_email_as_creator`` a
+    write of a vouched actor's email to another address renames it, and a
+    sign-in without an address is refused before it gets here, so the
+    provider-id cases run with the flag off."""
+
     def test_a_vouched_actor_without_an_email_gets_its_creator(
         self, auth: OAuth2Authenticator
     ) -> None:
@@ -153,12 +158,17 @@ class TestSeedMissingEmail:
             creator, user_info={"email": "other@example.com"}
         )
         assert result is not None and result.id == owner.id
-        assert istore(Actor(actor_id=aid(owner), config=config)).email == creator
+        loaded = Actor(actor_id=aid(owner), config=config)
+        assert istore(loaded).email == creator
+        # Under the flag the seed equals the creator: a plain write.
+        assert config.force_email_prop_as_creator
+        assert loaded.creator == creator
 
     def test_a_provider_id_creator_gets_the_provider_email(
         self, auth: OAuth2Authenticator
     ) -> None:
         config = auth.config
+        config.force_email_prop_as_creator = False
         creator = f"google:{uuid_email().split('@')[0]}"
         owner = create_core_actor(config, creator, auth_method="google_oauth2")
         istore(owner).email = None
@@ -174,6 +184,7 @@ class TestSeedMissingEmail:
         self, auth: OAuth2Authenticator
     ) -> None:
         config = auth.config
+        config.force_email_prop_as_creator = False
         creator = f"google:{uuid_email().split('@')[0]}"
         owner = create_core_actor(config, creator, auth_method="google_oauth2")
         istore(owner).email = "kept@example.com"
@@ -207,18 +218,22 @@ class TestSeedMissingEmail:
         creator = uuid_email()
         owner = create_core_actor(config, creator, auth_method="google_oauth2")
         istore(owner).email = None
-        from actingweb.attribute import Attributes
+        from actingweb.db import get_actor, get_attribute
 
-        real = Attributes.create_attr_if_absent
+        # Under the flag the seed is one conditional backend operation
+        # (rename_creator with an "absent" email write); another writer
+        # stores an address between the sign-in's read and that operation.
+        cls = type(get_actor(config))
+        real = cls.rename_creator
 
-        def raced(self: Any, name: str | None = None, **k: Any) -> bool:
-            if name == "email":
-                # Another writer stores an address between the read and the
-                # create.
-                Attributes.set_attr(self, name="email", data="raced@example.com")
-            return real(self, name=name, **k)
+        def raced(self: Any, actor_id: str, **k: Any) -> Any:
+            get_attribute(config).set_attr(
+                actor_id, "_internal", "email", "raced@example.com"
+            )
+            return real(self, actor_id, **k)
 
-        with patch.object(Attributes, "create_attr_if_absent", raced):
+        assert config.force_email_prop_as_creator
+        with patch.object(cls, "rename_creator", raced):
             auth.lookup_or_create_actor_by_identifier(creator)
         assert (
             istore(Actor(actor_id=aid(owner), config=config)).email

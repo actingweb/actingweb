@@ -56,3 +56,25 @@ class DeletionInProgress(DbError):
         )
         self.actor_id = actor_id
         self.retry_after = max(1, int(retry_after))
+
+
+class AttributeKeyCollision(DbError):
+    """An attribute write met a row another bucket owns under the same
+    composite key.
+
+    Both backends key an attribute as ``bucket + ":" + name``, so bucket
+    ``a`` name ``b:c`` and bucket ``a:b`` name ``c`` share a key, and a peer
+    id may contain ``:``. A write never replaces the other bucket's row; it
+    raises this instead. It subclasses ``DbError`` so fail-closed code stops
+    here too, but it is not an availability fault: retrying meets the same
+    row. The replica path treats it as a refused key, not a 503."""
+
+    def __init__(self, bucket: str, name: str, actor_id: str | None = None) -> None:
+        Exception.__init__(
+            self,
+            f"attribute key {bucket!r}/{name!r} is held by another bucket"
+            + (f" for actor {actor_id}" if actor_id else ""),
+        )
+        self.bucket = bucket
+        self.name = name
+        self.actor_id = actor_id

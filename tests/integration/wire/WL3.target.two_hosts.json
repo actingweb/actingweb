@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"action\": \"delete\", \"index\": 0}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"delete\", \"length\": 1, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -160,21 +160,12 @@
        "lists": {
         "notes": [
          {
-          "id": "a",
-          "text": "one"
-         },
-         {
           "id": "b",
           "text": "two"
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "action": "delete",
-         "index": 0
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -217,8 +208,14 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "action": "delete",
-           "index": 0
+           "index": 0,
+           "length": 1,
+           "list": "notes",
+           "old_item": {
+            "id": "a",
+            "text": "one"
+           },
+           "operation": "delete"
           }
          },
          "event": "subscription_data",
@@ -236,8 +233,14 @@
        "request": {
         "data": {
          "notes": {
-          "action": "delete",
-          "index": 0
+          "index": 0,
+          "length": 1,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "delete"
          }
         },
         "granularity": "high",

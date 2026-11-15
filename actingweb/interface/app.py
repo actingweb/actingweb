@@ -30,11 +30,12 @@ class StoreNotReady(RuntimeError):
     """The database is not ready for this version of the library (see
     :meth:`ActingWebApp.check_ready`).
 
-    The base of :class:`UniqueCreatorNotReady` and
-    :class:`PropertyLookupNotReady`. ``check_ready()`` raises the specific
-    subclass when one check refuses and a plain ``StoreNotReady`` listing
-    both messages when both do, so an operator runs both commands in one
-    deploy window; catch this class to handle either.
+    The base of :class:`UniqueCreatorNotReady`,
+    :class:`PropertyLookupNotReady` and :class:`AttributeSchemaNotReady`.
+    ``check_ready()`` raises the specific subclass when one check refuses
+    and a plain ``StoreNotReady`` listing every message when more do, so an
+    operator fixes them in one deploy window; catch this class to handle
+    any.
     """
 
 
@@ -47,6 +48,14 @@ class PropertyLookupNotReady(StoreNotReady):
     """The reverse-lookup table is not ready for the configured indexed
     properties (see :meth:`ActingWebApp.check_ready`). The message names the
     ``actingweb-property-lookup`` command that makes it ready."""
+
+
+class AttributeSchemaNotReady(StoreNotReady):
+    """Attribute lists cannot work on this database (see
+    :meth:`ActingWebApp.check_ready`): on PostgreSQL the revision that widens
+    ``attributes.bucket_name`` and ``name`` and indexes list rows has not
+    run, or its index is INVALID; on any backend, a custom attribute backend
+    lacks one of the list primitives."""
 
 
 class ActingWebApp:
@@ -1409,7 +1418,7 @@ class ActingWebApp:
                 actor: ActorInterface,
                 peer_id: str,
                 target: str,
-                data: dict,
+                data: Any,  # an object; a subtarget's value as sent
                 sequence: int,
                 callback_type: str
             ) -> None:
@@ -1560,7 +1569,7 @@ class ActingWebApp:
 
         ``integrate_flask`` and ``integrate_fastapi`` call it; an application
         that uses neither calls it once before serving. It pre-warms the
-        DynamoDB tables first, then runs two checks, each once per process:
+        DynamoDB tables first, then runs these checks, each once per process:
 
         - **Reverse lookup.** Raises :class:`PropertyLookupNotReady` (naming
           ``actingweb-property-lookup``) when a configured indexed property
@@ -1574,15 +1583,23 @@ class ActingWebApp:
           fault while probing is refused the same way: starting unchecked
           could let every existing user's next sign-in create a second actor
           (DynamoDB). With the flag off it does nothing.
+        - **Attribute lists.** Raises :class:`AttributeSchemaNotReady` when the
+          attribute backend lacks one of the list primitives (a custom
+          backend), and on PostgreSQL when ``attributes.bucket_name`` or
+          ``name`` is not ``TEXT`` or the index ``ix_attributes_list_rows``
+          is missing or INVALID: run ``alembic upgrade head`` (revision
+          ``a7b8c9d0e1f2``). It applies to every deployment: replicas of
+          peers' lists live in attribute lists.
 
-        When both refuse, a single :class:`StoreNotReady` carries both
-        messages. Catch :class:`StoreNotReady` to handle either.
+        When more than one refuses, a single :class:`StoreNotReady` carries
+        every message. Catch :class:`StoreNotReady` to handle any.
         """
         self._prewarm_dynamodb_tables()
         refusals: list[StoreNotReady] = []
         for check in (
             self._check_property_lookup_ready,
             self._check_unique_creator_ready,
+            self._check_attribute_schema_ready,
         ):
             try:
                 check()
@@ -1592,7 +1609,7 @@ class ActingWebApp:
             raise refusals[0]
         if refusals:
             raise StoreNotReady(
-                "The database is not ready in two ways:\n\n"
+                "The database is not ready in more than one way:\n\n"
                 + "\n\n".join(str(r) for r in refusals)
             ) from refusals[0]
 
@@ -1689,6 +1706,52 @@ class ActingWebApp:
                 "with_unique_creator(False)."
             )
         self._unique_creator_checked = True
+
+    def _check_attribute_schema_ready(self) -> None:
+        if getattr(self, "_attribute_schema_checked", False):
+            return
+        config = self.get_config()
+        from ..db.protocols import ATTRIBUTE_LIST_PRIMITIVES
+
+        backend = getattr(getattr(config, "DbAttribute", None), "DbAttribute", None)
+        missing = [
+            m
+            for m in ATTRIBUTE_LIST_PRIMITIVES
+            if not callable(getattr(backend, m, None))
+        ]
+        if missing:
+            raise AttributeSchemaNotReady(
+                "The attribute backend lacks the list primitives "
+                f"{', '.join(missing)}, which attribute lists (and every "
+                "replica of a peer's list) are stored through. Implement them "
+                '(DbAttributeProtocol, docs/migration/v3.16.rst, "Custom '
+                'database backends").'
+            )
+        if getattr(config, "database", None) == "postgresql":
+            from ..db.postgresql.attribute import (
+                LIST_ROWS_REVISION,
+                attribute_schema_problems,
+            )
+
+            try:
+                problems = attribute_schema_problems()
+            except Exception as e:  # folds DbError: fails closed, like absence
+                raise AttributeSchemaNotReady(
+                    "Whether the attributes table is ready for attribute lists "
+                    f"could not be checked ({e}); fix the database connection "
+                    "or permissions and start again."
+                ) from e
+            if problems:
+                raise AttributeSchemaNotReady(
+                    "The attributes table is not ready for attribute lists: "
+                    f"{'; '.join(problems)}. Run 'alembic upgrade head' "
+                    f"(revision {LIST_ROWS_REVISION}) before starting this "
+                    "version; if it times out on its lock behind a long "
+                    "transaction, run it again "
+                    '(docs/migration/v3.16.rst, "Attribute lists and list '
+                    'diffs").'
+                )
+        self._attribute_schema_checked = True
 
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""

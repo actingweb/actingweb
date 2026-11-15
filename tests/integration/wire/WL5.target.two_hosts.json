@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"action\": \"metadata_update\", \"description\": \"wire notes\", \"explanation\": \"why\"}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"metadata\", \"length\": 2}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -169,13 +169,7 @@
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "action": "metadata_update",
-         "description": "wire notes",
-         "explanation": "why"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -218,9 +212,9 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "action": "metadata_update",
-           "description": "wire notes",
-           "explanation": "why"
+           "length": 2,
+           "list": "notes",
+           "operation": "metadata"
           }
          },
          "event": "subscription_data",
@@ -238,9 +232,9 @@
        "request": {
         "data": {
          "notes": {
-          "action": "metadata_update",
-          "description": "wire notes",
-          "explanation": "why"
+          "length": 2,
+          "list": "notes",
+          "operation": "metadata"
          }
         },
         "granularity": "high",

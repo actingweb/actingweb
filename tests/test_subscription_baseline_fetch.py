@@ -90,21 +90,26 @@ class TestFetchAndTransformBaseline:
 
         mock_proxy = MagicMock()
         mock_proxy.trust = {"verified": True}
-        mock_proxy.get_resource.return_value = [
+        items = [
             {"id": "1", "location": "Paris"},
             {"id": "2", "location": "Tokyo"},
         ]
+        # The list's items, then its metadata (3.16: an array is a list's
+        # only when the metadata route answers).
+        mock_proxy.get_resource.side_effect = [items, {"description": ""}]
+        mock_proxy.last_response_code = 200
+        mock_proxy.last_response_redirected = False
 
         with patch.object(manager, "_get_peer_proxy", return_value=mock_proxy):
             result = manager._fetch_and_transform_baseline(
                 peer_id="peer_1", target="properties", subtarget="memory_travel"
             )
 
-        assert result is not None
-        assert isinstance(result, list)
-        assert len(result) == 2
+        assert result == {"memory_travel": {"_list": True, "items": items}}
         # Verify subtarget is appended to path
-        mock_proxy.get_resource.assert_called_once_with(path="properties/memory_travel")
+        assert mock_proxy.get_resource.call_args_list[0].kwargs == {
+            "path": "properties/memory_travel"
+        }
 
     def test_fetch_and_transform_with_property_lists(self):
         """Test baseline fetch transforms property list metadata."""
@@ -362,6 +367,133 @@ class TestSyncSubscriptionBaselineFetch:
             mock_store.apply_resync_data.assert_called_once()
             stored_data = mock_store.apply_resync_data.call_args[0][0]
             assert stored_data["prop"] == {"value": "baseline"}
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    def test_a_failed_subtarget_baseline_is_a_failed_sync(self, use_async):
+        """Outside voice on iteration 27: a subtarget baseline that could not
+        be fetched (here a redirected login page) is not reported as success,
+        stores nothing and leaves the sequence."""
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "subtarget": "color",
+            "callback": True,
+        }
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=False, auto_storage=True
+        )
+        with (
+            patch.object(manager, "_get_peer_proxy", return_value=MagicMock()),
+            patch.object(
+                manager,
+                "_fetch_and_transform_baseline",
+                return_value=None,
+            ),
+            patch.object(
+                manager, "_fetch_and_transform_baseline_async", return_value=None
+            ),
+            patch("actingweb.remote_storage.RemotePeerStore") as mock_store_class,
+            patch("actingweb.subscription.Subscription") as sub_class,
+        ):
+            proxy = manager._get_peer_proxy("peer_1")
+            proxy.get_resource.return_value = {"sequence": 5, "data": []}
+            proxy.get_resource_async = AsyncMock(
+                return_value={"sequence": 5, "data": []}
+            )
+            if use_async:
+                result = asyncio.run(
+                    manager.sync_subscription_async(
+                        peer_id="peer_1", subscription_id="sub_1", config=config
+                    )
+                )
+            else:
+                result = manager.sync_subscription(
+                    peer_id="peer_1", subscription_id="sub_1", config=config
+                )
+        assert result.success is False
+        assert result.diffs_processed == 0
+        mock_store_class.return_value.apply_resync_data.assert_not_called()
+        sub_class.return_value.handle.modify.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("target", "resource"), [("properties", "street"), ("resources", "")]
+    )
+    def test_an_empty_answer_elsewhere_is_still_a_success(self, target, resource):
+        """Only a single property's baseline fails the sync: a resource-level
+        or another target's empty answer stores nothing and succeeds, as
+        before (advisor on iteration 28)."""
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": target,
+            "subtarget": "address",
+            "resource": resource,
+            "callback": True,
+        }
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=False, auto_storage=True
+        )
+        proxy = MagicMock()
+        proxy.get_resource.return_value = {"sequence": 5, "data": []}
+        with (
+            patch.object(manager, "_get_peer_proxy", return_value=proxy),
+            patch.object(manager, "_fetch_and_transform_baseline", return_value=None),
+            patch("actingweb.remote_storage.RemotePeerStore"),
+            patch("actingweb.subscription.Subscription"),
+        ):
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+        assert result.success is True
+
+    def test_a_failed_baseline_after_duplicates_is_a_failed_sync(self):
+        """The duplicate-diffs path fails like the no-diffs path when a
+        single property's baseline cannot be fetched (iteration 28's
+        review)."""
+        from actingweb.callback_processor import CallbackProcessor, ProcessResult
+
+        actor = FakeCoreActor()
+        actor._subscriptions[("peer_1", "sub_1", True)] = {
+            "peerid": "peer_1",
+            "subscriptionid": "sub_1",
+            "target": "properties",
+            "subtarget": "color",
+            "callback": True,
+        }
+        manager = SubscriptionManager(actor)  # type: ignore[arg-type]
+        config = SubscriptionProcessingConfig(
+            enabled=True, auto_sequence=True, auto_storage=True
+        )
+        proxy = MagicMock()
+        proxy.get_resource.return_value = {
+            "sequence": 5,
+            "data": [{"sequence": 5, "data": "blue"}],
+        }
+        with (
+            patch.object(manager, "_get_peer_proxy", return_value=proxy),
+            patch.object(manager, "_fetch_and_transform_baseline", return_value=None),
+            patch.object(
+                CallbackProcessor,
+                "process_callback_sync",
+                return_value=ProcessResult.DUPLICATE,
+            ),
+            patch.object(
+                CallbackProcessor,
+                "rebuild_state",
+                return_value={"owed": False, "lists": []},
+            ),
+            patch("actingweb.remote_storage.RemotePeerStore") as store_class,
+        ):
+            result = manager.sync_subscription(
+                peer_id="peer_1", subscription_id="sub_1", config=config
+            )
+        assert result.success is False
+        store_class.return_value.apply_resync_data.assert_not_called()
 
     def test_sync_subscription_skips_baseline_when_auto_storage_false(self):
         """Test sync_subscription skips baseline fetch when auto_storage=False."""

@@ -18,6 +18,9 @@ import json
 import pytest
 
 from actingweb.property_list import ListItemHandle, ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     FakePropertyDb,
     _patch_get_property,
@@ -37,6 +40,7 @@ def _seed_dict_items(fake_store, actor_id, name, items, v2=True):
 
 
 class TestFindAndFindAll:
+    @pytest.mark.property_only("compares the property v1 and v2 formats")
     @pytest.mark.parametrize("v2", [True, False])
     def test_find_returns_first_match_same_result_both_formats(
         self, monkeypatch, fake_store, v2
@@ -55,6 +59,7 @@ class TestFindAndFindAll:
         assert lst.find("id", "a") == {"id": "a", "title": "first"}
         assert lst.find("id", "missing") is None
 
+    @pytest.mark.property_only("compares the property v1 and v2 formats")
     @pytest.mark.parametrize("v2", [True, False])
     def test_find_all_returns_every_match_same_result_both_formats(
         self, monkeypatch, fake_store, v2
@@ -133,6 +138,7 @@ class TestItemsWithHandles:
         assert fake_db.range_call_count == 1
         assert [item for _, item in pairs] == [{"id": "a"}, {"id": "b"}]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_raises_on_v1_naming_migrate_to_v2(self, monkeypatch, fake_store):
         actor_id = "actor-handles-v1"
         name = "tasks"

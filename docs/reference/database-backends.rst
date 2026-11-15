@@ -507,6 +507,13 @@ Index Strategy
   - ``CREATE INDEX idx_actors_creator ON actors(creator)``
   - ``CREATE INDEX idx_trusts_secret ON trusts(secret)``
   - ``CREATE INDEX idx_attributes_ttl ON attributes(ttl_timestamp)`` (for cleanup)
+- A partial index for attribute list range reads (3.16, revision
+  ``a7b8c9d0e1f2``): ``CREATE INDEX ix_attributes_list_rows ON attributes
+  (id, bucket, name COLLATE "C") WHERE starts_with(name, 'list:')``
+- ``attributes.bucket_name`` and ``attributes.name`` are ``TEXT`` since revision
+  ``a7b8c9d0e1f2`` (an attribute list's item row name carries a rank key of up
+  to 180 characters); ``check_ready()`` raises ``AttributeSchemaNotReady``
+  until the revision is applied.
 
 Connection Management
 ~~~~~~~~~~~~~~~~~~~~~

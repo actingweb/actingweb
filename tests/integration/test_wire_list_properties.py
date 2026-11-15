@@ -357,7 +357,8 @@ def test_wl12_target(wire_pair, topology):
 @pytest.mark.parametrize("topology", TOPOLOGIES)
 def test_wl13_target(wire_pair, topology, caplog):
     """WL13.target: SDK ``append`` and update of an item over the wire apps'
-    span threshold (390,000 bytes): a reference diff, which B logs and skips."""
+    span threshold (390,000 bytes): a reference diff, which B cannot apply:
+    out of step, so B rebuilds its replica from a baseline (3.16)."""
     s = _pair(wire_pair, topology, "target")
     _seed_list(s, [{"id": "small"}])
     a = s.publisher
@@ -369,14 +370,15 @@ def test_wl13_target(wire_pair, topology, caplog):
     with caplog.at_level(logging.WARNING, logger="actingweb.remote_storage"):
         s.step("append a spanned item", lambda: _lst(a).append(big))
         s.step("update it", update_big)
-    skipped = [
+    out_of_step = [
         r.getMessage()
         for r in caplog.records
         if r.name == "actingweb.remote_storage"
-        and "reference to values over the span threshold" in r.getMessage()
+        and "out of step" in r.getMessage()
+        and "spanned" in r.getMessage()
     ]
-    assert len(skipped) == 2, skipped
-    assert "'append'" in skipped[0] and "'update'" in skipped[1]
+    assert len(out_of_step) == 2, out_of_step
+    assert "'append'" in out_of_step[0] and "'update'" in out_of_step[1]
     check("WL13.target", s.recording(), variant=topology)
 
 

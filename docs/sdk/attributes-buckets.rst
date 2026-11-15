@@ -167,6 +167,56 @@ an idempotency key) where a read-then-write would let two requests both win.
   still carries meaning (a consumed marker kept for ``consumed_ttl``): it replaces an
   expired row.
 
+Writes are bound to their bucket (v3.16+)
+-----------------------------------------
+
+Both backends key an attribute as ``<bucket>:<name>``, so bucket ``a`` with name
+``b:c`` and bucket ``a:b`` with name ``c`` share one key (a peer id in
+``remote:<peer_id>`` may contain ``:``). Every attribute write, ``set_attr``
+included, is conditioned on its bucket: a write to a key another bucket holds
+raises ``AttributeKeyCollision`` (``actingweb.db.exceptions``, a ``DbError``) and
+never replaces the other bucket's row. It is not an availability fault: a retry meets
+the same row. The subscription replica refuses such a key and logs it (``another
+bucket holds the key``).
+
+Attribute lists (v3.16+)
+------------------------
+
+``actor.attribute_lists(bucket)`` returns an ``AttributeListStore`` for one bucket.
+Its lists (``.get(name)`` or attribute access) are ``ListAttribute`` instances with
+the ``ListProperty`` interface: private to the actor, never served or diffed. See
+:doc:`../guides/property-lists` ("Attribute Lists") for the interface and when to use
+one.
+
+.. code-block:: python
+
+   queue = actor.attribute_lists("jobs").get("pending")
+   queue.append({"job": "reindex"})
+   first = queue.pop(0)
+
+**Layout.** A list is ``list:<name>-meta`` plus one ``list:<name>-#<rank>`` row per
+item in its bucket, the property list format (``actingweb.list_core.ListCore`` over a
+``ListStorage``). A side bucket, ``<bucket>$aux`` under the same actor, holds the body
+rows of items over the span threshold and the key rows of ``append_once()``. Code
+that enumerates an actor's buckets sees these ``$aux`` buckets; leave them alone, the
+list owns them (``clear()`` and ``delete()`` remove them with the list).
+
+**The old layout.** Before 3.16 an attribute list was ``list:<name>:meta`` and
+``list:<name>:<i>``. Such a list is read in place and converted on its first change,
+its metadata included; reads never convert. ``ListAttributeIterator`` is removed:
+iterate the list itself. ``get_metadata()["length"]`` is advisory and ``updated_at``
+best effort. A pre-3.16 process reads a converted list as empty, and a write it makes
+lands in the old layout beside the new one: the list then raises
+``ListLayoutConflictError`` on every access. Finish a rolling deploy before lists
+convert, and check with ``actingweb-verify-property-lists --attributes --bucket
+<bucket>`` (:doc:`../guides/property-lists`).
+
+**Custom backends.** Attribute lists need nine more ``DbAttribute`` methods
+(``ATTRIBUTE_LIST_PRIMITIVES`` in ``actingweb.db.protocols``); see
+:doc:`../migration/v3.16`, "Custom database backends". On PostgreSQL they need
+revision ``a7b8c9d0e1f2`` (``check_ready()`` raises ``AttributeSchemaNotReady``
+until it is applied).
+
 Complete Bucket Reference
 -------------------------
 
@@ -259,6 +309,16 @@ Per-Actor Buckets
      - OAuth2 tokens per trust relationship
      - Permanent
      - Trust deletion
+   * - ``remote:{peer_id}``
+     - Replica of a peer's subscribed data (scalars, and lists in the attribute list
+       layout); see :doc:`../guides/subscriptions`
+     - Permanent
+     - Trust deletion (``auto_cleanup``)
+   * - ``{bucket}$aux``
+     - Side bucket of the attribute lists in ``{bucket}``: spanned items' body rows,
+       ``append_once()`` key rows
+     - Permanent
+     - The list's ``clear()``/``delete()``; actor deletion
 
 Data Type Details
 -----------------
@@ -354,6 +414,8 @@ When ``actor.delete()`` is called, the following cleanup occurs:
    - ``mcp_refresh_tokens``
    - ``mcp_auth_codes``
    - ``mcp_google_tokens``
+   - ``remote:{peer_id}`` replicas and every attribute list's ``{bucket}$aux`` side
+     bucket
    - Any custom buckets
 
 6. **Actor Record** - Actor deleted from ``_actors`` table

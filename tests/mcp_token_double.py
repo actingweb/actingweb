@@ -122,132 +122,250 @@ class MemoryStore:
         return set(self.rows.get(f"{actor_id}:{bucket}", {}))
 
 
+class MemoryDbAttribute:
+    """The attribute backend over a ``MemoryStore`` (``store``, bound per
+    config by ``make_config()``). Implements the list primitives the list
+    core needs; each bucket is its own dict, so the composite-key collision
+    of the real backends does not arise here."""
+
+    store: MemoryStore
+    MAX_ROW_BYTES: int | None = None
+
+    def get_bucket(self, actor_id: str, bucket: str) -> dict[str, Any] | None:
+        if bucket in self.store.raising_buckets:
+            raise DbError(f"throttled reading {bucket}")
+        if bucket in self.store.faulty_buckets:
+            return None
+        return copy.deepcopy(self.store.rows.get(f"{actor_id}:{bucket}", {}))
+
+    def get_attr_strict(self, actor_id: str, bucket: str, name: str) -> Any:
+        if bucket in self.store.faulty_buckets:
+            raise DbError(f"backend fault reading {bucket}")
+        if self.store.expired(actor_id, bucket, name):
+            return None
+        return copy.deepcopy(self.store.rows.get(f"{actor_id}:{bucket}", {}).get(name))
+
+    def get_attr(self, actor_id: str, bucket: str, name: str) -> Any:
+        return copy.deepcopy(self.store.rows.get(f"{actor_id}:{bucket}", {}).get(name))
+
+    def set_attr(
+        self,
+        actor_id: str,
+        bucket: str,
+        name: str,
+        data: Any,
+        timestamp: Any = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        if bucket in self.store.write_faults:
+            return False
+        if not data:
+            self.store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
+            return True
+        self.store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(data)}
+        self.store.record_ttl(actor_id, bucket, name, ttl_seconds)
+        return True
+
+    def delete_attr(self, actor_id: str, bucket: str, name: str) -> bool:
+        if (actor_id, bucket, name) in self.store.delete_faults:
+            return True
+        self.store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
+        return True
+
+    def delete_attr_conditional(self, actor_id: str, bucket: str, name: str) -> bool:
+        if (actor_id, bucket, name) in self.store.delete_faults:
+            return False
+        return (
+            self.store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None) is not None
+        )
+
+    def conditional_update_attr(
+        self,
+        actor_id: str,
+        bucket: str,
+        name: str,
+        old_data: Any,
+        new_data: Any,
+        timestamp: Any = None,
+        ttl_seconds: int | None = None,
+        *,
+        clear_ttl: bool = False,
+    ) -> bool:
+        if self.store.cas_fault:
+            return False
+        if self.store.cas_hook is not None and not self.store.cas_hook(
+            actor_id, bucket, name
+        ):
+            return False
+        current = self.store.rows.get(f"{actor_id}:{bucket}", {}).get(name)
+        if current is None or current.get("data") != old_data:
+            return False
+        self.store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(new_data)}
+        if ttl_seconds is not None:
+            self.store.record_ttl(actor_id, bucket, name, ttl_seconds)
+        return not self.store.cas_lost_response
+
+    def delete_bucket(self, actor_id: str, bucket: str) -> bool:
+        return self.store.rows.pop(f"{actor_id}:{bucket}", None) is not None
+
+    def delete_by_chain(
+        self,
+        actor_id: str | None = None,
+        buckets: list[str] | None = None,
+        chain_id: str | None = None,
+        defer_name: str | None = None,
+    ) -> int:
+        if self.store.chain_delete_hook is not None:
+            self.store.chain_delete_hook()
+        if self.store.chain_delete_fault == "raise":
+            raise RuntimeError("throttled deleting chain")
+        if self.store.chain_delete_fault == "zero":
+            return 0
+        if not actor_id or not chain_id or not buckets:
+            return 0
+        matches: list[tuple[dict[str, Any], str]] = []
+        deferred: list[tuple[dict[str, Any], str]] = []
+        for bucket in buckets:
+            items = self.store.rows.get(f"{actor_id}:{bucket}", {})
+            for name, rec in list(items.items()):
+                data = rec.get("data") or {}
+                if isinstance(data, dict) and data.get("chain_id") == chain_id:
+                    (deferred if name == defer_name else matches).append((items, name))
+        deleted = 0
+        ordered = matches + deferred
+        for i, (items, name) in enumerate(ordered):
+            if self.store.chain_delete_fault == "partial" and i == len(ordered) - 1:
+                raise RuntimeError("throttled part-way through the chain")
+            del items[name]
+            deleted += 1
+        return deleted
+
+    def delete_expired(
+        self, now_epoch: int | None = None, buckets: list[str] | None = None
+    ) -> int:
+        self.store.purges.append(list(buckets) if buckets else None)
+        return 0
+
+    # -- list primitives ---------------------------------------------------
+
+    def _rows(self, actor_id: str, bucket: str) -> dict[str, dict[str, Any]]:
+        return self.store.rows.get(f"{actor_id}:{bucket}", {})
+
+    def get_attr_range(
+        self,
+        actor_id: str,
+        bucket: str,
+        lower: str,
+        upper: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        if bucket in self.store.raising_buckets:
+            raise DbError(f"throttled reading {bucket}")
+        return {
+            name: "" if keys_only else row["data"]
+            for name, row in sorted(self._rows(actor_id, bucket).items())
+            if lower <= name <= upper
+        }
+
+    def get_attr_prefix(
+        self,
+        actor_id: str,
+        bucket: str,
+        prefix: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        if bucket in self.store.raising_buckets:
+            raise DbError(f"throttled reading {bucket}")
+        return {
+            name: "" if keys_only else row["data"]
+            for name, row in sorted(self._rows(actor_id, bucket).items())
+            if name.startswith(prefix)
+        }
+
+    def get_last_attr_in_range(
+        self, actor_id: str, bucket: str, lower: str, upper: str
+    ) -> str | None:
+        names = [n for n in self._rows(actor_id, bucket) if lower <= n <= upper]
+        return max(names) if names else None
+
+    def create_attr_if_not_exists(
+        self, actor_id: str, bucket: str, name: str, data: Any
+    ) -> bool:
+        if bucket in self.store.write_faults:
+            raise DbError(f"backend fault writing {bucket}")
+        rows = self.store.bucket(actor_id, bucket)
+        if name in rows:
+            return False
+        rows[name] = {"data": copy.deepcopy(data)}
+        return True
+
+    def create_attr_if_absent(
+        self,
+        actor_id: str | None = None,
+        bucket: str | None = None,
+        name: str | None = None,
+        data: Any = None,
+        timestamp: Any = None,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        assert actor_id and bucket and name
+        if ttl_seconds is not None:
+            self.store.ttls[(actor_id, bucket, name)] = ttl_seconds
+        return self.create_attr_if_not_exists(actor_id, bucket, name, data)
+
+    def create_attrs_if_not_exist(
+        self, actor_id: str, bucket: str, rows: dict[str, Any]
+    ) -> set[str]:
+        return {
+            name
+            for name, data in rows.items()
+            if self.create_attr_if_not_exists(actor_id, bucket, name, data)
+        }
+
+    def set_attr_if_data_equals(
+        self, actor_id: str, bucket: str, name: str, expected: str, data: Any
+    ) -> bool:
+        row = self._rows(actor_id, bucket).get(name)
+        if row is None or row.get("data") != expected:
+            return False
+        row["data"] = copy.deepcopy(data)
+        return True
+
+    def delete_attr_if_data_equals(
+        self, actor_id: str, bucket: str, name: str, expected: str
+    ) -> bool:
+        rows = self._rows(actor_id, bucket)
+        row = rows.get(name)
+        if row is None or row.get("data") != expected:
+            return False
+        del rows[name]
+        return True
+
+    def delete_attrs(self, actor_id: str, bucket: str, names: list[str]) -> None:
+        rows = self._rows(actor_id, bucket)
+        for name in names:
+            rows.pop(name, None)
+
+    def put_attr(self, actor_id: str, bucket: str, name: str, data: Any) -> None:
+        if not data:
+            raise ValueError("put_attr does not store falsy data")
+        if bucket in self.store.write_faults:
+            raise DbError(f"backend fault writing {bucket}")
+        self.store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(data)}
+
+
 def make_config() -> tuple[Config, MemoryStore]:
     """A real Config whose attribute storage is an in-memory MemoryStore."""
     store = MemoryStore()
 
-    class MockDbAttribute:
-        def get_bucket(self, actor_id: str, bucket: str) -> dict[str, Any] | None:
-            if bucket in store.raising_buckets:
-                raise DbError(f"throttled reading {bucket}")
-            if bucket in store.faulty_buckets:
-                return None
-            return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}))
-
-        def get_attr_strict(self, actor_id: str, bucket: str, name: str) -> Any:
-            if bucket in store.faulty_buckets:
-                raise DbError(f"backend fault reading {bucket}")
-            if store.expired(actor_id, bucket, name):
-                return None
-            return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}).get(name))
-
-        def get_attr(self, actor_id: str, bucket: str, name: str) -> Any:
-            return copy.deepcopy(store.rows.get(f"{actor_id}:{bucket}", {}).get(name))
-
-        def set_attr(
-            self,
-            actor_id: str,
-            bucket: str,
-            name: str,
-            data: Any,
-            timestamp: Any = None,
-            ttl_seconds: int | None = None,
-        ) -> bool:
-            if bucket in store.write_faults:
-                return False
-            if not data:
-                store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
-                return True
-            store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(data)}
-            store.record_ttl(actor_id, bucket, name, ttl_seconds)
-            return True
-
-        def delete_attr(self, actor_id: str, bucket: str, name: str) -> bool:
-            if (actor_id, bucket, name) in store.delete_faults:
-                return True
-            store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None)
-            return True
-
-        def delete_attr_conditional(
-            self, actor_id: str, bucket: str, name: str
-        ) -> bool:
-            if (actor_id, bucket, name) in store.delete_faults:
-                return False
-            return (
-                store.rows.get(f"{actor_id}:{bucket}", {}).pop(name, None) is not None
-            )
-
-        def conditional_update_attr(
-            self,
-            actor_id: str,
-            bucket: str,
-            name: str,
-            old_data: Any,
-            new_data: Any,
-            timestamp: Any = None,
-            ttl_seconds: int | None = None,
-            *,
-            clear_ttl: bool = False,
-        ) -> bool:
-            if store.cas_fault:
-                return False
-            if store.cas_hook is not None and not store.cas_hook(
-                actor_id, bucket, name
-            ):
-                return False
-            current = store.rows.get(f"{actor_id}:{bucket}", {}).get(name)
-            if current is None or current.get("data") != old_data:
-                return False
-            store.bucket(actor_id, bucket)[name] = {"data": copy.deepcopy(new_data)}
-            if ttl_seconds is not None:
-                store.record_ttl(actor_id, bucket, name, ttl_seconds)
-            return not store.cas_lost_response
-
-        def delete_bucket(self, actor_id: str, bucket: str) -> bool:
-            return store.rows.pop(f"{actor_id}:{bucket}", None) is not None
-
-        def delete_by_chain(
-            self,
-            actor_id: str | None = None,
-            buckets: list[str] | None = None,
-            chain_id: str | None = None,
-            defer_name: str | None = None,
-        ) -> int:
-            if store.chain_delete_hook is not None:
-                store.chain_delete_hook()
-            if store.chain_delete_fault == "raise":
-                raise RuntimeError("throttled deleting chain")
-            if store.chain_delete_fault == "zero":
-                return 0
-            if not actor_id or not chain_id or not buckets:
-                return 0
-            matches: list[tuple[dict[str, Any], str]] = []
-            deferred: list[tuple[dict[str, Any], str]] = []
-            for bucket in buckets:
-                items = store.rows.get(f"{actor_id}:{bucket}", {})
-                for name, rec in list(items.items()):
-                    data = rec.get("data") or {}
-                    if isinstance(data, dict) and data.get("chain_id") == chain_id:
-                        (deferred if name == defer_name else matches).append(
-                            (items, name)
-                        )
-            deleted = 0
-            ordered = matches + deferred
-            for i, (items, name) in enumerate(ordered):
-                if store.chain_delete_fault == "partial" and i == len(ordered) - 1:
-                    raise RuntimeError("throttled part-way through the chain")
-                del items[name]
-                deleted += 1
-            return deleted
-
-        def delete_expired(
-            self, now_epoch: int | None = None, buckets: list[str] | None = None
-        ) -> int:
-            store.purges.append(list(buckets) if buckets else None)
-            return 0
-
     db_mod = MagicMock()
-    db_mod.DbAttribute = MockDbAttribute
+    db_mod.DbAttribute = type(
+        "BoundMemoryDbAttribute", (MemoryDbAttribute,), {"store": store}
+    )
     config = Config(fqdn="test.example.com", proto="https://", database="dynamodb")
     config.DbAttribute = db_mod
     return config, store

@@ -672,7 +672,7 @@ class TestPhase1ReviewFixes:
                 "actingweb.peer_permissions.fetch_peer_permissions",
                 return_value=unanswered,
             ),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
+            mock.patch.object(CallbacksHandler, "_clean_replica") as delete,
             mock.patch.object(
                 CallbacksHandler, "_incremental_sync_granted_properties"
             ) as sync,
@@ -902,7 +902,9 @@ class TestEveryWriterOfTheCopyIsConditional:
 
         with (
             mock.patch.object(PeerPermissionStore, "replace_permissions", racing),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
+            mock.patch.object(
+                CallbacksHandler, "_clean_replica", return_value=["p/x"]
+            ) as delete,
             mock.patch.object(
                 CallbacksHandler, "_incremental_sync_granted_properties"
             ) as sync,
@@ -911,10 +913,14 @@ class TestEveryWriterOfTheCopyIsConditional:
                 "POST", f"permissions/{w.a}", _grant_body(at(20), []), as_peer=w.a
             )
         assert out.response.status_code == 204
-        assert delete.call_args.args[2] == ["p/*"]
+        # The cleanup ran with the stored grant (p/*) and the revoking one
+        # (its first call; the nested re-grant calls it too).
+        first = delete.call_args_list[0]
+        assert first.args[3].properties["patterns"] == ["p/*"]
+        assert first.args[4].properties["patterns"] == []
         # The revocation lost and was then older: what it deleted, the stored
         # re-grant still grants, so it is fetched again.
-        assert sync.call_args.kwargs["granted_patterns"] == ["p/*"]
+        assert sync.call_args.kwargs["granted_patterns"] == ["p/x"]
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["patterns"] == ["p/*"]
 
@@ -951,7 +957,7 @@ class TestEveryWriterOfTheCopyIsConditional:
 
         with (
             mock.patch.object(PeerPermissionStore, "replace_permissions", racing),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(CallbacksHandler, "_clean_replica"),
             mock.patch.object(
                 CallbacksHandler, "_incremental_sync_granted_properties"
             ) as sync,
@@ -983,7 +989,7 @@ class TestEveryWriterOfTheCopyIsConditional:
             mock.patch.object(
                 PeerPermissionStore, "replace_permissions", return_value=False
             ),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(CallbacksHandler, "_clean_replica", return_value=["p/x"]),
             mock.patch.object(
                 CallbacksHandler, "_incremental_sync_granted_properties"
             ) as sync,
@@ -995,7 +1001,7 @@ class TestEveryWriterOfTheCopyIsConditional:
                 as_peer=w.a,
             )
         assert out.response.status_code == 503
-        assert sync.call_args.kwargs["granted_patterns"] == ["p/*"]
+        assert sync.call_args.kwargs["granted_patterns"] == ["p/x"]
 
     def test_a_query_copy_keeps_the_last_callbacks_timestamp(self) -> None:
         """Reverify-3, Issue 4: after a query write, an older callback (a
@@ -1055,7 +1061,7 @@ class TestEveryWriterOfTheCopyIsConditional:
                 "actingweb.peer_permissions.fetch_peer_permissions",
                 return_value=current,
             ) as fetch,
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data") as delete,
+            mock.patch.object(CallbacksHandler, "_clean_replica") as delete,
         ):
             out = w.request(
                 "POST",
@@ -1065,7 +1071,9 @@ class TestEveryWriterOfTheCopyIsConditional:
             )
         assert out.response.status_code == 204
         fetch.assert_called_once()
-        assert delete.call_args.args[2] == ["p/*"]
+        # The cleanup ran with the stored grant (p/*) and the revoking one.
+        assert delete.call_args.args[3].properties["patterns"] == ["p/*"]
+        assert delete.call_args.args[4].properties["patterns"] == []
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["patterns"] == []
 
@@ -1197,7 +1205,7 @@ class TestTheReconcileAfterReverify5:
             ),
             mock.patch.object(
                 CallbacksHandler,
-                "_delete_revoked_peer_data",
+                "_clean_replica",
                 side_effect=DbError("delete", aid(w.b)),
             ),
             pytest.raises(DbError),
@@ -1227,14 +1235,14 @@ class TestTheReconcileAfterReverify5:
                 "actingweb.peer_permissions.fetch_peer_permissions",
                 return_value=stale,
             ),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(CallbacksHandler, "_clean_replica", return_value=["p/x"]),
             mock.patch.object(CallbacksHandler, "_sync_permitted_patterns") as sync,
         ):
             out = self._older_revocation(w, now)
         assert out.response.status_code == 204
         stored = w.stored_permissions(w.a)
         assert stored and stored["properties"]["patterns"] == ["p/*"]
-        assert ["p/*"] in [c.args[3] for c in sync.call_args_list]
+        assert ["p/x"] in [c.args[3] for c in sync.call_args_list]
 
 
 class TestTheReconcileAfterReverify6:
@@ -1260,7 +1268,7 @@ class TestTheReconcileAfterReverify6:
                 "actingweb.peer_permissions.fetch_peer_permissions",
                 return_value=current,
             ),
-            mock.patch.object(CallbacksHandler, "_delete_revoked_peer_data"),
+            mock.patch.object(CallbacksHandler, "_clean_replica"),
             mock.patch.object(
                 PeerPermissionStore, "store_permissions", return_value=False
             ),
@@ -1279,7 +1287,7 @@ class TestTheReconcileAfterReverify6:
         TestTheReconcileAfterReverify5._granted(w, now)
         with mock.patch.object(
             CallbacksHandler,
-            "_delete_revoked_peer_data",
+            "_clean_replica",
             side_effect=ValueError("a bad list name"),
         ):
             out = w.request(

@@ -154,38 +154,40 @@ class TestBucketPrefixIsolation:
     def test_colliding_composite_key_answers_to_exactly_one_bucket(
         self, config, actor_id
     ):
-        """Both buckets write the colliding key; the last writer owns the row.
+        """Both buckets write the colliding key; the first writer keeps it.
 
-        DynamoDB's ``save()`` is a PutItem that replaces ``bucket`` wholesale;
-        since 3.14.4 PostgreSQL's ``ON CONFLICT DO UPDATE`` also rewrites
-        ``bucket``/``name``, so the stored attribution follows the last
-        writer on both. The row answers to exactly one bucket, and deleting
-        the *loser's* bucket leaves it untouched.
+        Since 3.16 every attribute write is conditioned on the bucket (a
+        peer id may contain ":", so one peer's replica write could replace
+        another peer's row): the second writer gets
+        ``AttributeKeyCollision`` and the row stays the first bucket's, on
+        both backends. Deleting the other bucket leaves it untouched.
         """
+        from actingweb.db.exceptions import AttributeKeyCollision
+
         db = get_attribute(config)
         assert db.set_attr(
             actor_id=actor_id, bucket="remote", name="abc:x", data="flat-bucket"
         )
+        with pytest.raises(AttributeKeyCollision):
+            db.set_attr(
+                actor_id=actor_id, bucket="remote:abc", name="x", data="nested-bucket"
+            )
+
+        flat = _bucket(config, actor_id, "remote")
+        assert _names(flat) == {"abc:x"}
+        assert flat["abc:x"]["data"] == "flat-bucket"
+        assert _names(_bucket(config, actor_id, "remote:abc")) == set()
+
+        # The other bucket's delete_bucket() must not reach the row.
+        assert db.delete_bucket(actor_id=actor_id, bucket="remote:abc")
+        assert _names(_bucket(config, actor_id, "remote")) == {"abc:x"}
+
+        # Once the owner deletes it, the other bucket may take the key.
+        assert db.set_attr(actor_id=actor_id, bucket="remote", name="abc:x", data=None)
         assert db.set_attr(
             actor_id=actor_id, bucket="remote:abc", name="x", data="nested-bucket"
         )
-
-        nested = _bucket(config, actor_id, "remote:abc")
-        flat = _bucket(config, actor_id, "remote")
-        assert _names(nested) == {"x"}
-        assert nested["x"]["data"] == "nested-bucket"
-        assert _names(flat) == set()
-
-        # The loser's delete_bucket() must not reach the winner's row.
-        assert db.delete_bucket(actor_id=actor_id, bucket="remote")
-        assert _names(_bucket(config, actor_id, "remote:abc")) == {"x"}
-
-        # And the other way round: writing "remote"/"abc:x" again moves it back.
-        assert db.set_attr(
-            actor_id=actor_id, bucket="remote", name="abc:x", data="flat-again"
-        )
-        assert _names(_bucket(config, actor_id, "remote:abc")) == set()
-        assert _bucket(config, actor_id, "remote")["abc:x"]["data"] == "flat-again"
+        assert _bucket(config, actor_id, "remote:abc")["x"]["data"] == "nested-bucket"
 
     def test_point_reads_stay_inside_their_bucket(self, config, actor_id):
         """``get_attr``/``get_attr_strict``/``delete_attr`` key on the composite

@@ -39,6 +39,17 @@ from tests.test_property_list_integrity import (
 PROPERTY_LIST_PY = (
     pathlib.Path(__file__).resolve().parent.parent / "actingweb" / "property_list.py"
 )
+# The list format moved into list_core.py; the guards scan both modules.
+LIST_MODULES = (PROPERTY_LIST_PY, PROPERTY_LIST_PY.with_name("list_core.py"))
+
+
+def _parse_list_modules() -> ast.Module:
+    """Both list modules as one tree, for the whole-module guards."""
+    body: list[ast.stmt] = []
+    for path in LIST_MODULES:
+        body += ast.parse(path.read_text(), filename=str(path)).body
+    return ast.Module(body=body, type_ignores=[])
+
 
 # The three methods this phase converted. Named once so the AST guards below
 # and the behavioural tests cannot drift apart.
@@ -96,7 +107,7 @@ class TestNoPartitionDumpRemains:
     in the file, including ones no test reaches."""
 
     def test_property_list_module_never_calls_fetch_all_including_lists(self):
-        tree = ast.parse(PROPERTY_LIST_PY.read_text(), filename=str(PROPERTY_LIST_PY))
+        tree = _parse_list_modules()
         offenders = [
             f"line {node.lineno}"
             for node in ast.walk(tree)
@@ -110,7 +121,7 @@ class TestNoPartitionDumpRemains:
         )
 
     def test_get_property_list_is_not_even_imported(self):
-        tree = ast.parse(PROPERTY_LIST_PY.read_text(), filename=str(PROPERTY_LIST_PY))
+        tree = _parse_list_modules()
         imported = {
             alias.name
             for node in ast.walk(tree)
@@ -223,7 +234,7 @@ class TestTheThreeReadsAreStronglyConsistent:
         """An AST guard in the style of the handlers guard in
         ``test_v2_consistent_read.py``: ``consistent_read=False`` is the
         obvious spend, but ``consistent_read=some_flag`` is the quiet one."""
-        tree = ast.parse(PROPERTY_LIST_PY.read_text(), filename=str(PROPERTY_LIST_PY))
+        tree = _parse_list_modules()
         offenders = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):

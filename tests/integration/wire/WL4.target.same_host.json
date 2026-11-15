@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"index\": 0, \"value\": {\"id\": \"a\", \"v\": 3}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -161,7 +161,7 @@
         "notes": [
          {
           "id": "a",
-          "text": "one"
+          "v": 3
          },
          {
           "id": "b",
@@ -169,15 +169,7 @@
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "index": 0,
-         "value": {
-          "id": "a",
-          "v": 3
-         }
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -221,10 +213,17 @@
          "data": {
           "notes": {
            "index": 0,
-           "value": {
+           "item": {
             "id": "a",
             "v": 3
-           }
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "id": "a",
+            "text": "one"
+           },
+           "operation": "update"
           }
          },
          "event": "subscription_data",
@@ -243,10 +242,17 @@
         "data": {
          "notes": {
           "index": 0,
-          "value": {
+          "item": {
            "id": "a",
            "v": 3
-          }
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
          }
         },
         "granularity": "high",
@@ -314,12 +320,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"index\": 0, \"value\": {\"id\": \"a\", \"v\": 3}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"index\": 2, \"value\": {\"id\": \"c\", \"v\": 4}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"id\": \"c\", \"v\": 4}, \"index\": 2}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -440,23 +446,19 @@
         "notes": [
          {
           "id": "a",
-          "text": "one"
+          "v": 3
          },
          {
           "id": "b",
           "text": "two"
-         }
-        ]
-       },
-       "scalars": {
-        "notes": {
-         "index": 2,
-         "value": {
+         },
+         {
           "id": "c",
           "v": 4
          }
-        }
-       }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -500,10 +502,13 @@
          "data": {
           "notes": {
            "index": 2,
-           "value": {
+           "item": {
             "id": "c",
             "v": 4
-           }
+           },
+           "length": 3,
+           "list": "notes",
+           "operation": "append"
           }
          },
          "event": "subscription_data",
@@ -522,10 +527,13 @@
         "data": {
          "notes": {
           "index": 2,
-          "value": {
+          "item": {
            "id": "c",
            "v": 4
-          }
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
          }
         },
         "granularity": "high",

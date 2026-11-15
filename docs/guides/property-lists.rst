@@ -66,6 +66,51 @@ When to Use
 
 - Regular properties: small key–value data, under ~50KB
 - Property lists: growing collections, list ops, complex items, or large datasets
+- Attribute lists (below): the same, for data no peer may read or subscribe to
+
+Attribute Lists
+---------------
+
+``actor.attribute_lists(bucket)`` (3.16) returns an ``AttributeListStore``
+over one of the actor's attribute buckets. Its lists, from ``.get(name)``
+or attribute access, are ``ListAttribute`` instances with the
+``ListProperty`` interface: the list operations above, handles,
+``append_once()``, spanned items, ``verify()`` and ``compact()``.
+
+.. code-block:: python
+
+   drafts = actor.attribute_lists("app_state").get("drafts")
+   drafts.append({"id": 1, "text": "not shared"})
+   drafts.set_description("Unsent drafts")
+   for item in drafts:
+       print(item)
+
+   store = actor.attribute_lists("app_state")
+   store.exists("drafts")   # True
+   store.list_all()         # ["drafts"]
+
+Choose by who may see the data:
+
+- A **property list** is served under ``/properties``, governed by grants,
+  and its changes reach subscribers as list diffs.
+- An **attribute list** is private to the actor: no route serves it, no
+  grant reaches it, and it registers no diffs, so a peer cannot subscribe to
+  it. Use it for application state, caches and queues. Names are per
+  bucket: creating a list where an attribute of the same name exists in
+  that bucket raises ``ListNameTakenError`` (a ``ValueError``), as a
+  property list does beside a property.
+
+Both use one format (``actingweb.list_core.ListCore``): an attribute list is
+stored as ``list:<name>-meta`` and one ``list:<name>-#<rank>`` row per item
+in its bucket, with an item over the span threshold in the side bucket
+``<bucket>$aux``. ``get_metadata()["length"]`` is advisory, as for a v2
+property list. An attribute list written before 3.16 (``list:<name>:meta``,
+``list:<name>:<i>``) is read in place and converted on its first change; a
+pre-3.16 process reads a converted list as empty (see
+:doc:`../migration/v3.16`, "Attribute lists and list diffs"). A list holding
+rows of both layouts raises ``ListLayoutConflictError`` on every access until
+it is resolved (see :doc:`troubleshooting`). The replicas of peers' lists in
+``remote:<peer_id>`` use the same layout (:doc:`subscriptions`).
 
 Namespace Collision Detection
 ------------------------------
@@ -987,6 +1032,18 @@ relying on batch semantics:
   Content-Type: application/json
   {"description": "...", "explanation": "..."}
 
+**What subscribers receive.** Each list edit above, and each list form in
+the web UI, registers a list diff on the list's own subtarget (3.16; the
+HTTP responses are unchanged): ``append`` from the ``/items`` ``add``
+action, ``update`` from ``PUT ?index=N`` and the ``update`` action (with
+``old_item`` when the item was read), ``delete`` by index (with
+``old_item`` when the item was read) from the ``delete`` action, ``metadata`` from
+the metadata ``PUT``, ``delete_all`` from ``DELETE``, and an empty
+``extend`` for a new list. A bulk update sends up to 25 changes in the order
+they are applied (a run of appends as one ``extend``) and, beyond that, one
+resync after the batch. See :doc:`subscriptions` ("List Operations") for the
+fields and what a subscriber's replica does with them.
+
 **Item too large (413 Payload Too Large)**
 
 Every item-writing path above (PUT ``?index=N``, the ``/items`` ``add``
@@ -1047,6 +1104,27 @@ cap, and repairing the key rows of ``append_once()`` items (``compact()``
 before it rebalances; ``repair_keys()`` without rebalancing). The script's
 ``--repair`` uses ``repair_keys()`` for a list whose only repairable
 finding is duplicate keyed items.
+
+``--attributes`` (3.16) adds each actor's attribute lists to the sweep: the
+replica buckets ``remote:<peer_id>`` of its trusted peers, plus each bucket
+named with ``--bucket`` (repeatable). Lists are found by a skip-scan, never
+a whole-bucket read::
+
+  actingweb-verify-property-lists --attributes --bucket app_state
+  actingweb-verify-property-lists --attributes --repair
+  actingweb-verify-property-lists --attributes --repair --delete-damaged-replicas
+
+A dry run writes nothing and reports a list still in the pre-3.16 attribute
+layout. ``--repair`` converts a healthy one, as its first change would, and
+applies ``repair_keys()``/``compact()`` as for property lists. A list with
+rows of both layouts, or an old-layout list that is damaged, stays
+unhealthy under ``--repair``. With ``--delete-damaged-replicas`` (which
+needs ``--repair``) such a list in a ``remote:`` bucket is deleted, so the
+peer's next baseline rebuilds it; in any other bucket nothing would rebuild
+it, so it is never deleted and is resolved by hand. ``--repair-reverted``
+applies to property lists only. A checkpoint records whether
+``--attributes`` was given, and a run refuses a checkpoint written in the
+other mode (exit 2).
 
 .. warning::
 

@@ -43,9 +43,11 @@ Kinds, per actor (names are compared whole: a peer id may contain ``:``):
     callback would be taken for its first, and a pattern revoked in it would
     delete no stored data.
 ``remote-data``
-    A ``remote:<peer>`` bucket (``RemotePeerStore``) for a peer with no trust
-    row, or with no subscription this actor made to it. Only bucket names
-    ``get_remote_bucket()`` builds for a well-formed peer id are considered;
+    A ``remote:<peer>`` bucket (``RemotePeerStore``), or its attribute-list
+    side bucket ``remote:<peer>$aux``, for a peer with no trust row, or with
+    no subscription this actor made to it. Only bucket names
+    ``get_remote_bucket()`` builds for a well-formed peer id (and their
+    ``$aux`` side buckets) are considered;
     any other ``remote:`` bucket is reported as ``remote-unknown`` and never
     removed. Peer data stored for a trusted peer without a subscription this
     actor made (an application writing ``RemotePeerStore`` itself) counts as
@@ -145,9 +147,13 @@ def _row_data(row: Any) -> dict[str, Any]:
 
 def _remote_peer(bucket: str) -> str | None:
     """The peer id of a ``remote:`` bucket ``get_remote_bucket()`` builds for
-    a well-formed peer id, or None for any other bucket."""
+    a well-formed peer id, or of its attribute-list side bucket
+    (``remote:<peer>$aux``); None for any other bucket."""
+    from actingweb.property_list_span import AUX_SUFFIX
     from actingweb.remote_storage import PERMISSIVE_PEER_ID_PATTERN, get_remote_bucket
 
+    if bucket.endswith(AUX_SUFFIX):
+        bucket = bucket[: -len(AUX_SUFFIX)]
     peer = bucket[len(REMOTE_PREFIX) :]
     if not PERMISSIVE_PEER_ID_PATTERN.fullmatch(peer):
         return None
@@ -377,7 +383,26 @@ def _rebuild_copy(config: Any, f: Finding, limiter: RateLimiter) -> bool:
         perms = fetch_peer_permissions(f.actor_id, peer_id, config)
         why = perms.fetch_error
         store = get_peer_permission_store(config)
-        if not why and not store.store_permissions(perms):
+        stored_ok = False if why else store.store_permissions(perms)
+        if stored_ok:
+            from types import SimpleNamespace
+
+            from actingweb.replica_revocation import cleanup_after_store
+
+            try:
+                cleanup_after_store(
+                    config,
+                    SimpleNamespace(id=f.actor_id, config=config),
+                    peer_id,
+                    None,
+                    perms,
+                )
+            except Exception as e:  # folds DbError: the copy is rebuilt; the cleanup is the next callback's
+                print(
+                    f"rebuilt, replica not cleaned\t{f.actor_id}\t{peer_id}\t"
+                    f"{type(e).__name__}"
+                )
+        if not why and not stored_ok:
             # Refused when a newer copy was stored meanwhile (a callback):
             # that copy is the rebuild.
             _, stored = store.read_stored_permissions(f.actor_id, peer_id)

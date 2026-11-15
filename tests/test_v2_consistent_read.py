@@ -15,6 +15,9 @@ import pathlib
 import pytest
 
 from actingweb.property_list import ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     FakePropertyDb,
     _patch_get_property,

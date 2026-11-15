@@ -226,9 +226,11 @@
          "event": "permissions",
          "granting_actor_id": "<A>",
          "permission_changes": {
+          "deleted_names": [],
           "granted_patterns": [],
           "has_revocations": false,
           "is_initial": false,
+          "not_evaluated": null,
           "revoked_patterns": []
          }
         }

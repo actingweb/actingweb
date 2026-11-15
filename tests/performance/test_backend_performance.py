@@ -630,6 +630,68 @@ class TestListPropertyPerformance:
 
 
 @pytest.fixture(scope="module")
+def attribute_list_1000() -> Iterator[Any]:
+    """The same 1,000-item list as ``v2_list_1000``, as an attribute list
+    in a replica bucket (thoughts/plans/2026-11-13-attribute-list-v2-port.md,
+    Phase 2)."""
+    from actingweb.attribute_list import ListAttribute
+    from actingweb.config import Config
+
+    config = Config()
+    actor_id = f"perf_attr_list_actor_{int(time.time() * 1000)}"
+    lst = ListAttribute(actor_id, "remote:" + "e" * 32, "perf_items", config)
+    lst.extend(
+        [{"id": i, "title": f"item {i}", "body": "x" * 200} for i in range(1000)]
+    )
+
+    yield lst
+
+    lst.delete()
+
+
+@pytest.mark.benchmark
+class TestListAttributePerformance:
+    """``TestListPropertyPerformance``'s operations on an attribute list."""
+
+    def test_list_attribute_to_list(
+        self, benchmark: Any, backend_name: str, attribute_list_1000: Any
+    ) -> None:
+        result = benchmark(attribute_list_1000.to_list)
+        assert len(result) == 1000
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} attribute list to_list (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+    def test_list_attribute_items_with_handles(
+        self, benchmark: Any, backend_name: str, attribute_list_1000: Any
+    ) -> None:
+        result = benchmark(attribute_list_1000.items_with_handles)
+        assert len(result) == 1000
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} attribute list items_with_handles (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+    def test_list_attribute_append_remove(
+        self, benchmark: Any, backend_name: str, attribute_list_1000: Any
+    ) -> None:
+        counter = [0]
+
+        def append_then_remove() -> None:
+            counter[0] += 1
+            marker = {"id": f"bench-{counter[0]}"}
+            attribute_list_1000.append(marker)
+            attribute_list_1000.remove(marker)
+
+        benchmark(append_then_remove)
+        if benchmark.stats:
+            print(
+                f"\n{backend_name} attribute list append+remove (1000): {benchmark.stats.stats.mean * 1000:.2f}ms avg"
+            )
+
+
+@pytest.fixture(scope="module")
 def v2_list_1000_20_spanned() -> Iterator[Any]:
     """1,000 items of which 20 span body rows. Recorded, not gated: the
     threshold is lowered to 5,000 bytes so the 20 spanned items (about

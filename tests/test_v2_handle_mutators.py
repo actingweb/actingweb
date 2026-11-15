@@ -11,6 +11,9 @@ import json
 import pytest
 
 from actingweb.property_list import ListItemHandle, ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     CountingPropertyDb,
     FakePropertyDb,
@@ -26,6 +29,7 @@ def fake_store():
 
 
 class TestHandleMutatorsAreV2Only:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_delete_by_handle_raises_on_v1_naming_migrate_to_v2(
         self, monkeypatch, fake_store
     ):
@@ -39,6 +43,7 @@ class TestHandleMutatorsAreV2Only:
         with pytest.raises(ValueError, match="migrate_to_v2"):
             lst.delete_by_handle(handle)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_update_by_handle_raises_on_v1_naming_migrate_to_v2(
         self, monkeypatch, fake_store
     ):
@@ -337,6 +342,7 @@ class TestRemoveWhereV1DescendingOrder:
     row as each earlier delete closes a hole -- descending order is the
     only correct choice for a multi-match v1 delete."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_remove_where_removes_all_matches_correctly(
         self, monkeypatch, fake_store
     ):
@@ -359,6 +365,7 @@ class TestRemoveWhereV1DescendingOrder:
         assert removed == [items[0], items[2], items[4]]
         assert [item["id"] for item in lst.to_list()] == [1, 3]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_update_where_updates_all_matches_correctly(
         self, monkeypatch, fake_store
     ):

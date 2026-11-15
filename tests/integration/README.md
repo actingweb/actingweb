@@ -65,8 +65,9 @@ a run compares against it byte for byte.
   (git ignores it); delete it once read.
 - A commit that changes or removes a recording that exists on `master`
   carries a `Wire-Phase: <plan>:<phase>` trailer naming one of the row's
-  owners as `master` has them (an ownership change lands on `master`
-  first). `verify_groups.py` checks the branch's commits since the merge
+  owners as the commit's first parent has them (ownership is taken in an
+  earlier commit, on the branch or on `master`, never in the commit that
+  re-records). `verify_groups.py` checks the branch's commits since the merge
   base, merges included; it checks commits already made, so run it after
   committing and amend if it fails. CI runs it too, so a PR whose commits
   break the rule fails.

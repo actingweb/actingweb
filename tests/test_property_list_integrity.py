@@ -26,6 +26,9 @@ import pytest
 
 from actingweb.db.exceptions import DbError
 from actingweb.property_list import ListCorruptionError, ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 
 class FakePropertyDb:
@@ -198,6 +201,7 @@ class TestDeleteReadFailurePropagates:
     """A backend read fault during the __delitem__ shift must propagate as
     DbError, not be swallowed into a silent skip."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_read_error_mid_shift_propagates_and_preserves_successor(
         self, monkeypatch, fake_store
     ):
@@ -233,6 +237,9 @@ class TestWriteFailureRaisesRuntimeError:
     """A backend write fault (set() returning False, as PostgreSQL does on
     error) must raise RuntimeError, not be silently ignored."""
 
+    @pytest.mark.property_only(
+        "a write that answers False (an attribute write raises a fault instead)"
+    )
     def test_append_write_failure_raises_and_meta_unchanged(
         self, monkeypatch, fake_store
     ):
@@ -253,6 +260,9 @@ class TestWriteFailureRaisesRuntimeError:
         assert _meta_length(fake_store, actor_id, name) == 2
         assert (actor_id, f"list:{name}-2") not in fake_store
 
+    @pytest.mark.property_only(
+        "a write that answers False (an attribute write raises a fault instead)"
+    )
     def test_setitem_write_failure_raises_and_item_unchanged(
         self, monkeypatch, fake_store
     ):
@@ -272,6 +282,9 @@ class TestWriteFailureRaisesRuntimeError:
 
         assert fake_store[(actor_id, f"list:{name}-1")] == json.dumps("b")
 
+    @pytest.mark.property_only(
+        "a write that answers False (an attribute write raises a fault instead)"
+    )
     def test_delitem_write_failure_raises_and_meta_unchanged(
         self, monkeypatch, fake_store
     ):
@@ -301,6 +314,7 @@ class TestCrashInjectionResidue:
     still one too high -- one of the three residue shapes catalogued in
     thoughts/todo/property-list-delete-leaves-holes.md."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_crash_between_move_and_delete_leaves_duplicate(
         self, monkeypatch, fake_store
     ):
@@ -395,6 +409,7 @@ class TestFailFastReads:
     ListCorruptionError (in-range but missing) -- these tests pin that
     distinction too."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_getitem_in_range_hole_raises_list_corruption_error(
         self, monkeypatch, fake_store
     ):
@@ -409,6 +424,7 @@ class TestFailFastReads:
         with pytest.raises(ListCorruptionError):
             _ = prop_list[1]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_getitem_out_of_range_raises_plain_index_error_not_corruption(
         self, monkeypatch, fake_store
     ):
@@ -423,6 +439,7 @@ class TestFailFastReads:
             _ = prop_list[5]
         assert not isinstance(exc_info.value, ListCorruptionError)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_to_list_raises_on_hole(self, monkeypatch, fake_store):
         actor_id = "actor-ff-3"
         name = "mylist"
@@ -435,6 +452,7 @@ class TestFailFastReads:
         with pytest.raises(ListCorruptionError):
             prop_list.to_list()
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_slice_raises_on_hole_within_range(self, monkeypatch, fake_store):
         actor_id = "actor-ff-4"
         name = "mylist"
@@ -451,6 +469,7 @@ class TestFailFastReads:
         with pytest.raises(ListCorruptionError):
             prop_list.slice(1, 4)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_to_list_from_rows_raises_on_hole_missing_from_both(
         self, monkeypatch, fake_store
     ):
@@ -476,6 +495,7 @@ class TestFailFastReads:
         with pytest.raises(ListCorruptionError):
             prop_list.to_list_from_rows({f"list:{name}-0": json.dumps("a")})
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_to_indexed_list_shape(self, monkeypatch, fake_store):
         actor_id = "actor-ff-6"
         name = "mylist"
@@ -599,6 +619,7 @@ class TestV2NewListDefaultsAndValidation:
         with pytest.raises(ValueError, match="cannot contain"):
             prop_list.append("x")
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_existing_v1_list_with_hash_in_name_stays_readable(
         self, monkeypatch, fake_store
     ):
@@ -771,6 +792,7 @@ class TestV2LegacyHashSiblingIsolation:
             if k[0] == actor_id and k[1].startswith(f"list:{self.LEGACY}-")
         }
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_reads_exclude_legacy_sibling_rows(self, monkeypatch, fake_store):
         actor_id = "actor-sib-read"
         self._seed_both(fake_store, actor_id)
@@ -802,6 +824,7 @@ class TestV2LegacyHashSiblingIsolation:
         assert len(owner) == 2
         assert owner.to_list_from_rows(rows) == ["mine-1", "mine-2"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_clear_does_not_delete_legacy_sibling_rows(self, monkeypatch, fake_store):
         actor_id = "actor-sib-clear"
         self._seed_both(fake_store, actor_id)
@@ -824,6 +847,7 @@ class TestV2LegacyHashSiblingIsolation:
 
         assert self._legacy_rows(fake_store, actor_id) == before
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_migration_of_owner_does_not_clear_legacy_sibling_rows(
         self, monkeypatch, fake_store
     ):
@@ -862,6 +886,7 @@ class TestMigrateToV2StaleMetadata:
     path, where verify() sees every index as a hole, so step 3 deleted the
     authoritative v2 rows and step 4 wrote an empty list over them."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_stale_v1_cache_over_v2_storage_does_not_destroy_rows(
         self, monkeypatch, fake_store
     ):
@@ -1058,6 +1083,7 @@ class TestLazyMigrationRefusesDamagedLists:
     fixture.
     """
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_damaged_v1_list_stays_v1_on_append(self, monkeypatch, fake_store):
         # Opt in, so this proves the unhealthy check refuses -- not merely
         # that lazy migration is off by default.
@@ -1083,6 +1109,7 @@ class TestLazyMigrationRefusesDamagedLists:
         with pytest.raises(ListCorruptionError):
             fresh.to_list()
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_healthy_v1_list_still_migrates_on_append(self, monkeypatch, fake_store):
         monkeypatch.setenv("ACTINGWEB_LAZY_MIGRATION_MAX_LENGTH", "50")
         actor_id = "actor-healthy-lazy"
@@ -1102,6 +1129,7 @@ class TestLazyMigrationThresholdIsConfigurable:
     """Migration is inline and synchronous, so an operator must be able to
     keep it out of user requests entirely and sweep with the script."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_zero_disables_lazy_migration(self, monkeypatch, fake_store):
         actor_id = "actor-lazy-off"
         name = "small"
@@ -1116,6 +1144,7 @@ class TestLazyMigrationThresholdIsConfigurable:
         assert fresh.verify().get("format") != 2
         assert fresh.to_list() == ["a", "b"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_raised_limit_migrates_a_bigger_list(self, monkeypatch, fake_store):
         actor_id = "actor-lazy-big"
         name = "big"
@@ -1167,6 +1196,7 @@ class TestIndexNegativeBounds:
         for args, expected in self._cases(prop_list):
             assert prop_list.index(*args) == expected == reference.index(*args)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_matches_python_list(self, monkeypatch, fake_store):
         actor_id = "actor-index-v1"
         _seed_list(fake_store, actor_id, "idx", ["a", "b", "a"])
@@ -1345,6 +1375,7 @@ class TestDuplicateDetectionAfterAnEdit:
         ]
         _seed_list(store, actor_id, name, items)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_byte_comparison_misses_a_diverged_duplicate(self, monkeypatch, fake_store):
         actor_id = "actor-dup-diverged"
         name = "outputs"
@@ -1355,6 +1386,7 @@ class TestDuplicateDetectionAfterAnEdit:
         # This is the documented-but-previously-unstated weakness.
         assert prop_list.verify()["adjacent_duplicates"] == []
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_identity_key_finds_it(self, monkeypatch, fake_store):
         actor_id = "actor-dup-identity"
         name = "outputs"
@@ -1368,6 +1400,7 @@ class TestDuplicateDetectionAfterAnEdit:
         assert report["duplicate_identities"] == {112: [1, 2]}
         assert report["healthy"] is False
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_identity_key_does_not_flag_distinct_items(self, monkeypatch, fake_store):
         actor_id = "actor-dup-clean"
         name = "outputs"
@@ -1382,6 +1415,7 @@ class TestDuplicateDetectionAfterAnEdit:
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         assert prop_list.verify(identity_key="id")["duplicate_identities"] == {}
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_items_without_the_key_fall_back_to_byte_comparison(
         self, monkeypatch, fake_store
     ):
@@ -1418,6 +1452,7 @@ class TestDuplicateDetectionAfterAnEdit:
             2: [1, 2]
         }
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_identity_duplicates_need_not_be_adjacent(self, monkeypatch, fake_store):
         """Adjacency is right for the byte heuristic and wrong for identity.
 
@@ -1446,6 +1481,7 @@ class TestDuplicateDetectionAfterAnEdit:
         assert report["duplicate_identities"] == {1: [1, 6]}
         assert report["healthy"] is False
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_every_row_sharing_one_identity_is_reported(self, monkeypatch, fake_store):
         """The pathological real case: 14 rows, one distinct id."""
         actor_id = "actor-dup-all-same"
@@ -1460,6 +1496,7 @@ class TestDuplicateDetectionAfterAnEdit:
         assert report["duplicate_identities"] == {3: list(range(14))}
         assert report["healthy"] is False
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_unhashable_identity_values_are_still_compared(
         self, monkeypatch, fake_store
     ):
@@ -1477,6 +1514,7 @@ class TestDuplicateDetectionAfterAnEdit:
         duplicates = prop_list.verify(identity_key="id")["duplicate_identities"]
         assert list(duplicates.values()) == [[0, 2]]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_wrong_identity_key_is_distinguishable_from_clean(
         self, monkeypatch, fake_store
     ):
@@ -1513,6 +1551,7 @@ class TestDuplicateDetectionAfterAnEdit:
         assert unchecked["duplicate_identities"] is None
         assert unchecked["identity_checked_count"] is None
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_true_and_one_are_not_the_same_identity(self, monkeypatch, fake_store):
         """Python considers True == 1 and hashes them alike, so an untagged
         dict key would report a duplicate that does not exist."""
@@ -1561,6 +1600,7 @@ class TestCompactIsNotCrashSafe:
             }
         )
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     @pytest.mark.parametrize(
         ("calls_before_crash", "expected_rows"),
         [(2, ["a", "c", "c", "d"]), (3, ["a", "c", "d", "d"])],
@@ -1650,6 +1690,7 @@ class TestStaleMetadataIsNeverWrittenBack:
     def _stored_meta(store, actor_id, name):
         return json.loads(store[(actor_id, f"list:{name}-meta")])
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_concurrent_append_does_not_revert_the_format_flip(
         self, monkeypatch, fake_store
     ):
@@ -1675,6 +1716,7 @@ class TestStaleMetadataIsNeverWrittenBack:
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
         assert fresh.to_list() == [*items, "d"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v2_metadata_row_never_acquires_a_length(self, monkeypatch, fake_store):
         """`length` is authoritative for v1 and absent for v2.
 
@@ -1696,6 +1738,7 @@ class TestStaleMetadataIsNeverWrittenBack:
 
         assert "length" not in self._stored_meta(fake_store, actor_id, name)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_concurrent_clear_is_not_undone(self, monkeypatch, fake_store):
         """A cleared list's format and metadata shape stay clean, and a
         stale instance's own write after the clear lands correctly.
@@ -1729,6 +1772,7 @@ class TestStaleMetadataIsNeverWrittenBack:
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
         assert fresh.to_list() == ["d"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_concurrent_delete_is_not_undone(self, monkeypatch, fake_store):
         """A deleted list's absent row is not resurrected as a CORRUPT one.
 
@@ -1768,6 +1812,7 @@ class TestStaleMetadataIsNeverWrittenBack:
         fresh = ListProperty(actor_id=actor_id, name=name, config=object())
         assert fresh.to_list() == ["d"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_a_retained_instance_does_not_resurrect_its_cached_format(
         self, monkeypatch, fake_store
     ):
@@ -1805,6 +1850,7 @@ class TestStaleMetadataIsNeverWrittenBack:
             fresh.get_description() == "written while this instance thought it was v1"
         )
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_stale_v1_clear_does_not_downgrade_live_v2_storage(
         self, monkeypatch, fake_store
     ):
@@ -1836,6 +1882,7 @@ class TestStaleMetadataIsNeverWrittenBack:
             k for k in fake_store if k[0] == actor_id and f"list:{name}-#" in k[1]
         ]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_stale_v1_delete_removes_the_v2_rows(self, monkeypatch, fake_store):
         """delete() dispatches on the stored format too. A stale cache
         deletes the wrong namespace and leaves the real rows behind, where
@@ -1863,6 +1910,7 @@ class TestMigrateRefusesAVanishedMetaRow:
     it was copying: the list was deleted, and recreating it resurrects it
     out of rows migration wrote itself."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_deleted_mid_migration_rolls_back_rather_than_recreating(
         self, monkeypatch, fake_store
     ):
@@ -1949,6 +1997,7 @@ class TestSweepForeignFormatRows:
     """The cleanup primitive both interrupted rewrites need, and the shape
     filters that keep it from eating a sibling list."""
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_sweeps_v1_residue_from_a_v2_list(self, monkeypatch, fake_store):
         actor_id = "actor-sweep-v1"
         name = "notes"
@@ -1964,6 +2013,7 @@ class TestSweepForeignFormatRows:
         assert (actor_id, f"list:{name}-0") not in fake_store
         assert prop_list.to_list() == ["a", "b"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_sweeps_v2_residue_from_a_v1_list(self, monkeypatch, fake_store):
         actor_id = "actor-sweep-v2"
         name = "notes"
@@ -1978,6 +2028,7 @@ class TestSweepForeignFormatRows:
         assert not [k for k in fake_store if "-#" in k[1]]
         assert prop_list.to_list() == ["a", "b"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_a_stale_cache_cannot_make_the_sweep_delete_the_live_rows(
         self, monkeypatch, fake_store
     ):
@@ -2000,6 +2051,7 @@ class TestSweepForeignFormatRows:
             actor_id=actor_id, name=name, config=object()
         ).to_list() == (items)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_a_digit_named_sibling_list_survives_a_v1_sweep(
         self, monkeypatch, fake_store
     ):
@@ -2022,6 +2074,7 @@ class TestSweepForeignFormatRows:
             k: v for k, v in fake_store.items() if k[1].startswith("list:foo-5-")
         } == sibling_before
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_a_legacy_hash_named_sibling_survives_a_v2_sweep(
         self, monkeypatch, fake_store
     ):
@@ -2043,6 +2096,7 @@ class TestSweepForeignFormatRows:
             k: v for k, v in fake_store.items() if k[1].startswith("list:foo-#bar-")
         } == sibling_before
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_the_meta_row_is_never_swept(self, monkeypatch, fake_store):
         actor_id = "actor-sweep-meta"
         name = "notes"
@@ -2070,6 +2124,7 @@ class TestInterruptedRewritesConverge:
         for i, item in enumerate(items):
             store[(actor_id, f"list:{name}-{i}")] = json.dumps(item)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_rerunning_migrate_to_v2_sweeps_the_v1_rows(self, monkeypatch, fake_store):
         actor_id = "actor-converge-migrate"
         name = "notes"
@@ -2127,6 +2182,7 @@ class TestInterruptedRewritesConverge:
         prop_list = ListProperty(actor_id=actor_id, name=name, config=object())
         assert prop_list.to_list() == items
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_rerunning_downgrade_sweeps_the_v2_rows(self, monkeypatch, fake_store):
         from actingweb.maintenance.migrate_property_lists import downgrade_to_v1
 
@@ -2154,6 +2210,7 @@ class TestInterruptedRewritesConverge:
             actor_id=actor_id, name=name, config=object()
         ).to_list() == (items)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_a_deleted_list_does_not_resurrect_inside_its_successor(
         self, monkeypatch, fake_store
     ):
@@ -2175,6 +2232,7 @@ class TestInterruptedRewritesConverge:
         recreated.append("new-a")
         assert recreated.to_list() == ["new-a"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_clear_empties_both_namespaces(self, monkeypatch, fake_store):
         actor_id = "actor-clear-both"
         name = "notes"
@@ -2196,6 +2254,7 @@ class TestVerifyReportsForeignFormatRows:
     duplicate reporting rather than v1's, where duplicates do fail.
     """
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v2_verify_reports_v1_residue_without_failing_healthy(
         self, monkeypatch, fake_store
     ):
@@ -2211,6 +2270,7 @@ class TestVerifyReportsForeignFormatRows:
         assert report["foreign_format_rows"] == 2
         assert report["healthy"] is True
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_verify_reports_v2_residue_without_failing_healthy(
         self, monkeypatch, fake_store
     ):
@@ -2249,6 +2309,7 @@ class TestMigrationRollbackDoesNotEatASuccessorList:
     than the migration.
     """
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_rollback_leaves_a_successors_row_alone(self, monkeypatch, fake_store):
         import fractional_indexing as fi
 
@@ -2293,6 +2354,7 @@ class TestMigrationRollbackDoesNotEatASuccessorList:
             "the one being migrated"
         )
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_rollback_still_removes_its_own_rows(self, monkeypatch, fake_store):
         """The conditional delete must not become a no-op: when nothing else
         touched the rows, the rollback still cleans up after itself."""
@@ -2374,6 +2436,7 @@ class TestCompactRefusesARevertedMigration:
         _patch_get_property(monkeypatch, lambda config: FakePropertyDb(store))
         return store
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_the_shape_is_detected_as_damaged_with_foreign_rows(
         self, monkeypatch
     ) -> None:
@@ -2386,6 +2449,7 @@ class TestCompactRefusesARevertedMigration:
         assert report["foreign_format_rows"] == 3
         assert len([k for k in store if "-#" in k[1]]) == 3
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_compact_refuses_and_says_why(self, monkeypatch) -> None:
         self._prepare(monkeypatch)
         result = ListProperty(
@@ -2394,6 +2458,7 @@ class TestCompactRefusesARevertedMigration:
         assert result["compacted"] is False
         assert result["reason"] == "reverted_migration"
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_the_override_strands_the_data_and_reports_healthy(
         self, monkeypatch
     ) -> None:
@@ -2419,6 +2484,7 @@ class TestCompactRefusesARevertedMigration:
         stranded = sorted(json.loads(v) for k, v in store.items() if "-#" in k[1])
         assert stranded == sorted(self.ITEMS)
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_the_list_stays_loudly_unhealthy(self, monkeypatch) -> None:
         """A refusal must not quietly look like a successful repair."""
         self._prepare(monkeypatch)
@@ -2429,6 +2495,7 @@ class TestCompactRefusesARevertedMigration:
         assert after["healthy"] is False
         assert after["foreign_format_rows"] == 3
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_allow_reverted_is_the_deliberate_override(self, monkeypatch) -> None:
         self._prepare(monkeypatch)
         result = ListProperty(
@@ -2436,6 +2503,7 @@ class TestCompactRefusesARevertedMigration:
         ).compact(allow_reverted=True)
         assert result.get("compacted") is not False
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_an_ordinary_hole_still_compacts(self, monkeypatch) -> None:
         """The gate must be narrow: damage alone is not a reverted migration.
 
@@ -2465,6 +2533,7 @@ class TestAStaleFormatWriteIsLoud:
     this warning the only trace was a DEBUG line.
     """
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_appending_from_a_stale_instance_warns(self, monkeypatch, caplog) -> None:
         import logging
 
@@ -2485,6 +2554,7 @@ class TestAStaleFormatWriteIsLoud:
             for r in caplog.records
         ), "a write against a migrated-away format must not be silent"
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_the_instance_self_corrects_after_the_warning(self, monkeypatch) -> None:
         """Bounded to one write: the metadata write refreshes the cache."""
         store = {}
@@ -2502,6 +2572,7 @@ class TestAStaleFormatWriteIsLoud:
             in ListProperty(actor_id="actor1", name="held", config=object()).to_list()
         )
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_no_warning_when_nothing_changed_underneath(
         self, monkeypatch, caplog
     ) -> None:

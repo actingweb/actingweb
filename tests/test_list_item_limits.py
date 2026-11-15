@@ -28,6 +28,9 @@ from actingweb.property_list_span import (
     SPAN_THRESHOLD_DEFAULT,
     encoded_size,
 )
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_bulk_list_update_handles import _post_bulk, _run_handler
 from tests.test_property_list_integrity import FakePropertyDb
 
@@ -239,6 +242,7 @@ class TestV2RefusedBeforeAnyWrite:
         lst.append(item)
         assert lst.to_list() == [item]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_non_ascii_item_measured_as_escaped_json(
         self, store: dict[Any, Any]
     ) -> None:
@@ -253,6 +257,7 @@ class TestV2RefusedBeforeAnyWrite:
 
 
 class TestV1RefusedBeforeAnyWrite:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_append_insert_setitem_on_v1(self, store: dict[Any, Any]) -> None:
         _seed_v1(store, "old", ["a", "b"])
         before = dict(store)
@@ -267,6 +272,7 @@ class TestV1RefusedBeforeAnyWrite:
             lst.extend(["c", _item_of(20_001)])
         assert store == before
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_item_over_390000_raises_on_dynamodb(
         self, store: dict[Any, Any]
     ) -> None:
@@ -280,6 +286,7 @@ class TestV1RefusedBeforeAnyWrite:
         assert exc.value.limit == 390_000
         assert store == before
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_item_over_390000_is_one_row_on_postgresql(
         self, store: dict[Any, Any]
     ) -> None:
@@ -354,6 +361,7 @@ def _assert_413(webobj: Any, name: str, size: int, limit: int) -> None:
     assert "detail" in body
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestHandlers413:
     def test_put_index(self, live: Any, caplog: pytest.LogCaptureFixture) -> None:
         myself, config = live
@@ -402,6 +410,7 @@ class TestHandlers413:
         assert myself.property_lists.bulk.to_list() == [{"n": 0}]
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestBulk413WritesNothing:
     """Verification 2026-10-31, M4: an oversized entry anywhere in a bulk
     batch is refused before any entry is written."""
@@ -429,6 +438,7 @@ def _www_post(myself: Any, config: Any, path: str, params: dict[str, str]) -> An
     return webobj
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestHandlerStatusMappings:
     """Verification 2026-10-31 follow-ups: 409 for a broken span on PUT
     ?index=, the www item actions' 413/409 and visible reasons, an empty
@@ -534,6 +544,7 @@ def _www_get(myself: Any, config: Any, path: str, params: dict[str, str]) -> Any
     return webobj
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestWwwListPageAndActions:
     """Second verification, V4-V6, V8, V9, L7, L8: the web UI's list page
     and its item actions."""
@@ -710,6 +721,7 @@ class TestWwwListPageAndActions:
         assert "--sweep-spans" in webobj.response.template_values["list_error"]
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestRestPermissionFailsClosed:
     """The REST property handlers deny (403) when the permission evaluator
     raises, instead of answering with the legacy access table."""
@@ -751,6 +763,7 @@ class TestRestPermissionFailsClosed:
                 handler._check_property_permission("a1", auth_obj, "notes", "read")
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestWwwBrowserWalkFollowUps:
     """Third browser walk: a string item is edited as text, and a
     whitespace edit names the real problem."""
@@ -841,6 +854,7 @@ def _www_call(
     return webobj
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestWwwVerification3FollowUps:
     """Third verification, W1, W5, W6, W9, W10: one cross-site rule for
     every web UI mutation, the base path kept, CRLF text, v1 editing."""
@@ -1115,6 +1129,7 @@ def test_delete_error_page_does_not_promise_kept_text(live: Any) -> None:
     assert "your text is kept" in typed.response.body
 
 
+@pytest.mark.property_only("the HTTP handlers, which build property lists")
 class TestWwwVerification4FollowUps:
     """Fourth verification, X2, X7, X8, X9, X13."""
 

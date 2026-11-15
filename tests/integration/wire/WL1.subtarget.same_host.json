@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"action\": \"add\", \"index\": 2, \"value\": {\"id\": \"c\", \"text\": \"x\"}}",
+         "data": "{\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"id\": \"c\", \"text\": \"x\"}, \"index\": 2}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -157,32 +157,23 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "action": {
-         "value": "add"
-        },
-        "index": {
-         "value": 2
-        },
-        "item": {
-         "id": "b",
-         "text": "two"
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        },
-        "value": {
-         "id": "c",
-         "text": "x"
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "text": "one"
+         },
+         {
+          "id": "b",
+          "text": "two"
+         },
+         {
+          "id": "c",
+          "text": "x"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -227,12 +218,14 @@
         {
          "actor": "<B>",
          "data": {
-          "action": "add",
           "index": 2,
-          "value": {
+          "item": {
            "id": "c",
            "text": "x"
-          }
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -248,12 +241,14 @@
        "query": "",
        "request": {
         "data": {
-         "action": "add",
          "index": 2,
-         "value": {
+         "item": {
           "id": "c",
           "text": "x"
-         }
+         },
+         "length": 3,
+         "list": "notes",
+         "operation": "append"
         },
         "granularity": "high",
         "id": "<A>",

@@ -109,6 +109,12 @@ cap.
 The attribute composite key `bucket + ":" + name` can collide, because both
 halves may contain `:`. Both backends now attribute a colliding row to the last
 writer and compare `bucket` exactly on every read and delete, which is the most
-that can be done without a key change. The real fix is a delimiter that cannot
-appear in either half — a key-layout change with a migration, so it belongs
-here alongside the `prop#`/`list#` prefixes.
+that can be done without a key change. Since 3.16 every attribute write is
+conditioned on its bucket (`AttributeKeyCollision`), so a colliding write
+fails instead of replacing another bucket's row
+(`thoughts/plans/2026-11-13-attribute-list-v2-port.md`); the two names still
+cannot both exist. The real fix is a delimiter that cannot appear in either
+half — a key-layout change with a migration, so it belongs here alongside the
+`prop#`/`list#` prefixes. Attribute lists now use the property list rows
+(`list:<name>-meta`, `list:<name>-#<rank>`, a `<bucket>$aux` side bucket), so
+the prefix scheme covers both.

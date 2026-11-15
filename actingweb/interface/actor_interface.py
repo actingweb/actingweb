@@ -15,6 +15,7 @@ from .trust_manager import TrustManager
 
 if TYPE_CHECKING:
     from ..attribute import InternalStore
+    from ..attribute_list_store import AttributeListStore
     from ..config import Config
     from .authenticated_views import AuthenticatedActorView
     from .hooks import HookRegistry
@@ -344,6 +345,26 @@ class ActorInterface:
             # Wrap with notification support
             self._property_list_store = PropertyListStore(core_store, self._core_actor)
         return self._property_list_store
+
+    def attribute_lists(self, bucket: str) -> "AttributeListStore":
+        """The actor's attribute lists in ``bucket``: the property list
+        interface over private storage that never reaches a peer.
+
+        An attribute list registers no subscription diffs (attributes are
+        private). Replicas of peers' lists live in the ``remote:{peer_id}``
+        buckets; read those through ``RemotePeerStore``. Each call returns a
+        fresh store.
+
+        .. code-block:: python
+
+            notes = actor.attribute_lists("app_state").get("notes")
+            notes.append({"id": 1, "text": "private"})
+        """
+        from ..attribute_list_store import AttributeListStore
+
+        return AttributeListStore(
+            actor_id=self.id, bucket=bucket, config=self._core_actor.config
+        )
 
     @property
     def trust(self) -> TrustManager:

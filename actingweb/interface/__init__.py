@@ -5,6 +5,7 @@ This module provides a clean, fluent API for building ActingWeb applications
 with improved developer experience.
 """
 
+from ..attribute_list_store import AttributeListStore
 from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
 from ..deletion import DeletionStatus, get_deletion_status
 from ..fanout import FanOutManager, FanOutResult
@@ -14,6 +15,7 @@ from ..subscription_config import SubscriptionProcessingConfig
 from .actor_interface import ActorInterface
 from .app import (
     ActingWebApp,
+    AttributeSchemaNotReady,
     PropertyLookupNotReady,
     StoreNotReady,
     UniqueCreatorNotReady,
@@ -50,6 +52,8 @@ from .trust_manager import TrustManager
 
 __all__ = [
     "ActingWebApp",
+    "AttributeListStore",
+    "AttributeSchemaNotReady",
     "PropertyLookupNotReady",
     "StoreNotReady",
     "UniqueCreatorNotReady",

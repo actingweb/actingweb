@@ -7,7 +7,8 @@ Tests the complete flow of:
 3. Verifying cached data is deleted when auto_delete_on_revocation=True
 """
 
-from unittest.mock import Mock, patch
+from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -130,94 +131,57 @@ class TestPermissionRevocationIntegration:
         assert changes["revoked_patterns"] == []
         assert changes["granted_patterns"] == ["memory_*"]
 
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_callback_handler_deletes_data_on_revocation(
-        self, mock_store_class, mock_config
-    ):
-        """Test that callback handler deletes data when permissions are revoked."""
-        from actingweb.handlers.callbacks import CallbacksHandler
+    @staticmethod
+    def _replica(lists: list[str]) -> Any:
+        from actingweb.remote_storage import RemotePeerStore
+        from tests.mcp_token_double import make_config
 
-        # Setup mock RemotePeerStore
-        mock_store = Mock()
-        mock_store.list_all_lists.return_value = [
-            "memory_travel",
-            "memory_work",
-            "profile_info",
-            "settings_prefs",
-        ]
-        mock_store_class.return_value = mock_store
+        actor = Mock()
+        actor.id = "test_actor_123"
+        actor.config, _ = make_config()
+        store = RemotePeerStore(actor, "peer123", validate_peer_id=False)
+        for name in lists:
+            store.set_list(name, ["x"])
+        return store
 
-        # Setup mock actor interface
-        mock_actor_interface = Mock()
-        mock_actor_interface.id = "test_actor_123"
+    @staticmethod
+    def _grant(patterns: list[str]) -> Any:
+        from actingweb.peer_permissions import PeerPermissions
 
-        # Create handler and call _delete_revoked_peer_data
-        handler = CallbacksHandler(config=mock_config)
-        handler._delete_revoked_peer_data(
-            actor_interface=mock_actor_interface,
+        return PeerPermissions(
+            actor_id="test_actor_123",
             peer_id="peer123",
-            revoked_patterns=["profile_*", "settings_*"],
+            properties={"patterns": patterns, "operations": ["read"]},
         )
 
-        # Verify deletion was called for matching lists
-        assert mock_store.delete_list.call_count == 2
-        deleted_lists = [call[0][0] for call in mock_store.delete_list.call_args_list]
-        assert "profile_info" in deleted_lists
-        assert "settings_prefs" in deleted_lists
+    def test_callback_handler_deletes_data_on_revocation(self):
+        """What the new grant no longer lets the subscriber read is deleted."""
+        from actingweb.replica_revocation import apply_revoked
 
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_callback_handler_does_not_delete_non_matching(
-        self, mock_store_class, mock_config
-    ):
-        """Test that non-matching lists are not deleted."""
-        from actingweb.handlers.callbacks import CallbacksHandler
-
-        # Setup mock RemotePeerStore
-        mock_store = Mock()
-        mock_store.list_all_lists.return_value = [
-            "memory_travel",
-            "memory_work",
-            "other_data",
-        ]
-        mock_store_class.return_value = mock_store
-
-        # Setup mock actor interface
-        mock_actor_interface = Mock()
-        mock_actor_interface.id = "test_actor_123"
-
-        # Create handler and call with pattern that doesn't match any list
-        handler = CallbacksHandler(config=mock_config)
-        handler._delete_revoked_peer_data(
-            actor_interface=mock_actor_interface,
-            peer_id="peer123",
-            revoked_patterns=["profile_*"],  # No profile_* lists exist
+        store = self._replica(
+            ["memory_travel", "memory_work", "profile_info", "settings_prefs"]
         )
+        deleted = apply_revoked(store, _evaluated(store, self._grant(["memory_*"])))
+        assert sorted(deleted) == ["profile_info", "settings_prefs"]
+        assert sorted(store.list_all_lists()) == ["memory_travel", "memory_work"]
 
-        # Verify no deletion was called
-        mock_store.delete_list.assert_not_called()
+    def test_callback_handler_does_not_delete_non_matching(self):
+        from actingweb.replica_revocation import revoked_replica_names
 
-    @patch("actingweb.remote_storage.RemotePeerStore")
-    def test_callback_handler_empty_patterns_no_deletion(
-        self, mock_store_class, mock_config
-    ):
-        """Test that empty revoked patterns does not trigger deletion."""
-        from actingweb.handlers.callbacks import CallbacksHandler
+        store = self._replica(["memory_travel", "memory_work"])
+        result = revoked_replica_names(store, self._grant(["memory_*"]))
+        assert not isinstance(result, type(None))
+        assert getattr(result, "names", None) == []
 
-        mock_store = Mock()
-        mock_store_class.return_value = mock_store
+    def test_callback_handler_empty_patterns_no_deletion(self):
+        """A grant without property rules is not evaluated: nothing goes."""
+        from actingweb.peer_permissions import PeerPermissions
+        from actingweb.replica_revocation import NotEvaluated, revoked_replica_names
 
-        mock_actor_interface = Mock()
-        mock_actor_interface.id = "test_actor_123"
-
-        handler = CallbacksHandler(config=mock_config)
-        handler._delete_revoked_peer_data(
-            actor_interface=mock_actor_interface,
-            peer_id="peer123",
-            revoked_patterns=[],
-        )
-
-        # Verify store was never instantiated (early return)
-        mock_store_class.assert_not_called()
+        store = self._replica(["memory_travel"])
+        empty = PeerPermissions(actor_id="a", peer_id="peer123", properties=None)
+        assert isinstance(revoked_replica_names(store, empty), NotEvaluated)
+        assert store.list_all_lists() == ["memory_travel"]
 
 
 class TestPermissionCallbackHandler:
@@ -338,3 +302,12 @@ class TestGlobPatternMatching:
 
         assert glob_match("item1", "item?") is True
         assert glob_match("item12", "item?") is False
+
+
+def _evaluated(store: Any, grant: Any) -> Any:
+    """``revoked_replica_names`` for a grant that is evaluated."""
+    from actingweb.replica_revocation import RevokedNames, revoked_replica_names
+
+    plan = revoked_replica_names(store, grant)
+    assert isinstance(plan, RevokedNames)
+    return plan

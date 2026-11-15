@@ -76,12 +76,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 0,
+        "last_seq": 1,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 0
+        "version": 1
        }
       ],
       "peer_permissions": {
@@ -151,7 +151,11 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {}
+       "scalars": {
+        "transformed": {
+         "value": "BLUE"
+        }
+       }
       },
       "subscriptions": [
        {
@@ -159,7 +163,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 0,
+        "sequence": 1,
         "subscriptionid": "<sub1>",
         "subtarget": "transformed",
         "target": "properties"
@@ -183,7 +187,17 @@
    "wire": [
     {
      "auth": "bearer:trust:A-B",
-     "children": [],
+     "children": [
+      {
+       "actor": "<B>",
+       "data": "BLUE",
+       "event": "subscription_data",
+       "peer": "<A>",
+       "sequence": 1,
+       "target": "properties",
+       "type": "diff"
+      }
+     ],
      "headers": {},
      "host": "wire_peer_app",
      "method": "POST",
@@ -200,7 +214,7 @@
       "timestamp": "<ts:space>"
      },
      "response": null,
-     "status": 400
+     "status": 204
     }
    ]
   },
@@ -285,14 +299,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 0,
-        "pending_count": 1,
-        "pending_sequences": [
-         2
-        ],
+        "last_seq": 2,
+        "pending_count": 0,
+        "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 0
+        "version": 2
        }
       ],
       "peer_permissions": {
@@ -370,7 +382,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 0,
+        "sequence": 2,
         "subscriptionid": "<sub1>",
         "subtarget": "transformed",
         "target": "properties"
@@ -394,7 +406,17 @@
    "wire": [
     {
      "auth": "bearer:trust:A-B",
-     "children": [],
+     "children": [
+      {
+       "actor": "<B>",
+       "data": "",
+       "event": "subscription_data",
+       "peer": "<A>",
+       "sequence": 2,
+       "target": "properties",
+       "type": "diff"
+      }
+     ],
      "headers": {},
      "host": "wire_peer_app",
      "method": "POST",

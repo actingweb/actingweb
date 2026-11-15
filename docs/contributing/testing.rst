@@ -191,8 +191,9 @@ diff in the commit that makes it.
   it once read.
 - A commit that changes or removes a recording that exists on ``master``
   carries one ``Wire-Phase: <plan>:<phase>`` trailer naming a phase among
-  that row's owners as ``master`` has them; an ownership change lands on
-  ``master`` first. ``tests/integration/verify_groups.py`` checks the
+  that row's owners as the commit's first parent has them; ownership is
+  taken in an earlier commit, on the branch or on ``master``, never in the
+  commit that re-records. ``tests/integration/verify_groups.py`` checks the
   branch's commits since the merge base, merges included. It checks commits
   already made, so run it after committing and amend if it fails. CI runs
   it too, so a PR whose commits break the rule fails.
@@ -571,12 +572,21 @@ Verify peer data storage:
        store.set_list("items", [{"id": 1}, {"id": 2}])
        assert len(store.get_list("items")) == 2
 
-       # Test list operations
-       store.apply_list_operation("items", {
-           "operation": "append",
-           "items": [{"id": 3}]
+       # Test a list diff, as a whole-target subscription delivers it
+       result = store.apply_callback_data({
+           "items": {"list": "items", "operation": "append", "length": 3,
+                     "index": 2, "item": {"id": 3}},
        })
+       assert result.out_of_step is None
        assert len(store.get_list("items")) == 3
+
+       # A subtarget-level subscription delivers the bare diff
+       result = store.apply_callback_data(
+           {"list": "items", "operation": "update", "length": 3,
+            "index": 9, "item": {"id": 9}},
+           subtarget="items",
+       )
+       assert result.out_of_step is not None  # index out of range: rebuild
 
        # Test cleanup
        store.delete_all()

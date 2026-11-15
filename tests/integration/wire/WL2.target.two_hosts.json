@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"action\": \"update\", \"index\": 0, \"value\": {\"id\": \"a\", \"v\": 2}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -161,7 +161,7 @@
         "notes": [
          {
           "id": "a",
-          "text": "one"
+          "v": 2
          },
          {
           "id": "b",
@@ -169,16 +169,7 @@
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "action": "update",
-         "index": 0,
-         "value": {
-          "id": "a",
-          "v": 2
-         }
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -221,12 +212,18 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "action": "update",
            "index": 0,
-           "value": {
+           "item": {
             "id": "a",
             "v": 2
-           }
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "id": "a",
+            "text": "one"
+           },
+           "operation": "update"
           }
          },
          "event": "subscription_data",
@@ -244,12 +241,18 @@
        "request": {
         "data": {
          "notes": {
-          "action": "update",
           "index": 0,
-          "value": {
+          "item": {
            "id": "a",
            "v": 2
-          }
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
          }
         },
         "granularity": "high",

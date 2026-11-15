@@ -231,12 +231,24 @@ class Attribute(Base):
             text("(data ->> 'chain_id')"),
             postgresql_where=text("(data ->> 'chain_id') IS NOT NULL"),
         ),
+        # Attribute list rows, read by byte order within a bucket (revision
+        # a7b8c9d0e1f2, built CONCURRENTLY there). Partial: the table also
+        # holds tokens and sessions written at a high rate.
+        Index(
+            "ix_attributes_list_rows",
+            "id",
+            "bucket",
+            text('name COLLATE "C"'),
+            postgresql_where=text("starts_with(name, 'list:')"),
+        ),
     )
 
     id = Column(String(255), nullable=False)  # actor_id
-    bucket_name = Column(String(255), nullable=False)  # bucket:name composite
+    # TEXT since a7b8c9d0e1f2: an attribute list's item row name carries a
+    # rank key of up to 180 characters.
+    bucket_name = Column(Text, nullable=False)  # bucket:name composite
     bucket = Column(String(255), nullable=False)
-    name = Column(String(255), nullable=False)
+    name = Column(Text, nullable=False)
     data = Column(JSONB)
     timestamp = Column(DateTime)
     # TTL timestamp for automatic cleanup (Unix epoch timestamp)

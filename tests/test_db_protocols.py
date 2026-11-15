@@ -164,6 +164,37 @@ class TestPhase4ProtocolCompliance:
             ]
         )
 
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "get_attr_range",
+            "get_attr_prefix",
+            "get_last_attr_in_range",
+            "create_attr_if_not_exists",
+            "create_attrs_if_not_exist",
+            "set_attr_if_data_equals",
+            "delete_attr_if_data_equals",
+            "delete_attrs",
+            "put_attr",
+        ],
+    )
+    def test_the_list_primitives_have_the_protocol_signature(
+        self, backend: str, method: str
+    ) -> None:
+        """Both backends implement each attribute list primitive with the
+        protocol's parameters, and the start-up probe names it."""
+        import inspect
+
+        from actingweb.db.protocols import ATTRIBUTE_LIST_PRIMITIVES
+
+        mod = importlib.import_module(f"actingweb.db.{backend}.attribute")
+        wanted = inspect.signature(getattr(DbAttributeProtocol, method)).parameters
+        got = inspect.signature(getattr(mod.DbAttribute, method)).parameters
+        assert [(n, p.kind) for n, p in got.items()] == [
+            (n, p.kind) for n, p in wanted.items()
+        ]
+        assert method in ATTRIBUTE_LIST_PRIMITIVES
+
     def test_attribute_bucket_list_protocol_compliance(self, backend: str) -> None:
         """Verify DbAttributeBucketList implements DbAttributeBucketListProtocol."""
         mod = importlib.import_module(f"actingweb.db.{backend}.attribute")

@@ -378,8 +378,9 @@ and receives callbacks when Actor B's data changes.
             sync_subscription_async()
               ├─> GET {B}/subscriptions/{A}/{subid}  ──> Returns diffs
               ├─> CallbackProcessor.process_callback()
-              ├─> RemotePeerStore.apply_callback_data()
-              └─> PUT {B}/subscriptions/{A}/{subid}  ──> Clear processed diffs
+              ├─> RemotePeerStore.apply_callback_data(data, subtarget=, resource=)
+              ├─> PUT {B}/subscriptions/{A}/{subid}  ──> Clear processed diffs
+              └─> rebuild_subscription() when a rebuild is owed and due
 
 **4. Property Change Callback (B notifies A in real-time)**
 
@@ -388,18 +389,26 @@ and receives callbacks when Actor B's data changes.
     Actor B (publisher)                              Actor A (subscriber)
     ───────────────────                              ────────────────────
     Property changed (PUT /properties/foo)
+    or list edited (build_list_diff(): {"list", "operation", "length", ...})
       └─> register_diffs(target="properties", subtarget="foo")
             ├─> Check if subscription suspended
             ├─> Get subscriptions (callback=False - inbound)
             └─> For each subscription:
-                  ├─> Filter by peer permissions
+                  ├─> Shape the blob to the subscription's level
+                  │     (whole target: {"foo": blob}; subtarget: blob)
+                  ├─> Filter by peer permissions (a list diff as a unit)
                   ├─> add_diff() to subscription
                   └─> callback_subscription()
                         └─> POST {A}/callbacks/subscriptions/{B}/{subid}
                                                     └─> CallbacksHandler.post()
-                                                          └─> CallbackProcessor.process_callback()
-                                                                └─> RemotePeerStore.apply_callback_data()
-                                                                └─> [subscription hook]
+                                                          └─> CallbackProcessor.process_callback_sync()
+                                                                ├─> RemotePeerStore.apply_callback_data()
+                                                                │     out_of_step → ProcessResult.REBUILD
+                                                                ├─> [subscription data hook]
+                                                                └─> REBUILD: SubscriptionManager.rebuild_subscription()
+                                                                      ├─> GET {B} subscription sequence + baseline
+                                                                      ├─> RemotePeerStore.apply_resync_data()
+                                                                      └─> PUT {B}/subscriptions/{A}/{subid}  (clear to sequence)
 
 **5. Permission Change Callback (B grants/revokes permissions to A)**
 
@@ -409,9 +418,12 @@ and receives callbacks when Actor B's data changes.
     ─────────                                        ─────────
     Permission modified for A
       └─> POST {A}/callbacks/permissions/{B}  ────> CallbacksHandler.post()
-                                                      ├─> PeerPermissionStore.store_permissions()
                                                       ├─> detect_permission_changes()
-                                                      ├─> Auto-delete if revoked (if configured)
+                                                      ├─> If auto_delete_on_revocation:
+                                                      │     replica_revocation.plan_cleanup()
+                                                      │     (new grant, publisher's matcher)
+                                                      │     → apply_revoked() → deleted_names
+                                                      ├─> PeerPermissionStore.store_permissions()
                                                       └─> [permissions callback hook]
 
 **6. Subscription Suspension & Resync**
@@ -431,6 +443,47 @@ and receives callbacks when Actor B's data changes.
                   └─> POST resync callback ────────> CallbackProcessor._handle_resync()
                                                       └─> Clear pending, reset state
                                                       └─> RemotePeerStore.apply_resync_data()
+
+    Actor.request_resync(target, subtarget)           (a bulk list update over 25 changes)
+      └─> resync to each subscriber that may read subtarget, no suspension;
+          a peer without resync support gets "clear" then "extend" per list
+
+List storage and replicas
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Property lists, attribute lists and replica lists share one format, held in
+``actingweb/list_core.py``:
+
+- ``ListCore`` implements the list (rank-keyed item rows, handles, spanned
+  items, ``append_once()``, ``verify()``, ``compact()``) over a
+  ``ListStorage`` protocol: point, range and prefix reads, conditional
+  creates, compare-and-set and batch deletes, each on a main and a side
+  (``$aux``) location.
+- ``ListProperty`` (``property_list.py``) is ``ListCore`` over
+  ``PropertyListStorage``: rows in the properties table, side rows under
+  ``{actor_id}$aux``, plus the v1 dense-index format and its migration.
+- ``ListAttribute`` (``attribute_list.py``) is ``ListCore`` over
+  ``AttributeListStorage``: rows in an attribute bucket, side rows in
+  ``{bucket}$aux``, reading the pre-3.16 attribute layout in place and
+  converting it on the first change. ``AttributeListStore``
+  (``attribute_list_store.py``) is the per-bucket accessor behind
+  ``actor.attribute_lists(bucket)``. The backend supplies the nine
+  ``ATTRIBUTE_LIST_PRIMITIVES``; every attribute write is conditioned on its
+  bucket (``AttributeKeyCollision``).
+
+The receiver (``RemotePeerStore`` in ``remote_storage.py``) stores a peer's
+replica in ``remote:{peer_id}``: scalars as attributes, lists as
+``ListAttribute``. ``apply_callback_data()`` binds a list diff to the key it
+arrived under, applies it with the list's own operations, and reports a diff
+it cannot apply (``ReplicaOutOfStep`` inside, ``ReplicaApplyResult.out_of_step``
+outside). The callback handler records that on the ``ProcessedCallback``;
+``CallbackProcessor`` marks the rebuild owed and answers ``REBUILD`` when the
+one-a-minute interval allows (``begin_rebuild()`` reserves the attempt). The
+rebuild (``SubscriptionManager.rebuild_subscription``) reads the
+subscription's sequence, fetches a baseline that matches it, applies it with
+``apply_resync_data()``, deletes what it no longer carries, and clears the
+publisher's diffs up to the sequence. ``replica_revocation.py`` computes what
+a changed grant removes from the same replica.
 
 Key Implementation Files
 ------------------------
@@ -453,6 +506,15 @@ The following table maps components to their implementation files:
 | Callback processor        | ``actingweb/callback_processor.py``            | Sequencing, gaps, resync         |
 +---------------------------+------------------------------------------------+----------------------------------+
 | Remote storage            | ``actingweb/remote_storage.py``                | Store peer data locally          |
++---------------------------+------------------------------------------------+----------------------------------+
+| List core                 | ``actingweb/list_core.py``                     | List format over ListStorage     |
++---------------------------+------------------------------------------------+----------------------------------+
+| Property lists            | ``actingweb/property_list.py``                 | ListProperty, build_list_diff    |
++---------------------------+------------------------------------------------+----------------------------------+
+| Attribute lists           | ``actingweb/attribute_list.py``,               | ListAttribute, AttributeListStore|
+|                           | ``actingweb/attribute_list_store.py``          |                                  |
++---------------------------+------------------------------------------------+----------------------------------+
+| Replica revocation        | ``actingweb/replica_revocation.py``            | Replica cleanup on grant change  |
 +---------------------------+------------------------------------------------+----------------------------------+
 | Peer permissions          | ``actingweb/peer_permissions.py``              | Cache what peers grant us        |
 +---------------------------+------------------------------------------------+----------------------------------+

@@ -10,10 +10,11 @@ from typing import TYPE_CHECKING, Any, Optional
 from ..db.exceptions import DbError
 from ..property import PropertyStore as CorePropertyStore
 from ..property_list import (
+    UNSET,
     AppendOnceResult,
     ListItemHandle,
-    diff_reference,
-    spanned_reference,
+    build_list_diff,
+    handle_old_item_fields,
 )
 
 if TYPE_CHECKING:
@@ -24,11 +25,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Distinguishes "argument not passed" from "value is None" in
-# _register_diff below: None is a legal list item, and a diff for a
-# None-valued item must still carry its item/old_item field (as JSON
-# null) or the receiver classifies the diff as an unknown operation and
-# silently drops it.
-_UNSET: Any = object()
+# _register_diff below (property_list.UNSET, shared with build_list_diff).
+_UNSET: Any = UNSET
 
 
 class PropertyStore:
@@ -297,38 +295,20 @@ class NotifyingListProperty:
                 # a second len(self._list_prop) call in append() below.
                 index = length - 1
 
-            diff_info: dict[str, Any] = {
-                "list": self._list_name,
-                "operation": operation,
-                "length": length,
-            }
-
-            # Include item data for operations that add/modify items
-            # This allows subscribers to receive the data directly without fetching.
-            # item/old_item are gated on the _UNSET sentinel, not None: None is
-            # a legal list item, and the receiver dispatches on key presence.
-            if item is not _UNSET:
-                diff_info["item"] = item
-            if index is not None:
-                diff_info["index"] = index
-            if items is not None:
-                diff_info["items"] = items
-            if old_item is not _UNSET:
-                diff_info["old_item"] = old_item
-
-            # Note: diff_info already contains "list": self._list_name to identify
-            # this as a list operation. We use clean subtarget without "list:" prefix
-            # as that prefix is an internal storage detail, not exposed via HTTP/callbacks.
-            # A diff whose blob would exceed the span threshold carries a
-            # reference (no values; top-level "spanned"/"bytes") -- see
-            # property_list.diff_reference(). A spanned item the caller did
-            # not read is a reference regardless of size.
-            if spanned_bytes is not None:
-                diff_info = spanned_reference(
-                    diff_info, self._list_prop.config, spanned_bytes
-                )
-            else:
-                diff_info = diff_reference(diff_info, self._list_prop.config)
+            # The subtarget is the list's own name (no "list:" prefix, which
+            # is a storage detail). A diff over the span threshold, or for a
+            # spanned item not read, is a reference -- see build_list_diff().
+            diff_info = build_list_diff(
+                self._list_name,
+                operation,
+                length=length,
+                config=self._list_prop.config,
+                item=item,
+                index=index,
+                items=items,
+                old_item=old_item,
+                spanned_bytes=spanned_bytes,
+            )
             self._actor.register_diffs(
                 target="properties",
                 subtarget=self._list_name,
@@ -495,17 +475,15 @@ class NotifyingListProperty:
         closed operation vocabulary has no dedicated handle-delete entry)
         carrying the removed item's decoded value, only when the delete
         actually succeeded -- a ``False`` return means nothing changed."""
-        if handle.spanned:
-            # The handle carries the spanned item's size, not its value:
-            # the diff is a reference, with no read of the bodies.
-            removed = self._list_prop.delete_by_handle(handle)
-            if removed:
-                self._register_diff("remove", spanned_bytes=handle.bytes or 0)
-            return removed
-        item = self._list_prop._unresolved_or_item(handle.rank, handle.raw_value)
+        # A spanned (or malformed) item's value is not read: the diff is a
+        # reference sized from the handle.
+        fields = handle_old_item_fields(self._list_prop, handle)
         removed = self._list_prop.delete_by_handle(handle)
         if removed:
-            self._register_diff("remove", item=item)
+            if "old_item" in fields:
+                self._register_diff("remove", item=fields["old_item"])
+            else:
+                self._register_diff("remove", spanned_bytes=fields["spanned_bytes"])
         return removed
 
     def update_by_handle(self, handle: ListItemHandle, item: Any) -> bool:
@@ -514,18 +492,13 @@ class NotifyingListProperty:
         carrying both the new item and ``old_item`` (decoded from the
         handle), only when the update actually succeeded. No index --
         a handle is not positional."""
+        fields = handle_old_item_fields(self._list_prop, handle)
         updated = self._list_prop.update_by_handle(handle, item)
         if not updated:
             return updated
-        if handle.spanned:
-            # The old item spans and was not read: a reference, sized from
-            # the handle plus the new value.
-            self._register_diff("update", item=item, spanned_bytes=handle.bytes or 0)
-        else:
-            old_item = self._list_prop._unresolved_or_item(
-                handle.rank, handle.raw_value
-            )
-            self._register_diff("update", item=item, old_item=old_item)
+        # The old item, or a reference sized from the handle plus the new
+        # value when the old one spans and was not read.
+        self._register_diff("update", item=item, **fields)
         return updated
 
     def remove_where(
@@ -584,7 +557,9 @@ class NotifyingListProperty:
         ListProperty.repair_keys(). Registers a "metadata" diff, as
         compact() does, since a removed duplicate changes the list."""
         report = self._list_prop.repair_keys()
-        self._register_diff("metadata")
+        # Items may be gone: a reference, so subscribers rebuild (3.16; a
+        # plain metadata diff left them holding the removed duplicates).
+        self._register_diff("metadata", spanned_bytes=0)
         return report
 
     def sweep_span_orphans(self) -> dict[str, Any]:
@@ -593,7 +568,9 @@ class NotifyingListProperty:
         compact() does, since a removed broken or malformed head changes
         the list."""
         report = self._list_prop.sweep_span_orphans()
-        self._register_diff("metadata")
+        # A removed broken head changes the list: a reference (see
+        # repair_keys()).
+        self._register_diff("metadata", spanned_bytes=0)
         return report
 
     def migrate_to_v2(self, allow_damaged: bool = False) -> dict[str, Any]:

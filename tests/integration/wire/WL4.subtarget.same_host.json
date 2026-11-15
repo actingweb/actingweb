@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"index\": 0, \"value\": {\"id\": \"a\", \"v\": 3}}",
+         "data": "{\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -157,29 +157,19 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "b",
-         "text": "two"
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        },
-        "value": {
-         "id": "a",
-         "v": 3
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "v": 3
+         },
+         {
+          "id": "b",
+          "text": "two"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -222,10 +212,17 @@
          "actor": "<B>",
          "data": {
           "index": 0,
-          "value": {
+          "item": {
            "id": "a",
            "v": 3
-          }
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -242,10 +239,17 @@
        "request": {
         "data": {
          "index": 0,
-         "value": {
+         "item": {
           "id": "a",
           "v": 3
-         }
+         },
+         "length": 2,
+         "list": "notes",
+         "old_item": {
+          "id": "a",
+          "text": "one"
+         },
+         "operation": "update"
         },
         "granularity": "high",
         "id": "<A>",
@@ -313,12 +317,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"index\": 0, \"value\": {\"id\": \"a\", \"v\": 3}}",
+         "data": "{\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 3}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"index\": 2, \"value\": {\"id\": \"c\", \"v\": 4}}",
+         "data": "{\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"id\": \"c\", \"v\": 4}, \"index\": 2}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -435,29 +439,23 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "index": {
-         "value": 2
-        },
-        "item": {
-         "id": "b",
-         "text": "two"
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        },
-        "value": {
-         "id": "c",
-         "v": 4
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "v": 3
+         },
+         {
+          "id": "b",
+          "text": "two"
+         },
+         {
+          "id": "c",
+          "v": 4
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -500,10 +498,13 @@
          "actor": "<B>",
          "data": {
           "index": 2,
-          "value": {
+          "item": {
            "id": "c",
            "v": 4
-          }
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -520,10 +521,13 @@
        "request": {
         "data": {
          "index": 2,
-         "value": {
+         "item": {
           "id": "c",
           "v": 4
-         }
+         },
+         "length": 3,
+         "list": "notes",
+         "operation": "append"
         },
         "granularity": "high",
         "id": "<A>",

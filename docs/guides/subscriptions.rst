@@ -382,15 +382,19 @@ Store and retrieve data synchronized from peers:
    status = store.get_value("status")
    store.delete_value("status")
 
-   # Lists with automatic operations
+   # Lists (a baseline replaces the list)
    store.set_list("items", [{"id": 1}, {"id": 2}])
    items = store.get_list("items")
 
-   # Apply list operations from callbacks
-   store.apply_list_operation("items", {
-       "operation": "append",
-       "items": [{"id": 3}]
+   # Apply a callback's data, as the library does for a whole-target
+   # subscription: a list diff keyed by its own list name
+   result = store.apply_callback_data({
+       "items": {"list": "items", "operation": "append", "length": 3,
+                 "index": 2, "item": {"id": 3}},
    })
+   if result.out_of_step:
+       # The replica could not apply a list diff; rebuild it from a baseline
+       actor.subscriptions.rebuild_subscription(peer_id, subscription_id)
 
    # Enumerate stored data
    scalar_names = store.list_all_scalars()   # ["status", "config"]
@@ -407,30 +411,73 @@ Store and retrieve data synchronized from peers:
 List Operations
 ~~~~~~~~~~~~~~~
 
-The subscription processing system automatically applies list operations from callbacks:
+Every change to a property list registers a *list diff* on the list's own
+subtarget (3.16: the SDK, REST and web-UI edits alike). A diff always
+carries ``list`` (the list's name), ``operation`` and ``length`` (the
+publisher's list length after the change, advisory), plus the fields its
+operation needs. ``actingweb.property_list.build_list_diff()`` builds the
+same diffs for application code; its operations are
+``LIST_DIFF_OPERATIONS``. The subscription processing system applies them
+to the replica:
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 80
+   :widths: 14 30 56
 
    * - Operation
-     - Description
+     - Fields besides ``list``, ``operation``, ``length``
+     - What the replica does
    * - ``append``
-     - Add items to end of list
+     - ``item``, ``index`` (advisory)
+     - Appends ``item``; ``index`` is never used as an address
    * - ``extend``
-     - Add multiple items to end of list
+     - ``items``
+     - Appends every item. An empty ``items`` for a list the replica does
+       not hold creates the empty list (a new list created over REST or in
+       the web UI)
    * - ``insert``
-     - Insert item at specific index
+     - ``item``, ``index``
+     - Inserts at ``index``
    * - ``update``
-     - Update item at specific index
+     - ``item``, and ``index``, ``old_item`` or both
+     - With ``old_item``: replaces the one row holding that value, or, when
+       several do, the one at ``index``. No row holding it with ``item``
+       already there is a no-op (applied before); any other miss (no row,
+       or several none of which is at ``index``) is out of step. Without
+       ``old_item``, replaces the row at ``index``
    * - ``delete``
-     - Remove item at specific index
+     - ``index``, and ``old_item`` when the item was read
+     - With ``old_item``: removes the one row holding that value, or, when
+       several do, the one at ``index`` (none at ``index`` is out of step);
+       no row holding it is a no-op (applied before). ``length`` is not
+       consulted (advisory in the specification). Without ``old_item``:
+       removes the row at ``index``. REST, bulk and web-UI deletes send this
    * - ``pop``
-     - Remove and return item at index (or last)
-   * - ``clear``
-     - Remove all items from list
+     - ``index`` (default ``-1``, negative counts from the end)
+     - Removes the row at ``index``
    * - ``remove``
-     - Remove first occurrence of item
+     - ``item``
+     - Removes the first row equal to ``item``; an absent item is a no-op
+   * - ``clear``
+     - none
+     - Empties the list and keeps it
+   * - ``delete_all``
+     - none (``length`` is ``0``)
+     - Deletes the list
+   * - ``metadata``
+     - none
+     - Nothing: the description and explanation are not replicated; the
+       diff tells a hook that they changed
+
+An index out of range, a damaged or conflicting list in the replica, a
+reference (below), or a scalar arriving for a list's name means the replica
+no longer holds what the publisher's list held: it is *out of step* and is
+rebuilt (see `How a replica is stored`_). A bulk ``POST /properties`` with
+``items`` sends up to 25 changes in order, a run of appends as one
+``extend``; more than 25 send no per-item diff and one resync of the list
+after the batch (``Actor.request_resync``). A peer without resync support
+receives a list's full state as ``clear`` and then ``extend``, under
+consecutive sequence numbers.
 
 ``delete_by_handle()``, ``update_by_handle()``, ``remove_where()``, and
 ``update_where()`` (added in 3.14) do not add new operations to this table
@@ -453,7 +500,9 @@ ActingWeb version keeps understanding every diff it receives, except a
   value, which one the sender meant is ambiguous, and the update is not
   applied rather than risking the wrong row. A peer that predates
   ``old_item`` simply ignores the field; without ``index`` present
-  either, it has nothing to match the diff against.
+  either, it has nothing to match the diff against. (A REST
+  ``PUT ?index=N`` update carries both, so an ambiguous match falls back
+  to the index.)
 
 **References (3.16).** A list diff whose encoded blob would exceed the
 publisher's span threshold (``list_item_span_threshold``; 390,000 bytes on
@@ -467,11 +516,9 @@ total encoded size) are added, for example::
 
 That covers a spanned item, an ``update`` whose old and new values together
 are too large, and an ``extend`` of many items. The library's receiver does
-not apply a reference and does not fetch the values: it logs a WARNING that
-the replica is out of sync and answers ``{"operation": ..., "success":
-false, "spanned": true}``. An application that mirrors lists through
-``RemotePeerStore`` re-reads the list from the publisher when it sees that
-answer (a resync callback does so only for a peer that supports resync). A reference is the one diff a pre-3.16 peer does not understand:
+not apply a reference and does not fetch the values: the replica is out of
+step, a WARNING names the list and the operation, and the replica is
+rebuilt from a baseline (see `How a replica is stored`_). A reference is the one diff a pre-3.16 peer does not understand:
 with the value fields absent it answers ``unknown operation`` and stores
 nothing. The full-state fallback for a peer without resync support is a
 reference too when the list's items exceed the threshold, sized from the
@@ -491,6 +538,93 @@ library's own receiver has always done exactly this.
 Because ``remove_where()``/``update_where()`` can match many items in one
 call, they can also emit many diffs in one call -- see the fan-out note
 below for what that means for delivery time.
+
+How a replica is stored
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A subscriber keeps each peer's data in the attribute bucket
+``remote:<peer_id>``, which is never served over HTTP. A scalar is one
+attribute; a list is stored in the property list layout
+(``list:<name>-meta`` and one ``list:<name>-#<rank>`` row per item, an item
+over the span threshold in the side bucket ``remote:<peer_id>$aux``; see
+:doc:`property-lists`). A replica list written before 3.16 is read in place
+and converted on its first change.
+
+Where a callback's data lands depends on the subscription's level, which is
+why ``apply_callback_data()`` and ``apply_resync_data()`` take it as the
+keyword-only ``subtarget`` and ``resource``:
+
+- **Whole target** (``properties``): a set of top-level keys. A value is a
+  list diff only when its ``list`` equals the key it arrived under;
+  anything else is that key's scalar value, so a property value shaped like
+  a list diff never edits another list.
+- **Subtarget** (``properties/notes``): stored under the subtarget's name. A
+  diff whose ``list`` is the subtarget is one list operation, an object keyed
+  by the subtarget's own name is its full state, and anything else is the
+  one scalar's value. A baseline is stored the same way, never spread into
+  top-level keys.
+- **Resource** (``properties/settings/theme``): merged at the resource's
+  path inside the stored property; an empty value deletes that path.
+
+.. code-block:: python
+
+   from actingweb.remote_storage import RemotePeerStore
+
+   store = RemotePeerStore(actor, peer_id)
+   result = store.apply_callback_data(
+       {"list": "notes", "operation": "delete", "index": 1, "old_item": "old", "length": 2},
+       subtarget="notes",          # the subscription's subtarget, or None
+       resource=None,              # the subscription's resource, or None
+   )
+   result.out_of_step   # None, or {"list", "operation", "why"}
+   result.failed        # names whose entry could not be stored
+
+The result is a ``ReplicaApplyResult``: a dict of per-key results whose
+``out_of_step`` and ``failed`` are attributes, never keys (a key is a name
+the peer chose). A name is a scalar or a list in a replica, never both: a
+list arriving where a scalar is stored replaces it, ``""`` arriving for a
+list's name deletes the list, and any other scalar arriving for a list's
+name is out of step. A list a diff would create whose name has a control
+character, ``#`` or ``$``, starts with ``_`` or is too long for a key is
+refused (logged); a stored list of any name can still be changed and
+deleted. A scalar key starting ``list:`` is refused, and so is a key
+another bucket holds (``AttributeKeyCollision``, logged).
+
+**Rebuilds.** A list diff the replica cannot apply marks it out of step.
+The callback is still acknowledged, and the subscriber rebuilds the replica
+from a baseline: it reads the subscription's sequence from the publisher,
+fetches the baseline (again if the sequence moved meanwhile), replaces the
+replica, deletes what the baseline no longer carries (at target level every
+name it does not carry, at subtarget level the subtarget, and each list
+recorded as out of step), records the sequence and clears the publisher's
+diffs up to it. There is at most one attempt a minute per subscription,
+successful or not; a rebuild owed inside that interval runs on the next
+callback or ``sync_subscription()`` after it. A failure leaves it owed and
+logs a WARNING (``Rebuild of <peer>:<subscription> ... stays owed``).
+``actor.subscriptions.rebuild_subscription(peer_id, subscription_id,
+force=True)`` (or ``rebuild_subscription_async``) runs one now; ``force``
+skips the interval, never a rebuild already running.
+
+A diff in the middle of a list (``insert``, ``update``, ``delete``,
+``pop``, ``remove``) reads the replica's list, which costs O(n); appends do
+not. When a peer is subscribed to both on its whole ``properties`` target
+and on a subtarget, only the whole-target subscription writes the replica
+(``ReplicaApplyResult.skipped`` for the other); the subtarget
+subscription's hooks still run. A whole-target subscription that is only
+polled (granularity ``none``) covers too, so the subtarget's values then
+reach the replica when that subscription is polled (``sync_peer()``), not
+when the subtarget's callbacks arrive.
+
+**What a hook receives.** A subscription data hook (and a
+``callback_hook("subscription")``, in ``data["data"]``) receives the
+callback's data as sent. For
+a whole-target subscription a list edit arrives keyed by its list name,
+``{"notes": {"list": "notes", "operation": "append", "length": 3, "index":
+2, "item": "x"}}``; for a subscription to the list's subtarget it is the
+diff itself. A reference carries ``"spanned": true`` and ``"bytes"`` instead
+of ``item``, ``old_item`` or ``items``. Test for a list diff with
+``value.get("list") == key`` (whole target) or ``data.get("list") ==
+subtarget``, not with ``"list" in value``.
 
 Subscription Suspension
 -----------------------
@@ -576,10 +710,9 @@ For fine-grained control, use components directly:
 .. code-block:: python
 
    from actingweb.callback_processor import (
-       CallbackProcessor, ProcessResult, CallbackType
+       CallbackProcessor, CallbackType, ProcessedCallback, ProcessResult
    )
    from actingweb.remote_storage import RemotePeerStore
-   from actingweb.peer_capabilities import PeerCapabilities
 
    # Create processor
    processor = CallbackProcessor(
@@ -588,28 +721,43 @@ For fine-grained control, use components directly:
        max_pending=200,
    )
 
-   # Process a callback manually
-   async def handle_callback(peer_id, data, sequence):
+   # Process a callback manually. The handler runs for each callback taken
+   # in order (a queued one included) and records a list diff the replica
+   # could not apply, which makes the processor answer REBUILD.
+   async def handle_callback(peer_id, sub_id, subscription, data, sequence):
+       async def apply(cb: ProcessedCallback) -> None:
+           store = RemotePeerStore(actor, cb.peer_id)
+           level = {
+               "subtarget": subscription.get("subtarget") or None,
+               "resource": subscription.get("resource") or None,
+           }
+           if cb.callback_type == CallbackType.RESYNC:
+               store.apply_resync_data(cb.data, **level)
+           else:
+               cb.out_of_step = store.apply_callback_data(cb.data, **level).out_of_step
+
        result = await processor.process_callback(
            peer_id=peer_id,
            subscription_id=sub_id,
            sequence=sequence,
            data=data,
+           handler=apply,
        )
 
        if result == ProcessResult.PROCESSED:
-           # Normal processing
-           store = RemotePeerStore(actor, peer_id)
-           store.apply_callback_data(target="properties", data=data)
+           pass  # applied by the handler
        elif result == ProcessResult.DUPLICATE:
            # Skip - already processed
            pass
        elif result == ProcessResult.PENDING:
            # Gap detected, waiting for missing callbacks
            pass
-       elif result == ProcessResult.RESYNC_REQUIRED:
-           # Gap timeout exceeded, fetch full state
-           pass
+       elif result == ProcessResult.RESYNC_TRIGGERED:
+           # Gap timeout exceeded: sync from the publisher
+           await actor.subscriptions.sync_subscription_async(peer_id, sub_id)
+       elif result == ProcessResult.REBUILD:
+           # The replica is out of step: replace it from a baseline
+           await actor.subscriptions.rebuild_subscription_async(peer_id, sub_id)
 
    # Get state info
    info = processor.get_state_info(peer_id, sub_id)
@@ -715,13 +863,16 @@ When processing subscription callbacks, the library returns these HTTP status co
 ProcessResult Enum
 ~~~~~~~~~~~~~~~~~~
 
-When using ``CallbackProcessor`` directly, the ``process_callback()`` method returns a ``ProcessResult``:
+When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``process_callback_sync()`` return a ``ProcessResult``:
 
 .. code-block:: python
 
    from actingweb.callback_processor import ProcessResult
 
-   result = processor.process_callback(peer_id, sub_id, sequence, data)
+   # The sync form takes a plain (non-async) handler function
+   result = processor.process_callback_sync(
+       peer_id, sub_id, sequence, data, handler=apply_sync
+   )
 
    if result == ProcessResult.PROCESSED:
        # Normal processing - callback was in sequence
@@ -739,13 +890,23 @@ When using ``CallbackProcessor`` directly, the ``process_callback()`` method ret
        # Will auto-process when gap is filled
        pass
 
-   elif result == ProcessResult.RESYNC_REQUIRED:
+   elif result == ProcessResult.RESYNC_TRIGGERED:
        # Gap timeout exceeded (gap_timeout_seconds)
-       # Library will request full resync from peer
+       # The library's handler then syncs from the publisher
        pass
 
-   elif result == ProcessResult.BACK_PRESSURE:
-       # max_pending limit reached
+   elif result == ProcessResult.REBUILD:
+       # A list diff could not be applied (the handler set out_of_step)
+       # and a rebuild is due: call rebuild_subscription()
+       pass
+
+   elif result == ProcessResult.IN_PROGRESS:
+       # Another delivery of this sequence is still running its handler
+       # Do not acknowledge it; the library answers 503 with Retry-After
+       pass
+
+   elif result == ProcessResult.REJECTED:
+       # max_pending limit reached (back-pressure)
        # Publisher should slow down or retry later
        pass
 

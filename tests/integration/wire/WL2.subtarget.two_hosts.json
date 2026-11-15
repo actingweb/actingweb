@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"action\": \"update\", \"index\": 0, \"value\": {\"id\": \"a\", \"v\": 2}}",
+         "data": "{\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"id\": \"a\", \"v\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -157,32 +157,19 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "action": {
-         "value": "update"
-        },
-        "index": {
-         "value": 0
-        },
-        "item": {
-         "id": "b",
-         "text": "two"
-        },
-        "length": {
-         "value": 2
-        },
-        "list": {
-         "value": "notes"
-        },
-        "operation": {
-         "value": "append"
-        },
-        "value": {
-         "id": "a",
-         "v": 2
-        }
-       }
+       "lists": {
+        "notes": [
+         {
+          "id": "a",
+          "v": 2
+         },
+         {
+          "id": "b",
+          "text": "two"
+         }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -224,12 +211,18 @@
         {
          "actor": "<B>",
          "data": {
-          "action": "update",
           "index": 0,
-          "value": {
+          "item": {
            "id": "a",
            "v": 2
-          }
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -245,12 +238,18 @@
        "query": "",
        "request": {
         "data": {
-         "action": "update",
          "index": 0,
-         "value": {
+         "item": {
           "id": "a",
           "v": 2
-         }
+         },
+         "length": 2,
+         "list": "notes",
+         "old_item": {
+          "id": "a",
+          "text": "one"
+         },
+         "operation": "update"
         },
         "granularity": "high",
         "id": "<A>",

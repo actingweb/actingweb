@@ -129,8 +129,23 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   and ordered.
 - ``target``: matches the ``target`` argument, or ``"*"`` to receive every
   target
+- ``data`` is the callback's data as the publisher sent it, after the
+  library applied it to the replica (with ``auto_storage``). A list edit (3.16: from the SDK, REST
+  and the web UI alike) is a list diff, ``{"list", "operation", "length"}``
+  plus ``item``, ``index``, ``old_item`` or ``items`` as the operation needs
+  (``append``, ``extend``, ``insert``, ``update``, ``delete``, ``pop``,
+  ``remove``, ``clear``, ``delete_all``, ``metadata``). For a subscription to
+  the whole target it is keyed by the list's name,
+  ``{"notes": {"list": "notes", "operation": "append", "length": 3,
+  "index": 2, "item": "x"}}``; for a subscription to the list's subtarget it
+  is the bare diff. A diff too large to send carries ``"spanned": true`` and
+  ``"bytes"`` instead of its values. Recognise a list diff by its ``list``
+  equalling the key it arrived under (or the subscription's subtarget), not
+  by ``"list" in value``: a property's value may carry those keys. The
+  legacy ``callback_hook("subscription")`` receives the same diff in its
+  ``data["data"]``.
 - See :doc:`../guides/subscriptions` for the full auto-processing
-  configuration.
+  configuration and the operation table.
 
 Lifecycle Hooks
 ================

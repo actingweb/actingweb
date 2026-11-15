@@ -1568,6 +1568,111 @@ class DbAttributeProtocol(Protocol):
         """
         ...
 
+    # -- list primitives -----------------------------------------------------
+    #
+    # What ``actingweb.attribute_list`` (the list core over an attribute
+    # bucket) needs. Shared contract: a fault raises ``DbError``; ``False``
+    # means the condition did not hold; a row another bucket owns under the
+    # same composite key (``bucket + ":" + name``) is never read, matched,
+    # overwritten or deleted, and a put or create that meets one raises
+    # ``AttributeKeyCollision``; a row's TTL is ignored. ``data`` is stored
+    # and returned as given (the core writes strings). Names compare by
+    # bytes. A backend class may declare ``MAX_ROW_BYTES: int | None``, as
+    # ``DbPropertyProtocol`` describes; it is read with ``getattr`` and is
+    # not a member of this protocol.
+
+    @staticmethod
+    def get_attr_range(
+        actor_id: str,
+        bucket: str,
+        lower: str,
+        upper: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name is in ``[lower, upper]``, inclusive,
+        as ``{name: data}`` (the stored JSON value) (``""`` for each with ``keys_only``). ``{}`` when
+        ``lower > upper``. Pages through ranges larger than one response."""
+        ...
+
+    @staticmethod
+    def get_attr_prefix(
+        actor_id: str,
+        bucket: str,
+        prefix: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name begins with ``prefix``."""
+        ...
+
+    @staticmethod
+    def get_last_attr_in_range(
+        actor_id: str, bucket: str, lower: str, upper: str
+    ) -> str | None:
+        """The greatest name of ``bucket`` in ``[lower, upper]``, or None."""
+        ...
+
+    @staticmethod
+    def create_attr_if_not_exists(
+        actor_id: str, bucket: str, name: str, data: Any
+    ) -> bool:
+        """Create the row. True only when this call created it; False when
+        the bucket holds the name already, whatever its data."""
+        ...
+
+    @staticmethod
+    def create_attrs_if_not_exist(
+        actor_id: str, bucket: str, rows: dict[str, Any]
+    ) -> set[str]:
+        """``create_attr_if_not_exists`` for each of ``rows`` (name to
+        data): the names this call created."""
+        ...
+
+    @staticmethod
+    def set_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str, data: Any
+    ) -> bool:
+        """Replace the row's data when it equals ``expected`` exactly (as
+        read back)."""
+        ...
+
+    @staticmethod
+    def delete_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str
+    ) -> bool:
+        """Delete the row when its data equals ``expected`` exactly."""
+        ...
+
+    @staticmethod
+    def delete_attrs(actor_id: str, bucket: str, names: list[str]) -> None:
+        """Delete each named row of ``bucket``; absent rows are fine."""
+        ...
+
+    @staticmethod
+    def put_attr(actor_id: str, bucket: str, name: str, data: Any) -> None:
+        """Write the row, replacing one in the same bucket. A falsy ``data``
+        is refused with ``ValueError``, never turned into a delete."""
+        ...
+
+
+# The list primitives, by name: check_ready() refuses a custom attribute
+# backend that lacks one (every list diff would otherwise fail with an
+# AttributeError the callback processor logs and passes).
+ATTRIBUTE_LIST_PRIMITIVES: tuple[str, ...] = (
+    "get_attr_range",
+    "get_attr_prefix",
+    "get_last_attr_in_range",
+    "create_attr_if_not_exists",
+    "create_attrs_if_not_exist",
+    "set_attr_if_data_equals",
+    "delete_attr_if_data_equals",
+    "delete_attrs",
+    "put_attr",
+)
+
 
 @runtime_checkable
 class DbAttributeBucketListProtocol(Protocol):

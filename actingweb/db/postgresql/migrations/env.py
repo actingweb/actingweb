@@ -99,10 +99,14 @@ def run_migrations_online() -> None:
         ) as schema_conn:
             schema_conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
 
-    with connectable.begin() as connection:
-        # Set search path to use the correct schema
+    with connectable.connect() as connection:
+        # Set search path to use the correct schema. Session-level, and
+        # committed before Alembic begins its own transaction: a migration
+        # that builds an index CONCURRENTLY uses autocommit_block(), which
+        # needs the transaction to be Alembic's.
         if schema:
             connection.execute(text(f"SET search_path TO {schema}"))
+            connection.commit()
 
         context.configure(
             connection=connection,

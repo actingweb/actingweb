@@ -474,6 +474,35 @@ class TrustReplaced(Exception):
 _EMPTIED = object()
 
 
+def _list_diff_shaped(value: Any) -> bool:
+    """Whether ``value`` has a list diff's shape (``list`` and
+    ``operation``). Only a gate before asking whether the name is a list:
+    the shape alone decides nothing."""
+    return isinstance(value, dict) and "list" in value and "operation" in value
+
+
+_ITEMLESS_DIFF_KEYS = frozenset({"list", "operation", "length", "index"})
+_ITEMLESS_OPERATIONS = frozenset({"delete_all", "clear", "pop", "delete"})
+
+
+def _carries_no_items(value: Any) -> bool:
+    """A list diff with no item data (``delete_all``, ``clear``, ``pop``, an
+    index-only ``delete``): nothing in it an exclusion could protect, so it
+    passes whole once its name may be read, list or not (a deleted list's
+    ``delete_all`` is served after the list is gone). Only those
+    operations, and only scalar values: a scalar shaped like one with an
+    object inside is filtered as an object."""
+    return (
+        _list_diff_shaped(value)
+        and set(value) <= _ITEMLESS_DIFF_KEYS
+        and isinstance(value.get("operation"), str)
+        and value["operation"] in _ITEMLESS_OPERATIONS
+        and all(
+            v is None or isinstance(v, str | int | float | bool) for v in value.values()
+        )
+    )
+
+
 def _prune_emptied(original: Any, kept: Any) -> Any:
     """``kept`` (``original`` after a filter) without the objects the filter
     emptied, at any depth; ``_EMPTIED`` when ``original`` was a non-empty
@@ -3796,6 +3825,9 @@ class Actor:
         # For outbound subscriptions (callback=True), check if we need to clean up RemotePeerStore
         # We need to check this BEFORE deletion to know how many subscriptions exist
         should_cleanup_remote_peer_store = False
+        # Subscriptions to one property this one covered (it stored their
+        # names; theirs were skipped): they are owed a rebuild once it goes.
+        covered: list[dict[str, Any]] = []
         if callback and peerid:
             try:
                 # CRITICAL: Clear the subscription cache to get fresh data from database
@@ -3810,6 +3842,20 @@ class Actor:
                 remaining_subs = [
                     s for s in (other_subs or []) if s.get("subscriptionid") != subid
                 ]
+                deleted = [
+                    s for s in (other_subs or []) if s.get("subscriptionid") == subid
+                ]
+                if (
+                    deleted
+                    and deleted[0].get("target") == "properties"
+                    and not deleted[0].get("subtarget")
+                    and not deleted[0].get("resource")
+                ):
+                    covered = [
+                        s
+                        for s in remaining_subs
+                        if s.get("target") == "properties" and s.get("subtarget")
+                    ]
 
                 if remaining_subs:
                     logger.debug(
@@ -3840,6 +3886,9 @@ class Actor:
             # landed (3.16).
             self.subs_list = None
 
+        if result and covered and peerid:
+            self._owe_covered_rebuilds(peerid, covered)
+
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
         # Note: should_cleanup_remote_peer_store is only True when peerid is not None
         if result and should_cleanup_remote_peer_store and peerid:
@@ -3862,6 +3911,30 @@ class Actor:
                 logger.warning(f"Failed to clean up RemotePeerStore for {peerid}: {e}")
 
         return result
+
+    def _owe_covered_rebuilds(self, peerid: str, covered: list[dict[str, Any]]) -> None:
+        """Mark a rebuild owed for each subscription to one property that a
+        deleted whole-target subscription covered: its diffs were not stored
+        (3.16, one subscription per name writes the replica), so its replica
+        names may be stale. Best effort, logged; the next callback or sync
+        runs the rebuild."""
+        from .callback_processor import CallbackProcessor
+        from .interface.actor_interface import ActorInterface
+
+        processor = CallbackProcessor(actor=ActorInterface(self))  # type: ignore[arg-type]
+        for sub in covered:
+            try:
+                processor.settle_rebuild(
+                    peerid,
+                    str(sub.get("subscriptionid") or ""),
+                    rebuilt=False,
+                    lists=[str(sub.get("subtarget") or "")],
+                )
+            except Exception as e:  # folds DbError: best effort, delete committed
+                logger.warning(
+                    f"Could not mark the replica of {peerid}:"
+                    f"{sub.get('subscriptionid')} for a rebuild: {e}"
+                )
 
     def callback_subscription(
         self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
@@ -4247,6 +4320,21 @@ class Actor:
             path = f"{subtarget}/{resource}" if resource else subtarget
             if not self._may_read(snapshot, path):
                 return None
+            if (
+                not resource
+                and isinstance(parsed, dict)
+                and (
+                    _carries_no_items(parsed)
+                    or (
+                        (_list_diff_shaped(parsed) or set(parsed) == {subtarget})
+                        and self._names_a_list(subtarget)
+                    )
+                )
+            ):
+                # A list's diff (or its full state) passes whole once the
+                # list may be read (3.16): decided by what the name is, its
+                # keys are not property paths an exclusion could name.
+                return as_text
             rules = snapshot.rules(PermissionType.PROPERTIES)
             if isinstance(parsed, str):
                 # The property's value as JSON text: filtered as the object
@@ -4327,6 +4415,13 @@ class Actor:
             logger.error(f"Subscription re-check for {snapshot.peer_id} failed: {e}")
             return False
 
+    def _names_a_list(self, name: str) -> bool:
+        """Whether ``name`` is one of this actor's property lists."""
+        lists = getattr(self, "property_lists", None)
+        if lists is None:
+            return False
+        return bool(lists.exists(name))
+
     def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
         """Whether the peer may read ``path``: the one access decision, as a
         direct read asks it (3.16): a stated rule answers, a grant that does
@@ -4370,10 +4465,16 @@ class Actor:
             if not self._may_read(snapshot, path):
                 logger.debug(f"Filtered {path!r} from a diff to {snapshot.peer_id}")
                 continue
-            if key.startswith("list:"):
+            if key.startswith("list:") or (
+                not parent
+                and _list_diff_shaped(value)
+                and (_carries_no_items(value) or self._names_a_list(key))
+            ):
                 # A list's diff object (list, operation, items): a list's
                 # unit is its name, decided above; its keys are not property
-                # paths an exclusion could name (3.16).
+                # paths an exclusion could name (3.16). A list is recognised
+                # by what its name is, not by the value's shape: a scalar
+                # shaped like a list diff is filtered as any object.
                 kept[key] = value
                 continue
             part = self._diff_part(rules, path, value)
@@ -4601,6 +4702,78 @@ class Actor:
             logger.error(f"Error resuming subscriptions: {e}")
             return 0
 
+    def request_resync(self, target: str, subtarget: str | None = None) -> int:
+        """Send a resync of ``target``/``subtarget`` to its subscribers now,
+        without a suspension (3.16). For a change too large to announce as
+        diffs, such as a bulk list update over 25 items.
+
+        The subscribers are read afresh (the memo is reset). Only those whose
+        grant lets them read ``subtarget`` are sent anything: a subscriber
+        that may not read it is not told its name. A subscription to
+        ``subtarget`` gets its resync; a subscription to the whole target
+        gets a resync of the whole target (a receiver resets the whole
+        subscription's sequence on a resync). With synchronous callbacks
+        (``sync_subscription_callbacks``) a subscriber the send misses (an
+        HTTP failure or timeout, or a store fault, none of which fails this
+        call) is recorded, and the next ``request_resync()`` or
+        ``resume_subscriptions()`` for the same target re-sends to it; an
+        asynchronous send counts as sent once scheduled, so nothing is
+        recorded for it. A peer without resync support receives the full
+        state as a ``clear`` and then an ``extend`` for each list.
+
+        Returns:
+            The number of resync callbacks sent
+        """
+        if not self.config or not self.id:
+            return 0
+        self.subs_list = None
+        subs = (
+            self.get_subscriptions(
+                target=target, subtarget=None, callback=False, strict=True
+            )
+            or []
+        )
+        readable: list[dict[str, Any]] = []
+        for sub in subs:
+            if not sub or sub.get("target") != target:
+                continue
+            snapshot = self.grant_for(str(sub.get("peerid") or ""))
+            if snapshot is None:
+                continue
+            if target == "properties" and subtarget:
+                if not self._may_read(snapshot, subtarget):
+                    continue
+            elif not self._may_still_subscribe(sub, snapshot):
+                continue
+            readable.append(sub)
+        pending = self._resync_pending(target, subtarget)
+        missed: list[str] = []
+        count = self._send_resync_callbacks(
+            target,
+            subtarget,
+            readable,
+            None,
+            missed=missed,
+            fold_faults=True,
+            widen=True,
+        )
+        # A whole-target subscription's miss is not recorded under the
+        # subtarget's key: ``resume_subscriptions`` would re-send it a
+        # resync of the subtarget only. This call sends to every reading
+        # subscriber each time, so the next one reaches it again.
+        whole = {
+            _resync_id(s) for s in readable if subtarget and not s.get("subtarget")
+        }
+        # A record ``resume_subscriptions`` wrote for one stays only when
+        # this call missed it too: a whole-target resync it received covers
+        # what the record would re-send (as a subtarget-only resync).
+        missed = [m for m in missed if m not in whole] + [
+            p for p in (pending or []) if p in whole and p in missed
+        ]
+        if pending is not None or missed:
+            self._write_resync_pending(target, subtarget, missed)
+        return count
+
     def _send_resync_callbacks(
         self,
         target: str,
@@ -4609,8 +4782,15 @@ class Actor:
         suspension: Any = None,
         *,
         missed: list[str] | None = None,
+        fold_faults: bool = False,
+        widen: bool = False,
     ) -> int:
         """Send resync callbacks to all subscriptions on target/subtarget.
+
+        ``fold_faults`` (``request_resync``): a transient store fault is
+        recorded in ``missed`` like a permanent one instead of raised.
+        ``widen`` (``request_resync``): a subscription to the whole target is
+        pushed a resync of the whole target, not of ``subtarget``.
 
         ``missed`` collects the subscription ids whose resync did not land
         (an HTTP failure or a permanent store error), for the record a later
@@ -4664,7 +4844,8 @@ class Actor:
             # (even if the subscription itself has no subtarget or a different one)
             resync_subtarget = subtarget if subtarget else sub_subtarget
             try:
-                if self._callback_subscription_resync(sub, resync_subtarget):
+                widened = {"widen": True} if widen else {}
+                if self._callback_subscription_resync(sub, resync_subtarget, **widened):
                     count += 1
                 elif missed is not None:
                     missed.append(_resync_id(sub))
@@ -4682,6 +4863,9 @@ class Actor:
                 logger.error(
                     f"Resync of subscription {sub.get('subscriptionid')} faulted: {e}"
                 )
+                if fold_faults and missed is not None:
+                    missed.append(_resync_id(sub))
+                    continue
                 fault = fault or e
 
         logger.info(f"Sent {count} resync callbacks for {target}/{subtarget}")
@@ -4851,7 +5035,11 @@ class Actor:
             self._send_resync_callback_sync(callback_url, payload, secret, peer_id)
 
     def _callback_subscription_resync(
-        self, subscription: dict, override_subtarget: str | None = None
+        self,
+        subscription: dict,
+        override_subtarget: str | None = None,
+        *,
+        widen: bool = False,
     ) -> bool:
         """Send a resync callback to a single subscription.
 
@@ -4918,6 +5106,19 @@ class Actor:
                     ),
                 )
             )
+
+        if (
+            widen
+            and override_subtarget is not None
+            and not subscription.get("subtarget")
+        ):
+            # ``request_resync`` pushing to a subscription to the whole
+            # target: a resync of the whole target. A receiver resets the
+            # whole subscription's sequence on a resync, so a baseline of one
+            # subtarget would drop the other keys' diffs in flight (3.16). An
+            # OAuth2 client above gets a marker for the subtarget: it only
+            # re-reads that URL.
+            sub_subtarget = subscription.get("subtarget")
 
         # Construct callback URL from trust relationship (same as callback_subscription)
         callback_url = (
@@ -4998,6 +5199,7 @@ class Actor:
         resource_url = _resync_url(self.config, self.id, target, sub_subtarget)
 
         # Build callback payload - use resync type only if peer supports it
+        clear_payload: dict[str, Any] | None = None
         if supports_resync:
             # Resync callback per protocol spec v1.4
             payload = {
@@ -5031,6 +5233,45 @@ class Actor:
             )
             full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
 
+            # 3.16: a peer that already holds a list would append the
+            # extend to its copy. Every list still carrying its items is
+            # cleared first, under its own sequence number, and the full
+            # state follows under the next; two callbacks, in order. A list
+            # that became a reference is re-read by the receiver: no clear.
+            clears = {
+                name: {"list": name, "operation": "clear", "length": 0}
+                for name in sorted(list_keys)
+                if isinstance(full_state.get(name), dict)
+                and "items" in full_state[name]
+            }
+            # Keyed by name at every level: the fallback serves receivers
+            # without resync support, mostly pre-3.16 ones, which apply a
+            # bare value at subtarget level as top-level keys. A 3.16
+            # receiver unwraps a keyed list state; a keyed scalar it stores
+            # as given until the next diff (the shape is ambiguous there).
+            if clears:
+                clear_url = self._store_subscription_diff(
+                    peer_id, sub_id, new_seq, clears
+                )
+                if not clear_url:
+                    return False
+                clear_payload = {
+                    "id": self.id,
+                    "subscriptionid": sub_id,
+                    "target": target,
+                    "subtarget": sub_subtarget,
+                    "sequence": new_seq,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "granularity": "low",
+                    "url": clear_url,
+                }
+                new_seq = self._increment_subscription_sequence(peer_id, sub_id)
+                if not new_seq:
+                    logger.warning(
+                        f"Subscription {sub_id} for {peer_id} is gone; no resync sent"
+                    )
+                    return False
+
             # Store as a subscription diff
             diff_url = self._store_subscription_diff(
                 peer_id, sub_id, new_seq, full_state
@@ -5059,6 +5300,18 @@ class Actor:
 
         # Check sync configuration (like diff callbacks do)
         use_sync = getattr(self.config, "sync_subscription_callbacks", False)
+
+        if clear_payload is not None:
+            # The clear goes first; the receiver orders by sequence anyway.
+            if use_sync:
+                if not self._send_resync_callback_sync(
+                    callback_url, clear_payload, secret, peer_id
+                ):
+                    return False
+            else:
+                self._send_resync_callback_async(
+                    callback_url, clear_payload, secret, peer_id
+                )
 
         if use_sync:
             # Lambda mode: blocking call
@@ -5125,6 +5378,7 @@ class Actor:
                                 "list": subtarget,
                                 "operation": "extend",
                                 "items": items,
+                                "length": len(items),
                             }
                         }
 
@@ -5177,6 +5431,7 @@ class Actor:
                             "list": list_name,
                             "operation": "extend",
                             "items": items,
+                            "length": len(items),
                         }
                 logger.debug(
                     f"Getting full state for all properties: {len(result)} keys"

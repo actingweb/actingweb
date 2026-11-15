@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from actingweb.db.exceptions import DbError
+from actingweb.db.exceptions import AttributeKeyCollision, DbError
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,52 @@ def ttl_deadline(ttl_seconds: int) -> int:
     from actingweb.constants import TTL_CLOCK_SKEW_BUFFER
 
     return int(time.time()) + ttl_seconds + TTL_CLOCK_SKEW_BUFFER
+
+
+LIST_ROWS_INDEX = "ix_attributes_list_rows"
+LIST_ROWS_REVISION = "a7b8c9d0e1f2"
+
+
+def attribute_schema_problems() -> list[str]:
+    """What keeps attribute lists from working on this schema: the two
+    columns not yet TEXT, the list-row index missing or INVALID. ``[]`` when
+    ready. Raises on a fault (``check_ready()`` refuses then too)."""
+    from actingweb.db.postgresql.connection import get_schema_name
+
+    schema = get_schema_name()
+    problems: list[str] = []
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = 'attributes' "
+                "AND column_name IN ('bucket_name', 'name')",
+                (schema,),
+            )
+            types = {row[0]: row[1] for row in cur.fetchall()}
+            cur.execute(
+                "SELECT i.indisvalid FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE c.relname = %s AND n.nspname = %s",
+                (LIST_ROWS_INDEX, schema),
+            )
+            index = cur.fetchone()
+    for column in ("bucket_name", "name"):
+        if types.get(column) != "text":
+            problems.append(
+                f"attributes.{column} is {types.get(column, 'missing')}, not text"
+            )
+    if index is None:
+        problems.append(f"the index {LIST_ROWS_INDEX} is missing")
+    elif not index[0]:
+        problems.append(
+            f"the index {LIST_ROWS_INDEX} is INVALID (a concurrent build that "
+            "failed part-way): run 'alembic upgrade head' again, which drops "
+            "and rebuilds it when the build failed during the upgrade, or "
+            f"'REINDEX INDEX CONCURRENTLY {LIST_ROWS_INDEX}'"
+        )
+    return problems
 
 
 def _delete_diagnostics_enabled() -> bool:
@@ -184,6 +230,10 @@ class DbAttribute:
     The actor_id must always be set. get_attr(), set_attr() work with
     individual attributes in buckets.
     """
+
+    # No row cap (JSONB holds up to 1 GB): attribute lists never span on
+    # PostgreSQL unless the application sets a threshold.
+    MAX_ROW_BYTES: int | None = None
 
     def __init__(self) -> None:
         """Initialize DbAttribute (no auto-table creation, use migrations)."""
@@ -440,6 +490,7 @@ class DbAttribute:
                             data = EXCLUDED.data,
                             timestamp = EXCLUDED.timestamp,
                             ttl_timestamp = EXCLUDED.ttl_timestamp
+                        WHERE attributes.bucket = EXCLUDED.bucket
                         """,
                         (
                             actor_id,
@@ -451,11 +502,15 @@ class DbAttribute:
                             ttl_timestamp,
                         ),
                     )
+                    # No row written: another bucket owns the key ("a" +
+                    # "b:c" and "a:b" + "c" share "a:b:c").
+                    collided = cur.rowcount == 0
                 conn.commit()
-            return True
-
         except Exception as e:
             raise DbError("attribute set") from e
+        if collided:
+            raise AttributeKeyCollision(bucket, name, actor_id)
+        return True
 
     def delete_attr(
         self,
@@ -698,6 +753,276 @@ class DbAttribute:
             return written
         except Exception as e:
             raise DbError("attribute create", actor_id) from e
+
+    # -- list primitives (thoughts/plans/2026-11-13-attribute-list-v2-port.md)
+    #
+    # The list core stores strings; each method reads and writes ``data`` as
+    # given. Names compare by bytes (``COLLATE "C"``). A row another bucket
+    # owns under the same composite key is never read, matched, overwritten
+    # or deleted; a put or create that meets one raises
+    # ``AttributeKeyCollision``. TTLs are ignored. The ``starts_with(name,
+    # 'list:')`` clause is literal so the planner can use the partial index
+    # ``ix_attributes_list_rows`` (every list row's name starts so).
+
+    @staticmethod
+    def _list_clause(*bounds: str) -> str:
+        return (
+            " AND starts_with(name, 'list:')"
+            if all(b.startswith("list:") for b in bounds)
+            else ""
+        )
+
+    @staticmethod
+    def get_attr_range(
+        actor_id: str,
+        bucket: str,
+        lower: str,
+        upper: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name is in ``[lower, upper]`` (bytes)."""
+        del consistent_read  # every PostgreSQL read is current
+        if not actor_id or not bucket or lower > upper:
+            return {}
+        column = "NULL" if keys_only else "data"
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT name, {column} FROM attributes
+                        WHERE id = %s AND bucket = %s
+                          {DbAttribute._list_clause(lower, upper)}
+                          AND name COLLATE "C" >= %s AND name COLLATE "C" <= %s
+                        ORDER BY name COLLATE "C"
+                        """,
+                        (actor_id, bucket, lower, upper),
+                    )
+                    rows = cur.fetchall()
+        except Exception as e:
+            raise DbError("attribute range read", actor_id) from e
+        return {row[0]: "" if keys_only else row[1] for row in rows}
+
+    @staticmethod
+    def get_attr_prefix(
+        actor_id: str,
+        bucket: str,
+        prefix: str,
+        *,
+        keys_only: bool = False,
+        consistent_read: bool = True,
+    ) -> dict[str, Any]:
+        """Rows of ``bucket`` whose name begins with ``prefix``."""
+        del consistent_read
+        if not actor_id or not bucket:
+            return {}
+        column = "NULL" if keys_only else "data"
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT name, {column} FROM attributes
+                        WHERE id = %s AND bucket = %s
+                          {DbAttribute._list_clause(prefix)}
+                          AND starts_with(name, %s)
+                          AND name COLLATE "C" >= %s
+                          AND name COLLATE "C" <= %s
+                        ORDER BY name COLLATE "C"
+                        """,
+                        # The byte bounds give the index a range to scan;
+                        # starts_with() keeps the answer exact.
+                        (actor_id, bucket, prefix, prefix, prefix + "\U0010ffff"),
+                    )
+                    rows = cur.fetchall()
+        except Exception as e:
+            raise DbError("attribute prefix read", actor_id) from e
+        return {row[0]: "" if keys_only else row[1] for row in rows}
+
+    @staticmethod
+    def get_last_attr_in_range(
+        actor_id: str, bucket: str, lower: str, upper: str
+    ) -> str | None:
+        """The greatest name of ``bucket`` in ``[lower, upper]``, or None."""
+        if not actor_id or not bucket or lower > upper:
+            return None
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT name FROM attributes
+                        WHERE id = %s AND bucket = %s
+                          {DbAttribute._list_clause(lower, upper)}
+                          AND name COLLATE "C" >= %s AND name COLLATE "C" <= %s
+                        ORDER BY name COLLATE "C" DESC
+                        LIMIT 1
+                        """,
+                        (actor_id, bucket, lower, upper),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:
+            raise DbError("attribute last-in-range read", actor_id) from e
+        return row[0] if row else None
+
+    @staticmethod
+    def create_attr_if_not_exists(
+        actor_id: str, bucket: str, name: str, data: Any
+    ) -> bool:
+        """Create the row; True only when this call created it."""
+        return name in DbAttribute.create_attrs_if_not_exist(
+            actor_id, bucket, {name: data}
+        )
+
+    @staticmethod
+    def create_attrs_if_not_exist(
+        actor_id: str, bucket: str, rows: dict[str, Any]
+    ) -> set[str]:
+        """Create each row that does not exist, in one statement: the names
+        this call created. A name whose key another bucket owns raises
+        ``AttributeKeyCollision``, and the statement is rolled back: none of
+        the batch is created (DynamoDB creates row by row and may have
+        created some before it raises)."""
+        if not rows:
+            return set()
+        values = []
+        params: list[Any] = []
+        for name, data in rows.items():
+            values.append("(%s, %s, %s, %s, %s)")
+            params += [actor_id, bucket + ":" + name, bucket, name, json.dumps(data)]
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO attributes (id, bucket_name, bucket, name, data)
+                        VALUES {", ".join(values)}
+                        ON CONFLICT (id, bucket_name) DO NOTHING
+                        RETURNING name
+                        """,
+                        params,
+                    )
+                    created = {row[0] for row in cur.fetchall()}
+                    missed = [n for n in rows if n not in created]
+                    foreign: list[str] = []
+                    if missed:
+                        cur.execute(
+                            """
+                            SELECT bucket_name FROM attributes
+                            WHERE id = %s AND bucket_name = ANY(%s) AND bucket <> %s
+                            """,
+                            (actor_id, [bucket + ":" + n for n in missed], bucket),
+                        )
+                        foreign = [row[0][len(bucket) + 1 :] for row in cur.fetchall()]
+                    if foreign:
+                        # All or nothing: a batch that meets another bucket's
+                        # row creates none of its rows.
+                        conn.rollback()
+                    else:
+                        conn.commit()
+        except Exception as e:
+            raise DbError("attribute create", actor_id) from e
+        if foreign:
+            raise AttributeKeyCollision(bucket, foreign[0], actor_id)
+        return created
+
+    @staticmethod
+    def set_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str, data: Any
+    ) -> bool:
+        """Replace the row's data when it equals ``expected`` exactly."""
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE attributes SET data = %s::jsonb
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
+                          AND data = %s::jsonb
+                        """,
+                        (
+                            json.dumps(data),
+                            actor_id,
+                            bucket + ":" + name,
+                            bucket,
+                            json.dumps(expected),
+                        ),
+                    )
+                    updated = cur.rowcount == 1
+                conn.commit()
+        except Exception as e:
+            raise DbError("attribute compare-and-swap", actor_id) from e
+        return updated
+
+    @staticmethod
+    def delete_attr_if_data_equals(
+        actor_id: str, bucket: str, name: str, expected: str
+    ) -> bool:
+        """Delete the row when its data equals ``expected`` exactly."""
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM attributes
+                        WHERE id = %s AND bucket_name = %s AND bucket = %s
+                          AND data = %s::jsonb
+                        """,
+                        (actor_id, bucket + ":" + name, bucket, json.dumps(expected)),
+                    )
+                    deleted = cur.rowcount == 1
+                conn.commit()
+        except Exception as e:
+            raise DbError("attribute conditional delete", actor_id) from e
+        return deleted
+
+    @staticmethod
+    def delete_attrs(actor_id: str, bucket: str, names: list[str]) -> None:
+        """Delete each named row of ``bucket`` in one statement (absent ones
+        are fine; a row another bucket owns stays)."""
+        if not names:
+            return
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        DELETE FROM attributes
+                        WHERE id = %s AND bucket = %s AND bucket_name = ANY(%s)
+                        """,
+                        (actor_id, bucket, [bucket + ":" + n for n in names]),
+                    )
+                conn.commit()
+        except Exception as e:
+            raise DbError("attribute batch delete", actor_id) from e
+
+    @staticmethod
+    def put_attr(actor_id: str, bucket: str, name: str, data: Any) -> None:
+        """Write the row unconditionally within the bucket. A falsy ``data``
+        is refused (``ValueError``), never turned into a delete."""
+        if not data:
+            raise ValueError("put_attr does not store falsy data")
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO attributes (id, bucket_name, bucket, name, data)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (id, bucket_name)
+                        DO UPDATE SET data = EXCLUDED.data
+                        WHERE attributes.bucket = EXCLUDED.bucket
+                        """,
+                        (actor_id, bucket + ":" + name, bucket, name, json.dumps(data)),
+                    )
+                    collided = cur.rowcount == 0
+                conn.commit()
+        except Exception as e:
+            raise DbError("attribute put", actor_id) from e
+        if collided:
+            raise AttributeKeyCollision(bucket, name, actor_id)
 
     @staticmethod
     def delete_bucket(actor_id: str | None = None, bucket: str | None = None) -> bool:

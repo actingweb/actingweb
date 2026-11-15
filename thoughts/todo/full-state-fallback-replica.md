@@ -1,5 +1,14 @@
 # The full-state fallback corrupts a subscriber's replica
 
+**The list half is fixed in 3.16** (`thoughts/plans/2026-11-13-attribute-list-v2-port.md`,
+Phase 4): the fallback sends a `clear` for every list still carrying its items
+under one sequence number and the full state (each list an `extend` with
+`length`) under the next, so a subscriber that already holds a list ends with
+it once; a replica list read during a rewrite no longer races a row-by-row
+shift (the replica is on the list core). What remains below: the scalar
+stored as a JSON string, and a property deleted while suspended not being
+mentioned.
+
 **Found** 2026-11-07 by the first recording of wire row `WD12`
 (`tests/integration/wire/WD12.*.json`, both backends, both topologies),
 `thoughts/plans/2026-11-06-peer-authorisation-fixes.md` Phase 0.
@@ -40,7 +49,7 @@ while the rewrite removes items); seen from a test's poll under parallel load.
 
 Whichever is chosen, `WD12`'s recording changes; `rows.toml` must name the
 phase that owns it. The `ListAttribute` plan
-(`thoughts/plans/2026-11-06-attribute-list-v2-port.md`) rewrites the replica's
+(`thoughts/plans/2026-11-13-attribute-list-v2-port.md`) rewrites the replica's
 list application and is the natural owner of the list half.
 
 ## Two more, found 2026-11-09 (reverify-13 of `peer-authorisation-fixes`)

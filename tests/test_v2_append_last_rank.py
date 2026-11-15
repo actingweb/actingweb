@@ -20,6 +20,9 @@ import fractional_indexing as fi
 import pytest
 
 from actingweb.property_list import ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     CountingPropertyDb,
     FakePropertyDb,
@@ -307,6 +310,7 @@ class TestExtendRankCollisionReKeysFromTheCollisionPoint:
 
 
 class TestV1AppendIsUntouchedByPhase9B:
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_append_never_calls_get_last_in_range(self, monkeypatch, fake_store):
         actor_id = "actor-9b-v1-regression"
         name = "notes"
@@ -320,6 +324,7 @@ class TestV1AppendIsUntouchedByPhase9B:
         assert fake_db.last_in_range_call_count == 0
         assert lst.to_list() == ["a", "b", "c"]
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_extend_never_calls_get_last_in_range(self, monkeypatch, fake_store):
         actor_id = "actor-9b-v1-extend-regression"
         name = "notes"
@@ -351,6 +356,7 @@ class TestLastRankSkipsALegacyHashSiblingsRows:
     LEGACY = "foo-#bar"
     OWNER = "foo"
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_append_after_a_legacy_siblings_meta_row_does_not_raise(
         self, monkeypatch, fake_store
     ):

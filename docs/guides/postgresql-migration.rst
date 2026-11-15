@@ -778,9 +778,9 @@ caches, application attributes):
 
    CREATE TABLE attributes (
        id VARCHAR(255),            -- actor_id (tokens live under a system actor)
-       bucket_name VARCHAR(255),   -- "bucket:name" composite
+       bucket_name TEXT,           -- "bucket:name" composite (TEXT since a7b8c9d0e1f2)
        bucket VARCHAR(255),
-       name VARCHAR(255),
+       name TEXT,                  -- TEXT since a7b8c9d0e1f2: list item rows carry rank keys
        data JSONB,
        timestamp TIMESTAMP,
        ttl_timestamp BIGINT,       -- expiry epoch (only set on temporary data)
@@ -793,8 +793,21 @@ caches, application attributes):
    -- (DELETE ... WHERE data->>'chain_id' = ?). Added in migration d4e5f6a7b8c9.
    CREATE INDEX idx_attributes_chain_id ON attributes ((data ->> 'chain_id'))
        WHERE (data ->> 'chain_id') IS NOT NULL;
+   -- Partial index for attribute list range and prefix reads by byte order
+   -- (3.16). Added in migration a7b8c9d0e1f2.
+   CREATE INDEX ix_attributes_list_rows ON attributes (id, bucket, name COLLATE "C")
+       WHERE starts_with(name, 'list:');
 
 These indexes are created by ``alembic upgrade head`` — you do not create them
-by hand. They are listed here for reference only.
+by hand. They are listed here for reference only. Revision ``a7b8c9d0e1f2``
+widens the two key columns (no rows are rewritten; it takes a short
+``ACCESS EXCLUSIVE`` lock bounded by a 10 second ``lock_timeout``, so retry
+the upgrade if it times out behind a long transaction) and builds
+``ix_attributes_list_rows``: ``CONCURRENTLY`` on a table that holds rows, inside
+the migration's transaction on an empty one. A failed concurrent build leaves an
+invalid index, which ``check_ready()`` refuses (``AttributeSchemaNotReady``)
+and a second ``alembic upgrade head`` rebuilds. Until the revision is applied,
+``check_ready()`` (called by ``integrate_flask``/``integrate_fastapi``) raises
+``AttributeSchemaNotReady``, so run the upgrade before deploying 3.16.
 
 See ``actingweb/db/postgresql/schema.py`` for complete schema definitions.

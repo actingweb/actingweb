@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _deleted_names(data: Any) -> list[str]:
+    """The names a target-level diff deletes: a key whose value is empty,
+    or a list's ``delete_all``."""
+    if not isinstance(data, dict):
+        return []
+    names: list[str] = []
+    for key, value in data.items():
+        name = key[5:] if isinstance(key, str) and key.startswith("list:") else key
+        if value == "" or value is None:
+            names.append(str(name))
+        elif isinstance(value, dict) and value.get("operation") == "delete_all":
+            names.append(str(name))
+    return names
+
+
 class ProcessResult(Enum):
     """Result of processing a callback."""
 
@@ -30,6 +45,10 @@ class ProcessResult(Enum):
     PENDING = "pending"  # Callback stored in pending queue (gap detected)
     RESYNC_TRIGGERED = "resync_triggered"  # Gap timeout exceeded, resync needed
     REJECTED = "rejected"  # Callback rejected (back-pressure)
+    # A list diff could not be applied and a rebuild is due: the sequence
+    # advanced, the rest of the drained batch was dropped, and the caller
+    # runs SubscriptionManager.rebuild_subscription().
+    REBUILD = "rebuild"
     # Another delivery holds a live claim on this sequence and is running its
     # handler: not handled yet, so the caller must not acknowledge (clear) it.
     IN_PROGRESS = "in_progress"
@@ -51,8 +70,13 @@ class ProcessedCallback:
     subscription_id: str
     sequence: int
     callback_type: CallbackType
-    data: dict[str, Any]
+    # An object at target level; a subtarget's value as sent (text, a
+    # number, a boolean or "" as well) at subtarget level.
+    data: Any
     timestamp: str
+    # Set by the handler when the replica could not apply a list diff in
+    # this callback (RemotePeerStore's ``out_of_step`` result).
+    out_of_step: dict[str, Any] | None = None
 
 
 class CallbackProcessor:
@@ -76,6 +100,12 @@ class CallbackProcessor:
     # of its batch; and it compares the reading process's clock with the
     # claiming one's, so the processes need synchronised clocks.
     CLAIM_LEASE_SECONDS = 60.0
+    # At most one rebuild of a subscription's replica per this many seconds;
+    # inside it a further out-of-step diff is logged and the rebuild stays
+    # owed.
+    REBUILD_INTERVAL_SECONDS = 60.0
+    # State-row fields a resync's reset keeps.
+    _REBUILD_FIELDS = ("rebuild_owed", "rebuild_lists", "rebuilt_at")
 
     def __init__(
         self,
@@ -341,6 +371,11 @@ class CallbackProcessor:
         )
         attr = db.get_attr(name=self._get_state_key(peer_id, subscription_id))
         current = attr.get("data") if attr else None
+        # An owed rebuild and its interval survive a resync (the resync's
+        # handler settles them; a reset must not forget them).
+        for field in self._REBUILD_FIELDS:
+            if isinstance(current, dict) and field in current and field not in state:
+                state[field] = current[field]
         state["version"] = int((current or {}).get("version", 0) or 0) + 1
         state["claimed_seq"] = 0
         state["nonce"] = uuid.uuid4().hex
@@ -348,6 +383,197 @@ class CallbackProcessor:
             name=self._get_state_key(peer_id, subscription_id), data=state
         ):
             raise DbError("callback state reset", self._actor.id)
+
+    # -- the owed rebuild -----------------------------------------------------
+
+    def _rebuild_due(self, state: dict[str, Any]) -> bool:
+        """An owed rebuild whose interval has passed."""
+        if not state.get("rebuild_owed"):
+            return False
+        rebuilt_at = state.get("rebuilt_at")
+        if not isinstance(rebuilt_at, int | float):
+            return True
+        return time.time() - rebuilt_at >= self.REBUILD_INTERVAL_SECONDS
+
+    def _mark_out_of_step(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        claimed_row: dict[str, Any],
+        through_seq: int,
+        lists: list[str],
+    ) -> dict[str, Any] | None:
+        """Record an owed rebuild from the claimed row in one
+        compare-and-swap (modelled on ``_release_claim``): the claim ends at
+        ``through_seq`` and the out-of-step lists join the owed ones. Returns
+        the row written, or None when the write lost or faulted (logged; the
+        next out-of-step diff marks it again)."""
+        state = dict(claimed_row)
+        state.pop("nonce", None)
+        state["version"] = int(state.get("version", 0) or 0) + 1
+        state["claimed_seq"] = through_seq
+        state["rebuild_owed"] = True
+        state["rebuild_lists"] = sorted(
+            set(state.get("rebuild_lists") or []) | {n for n in lists if n}
+        )
+        try:
+            written = self._cas_state(peer_id, subscription_id, claimed_row, state)
+        except DbError as e:  # folds DbError: best effort, logged
+            logger.error(
+                f"Recording the owed rebuild of {peer_id}:{subscription_id} "
+                f"faulted: {e}"
+            )
+            return None
+        if written is None:
+            logger.error(
+                f"Recording the owed rebuild of {peer_id}:{subscription_id} lost "
+                "a race; the next out-of-step diff records it again"
+            )
+        return written
+
+    def _whole_target(self, peer_id: str, subscription_id: str) -> bool:
+        """Whether the subscription is to the whole target (its diffs are
+        keyed by replica name). A read fault answers False: nothing is owed
+        from the dropped batch, the rebuild still runs."""
+        try:
+            sub = self._actor.subscriptions.get_callback_subscription(
+                peer_id, subscription_id
+            )
+        except Exception as e:  # folds DbError: only narrows what is owed
+            logger.warning(f"Reading subscription {subscription_id}: {e}")
+            return False
+        return bool(sub) and not sub.subtarget and not sub.resource
+
+    def _mark_or_owe(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        claimed_row: dict[str, Any],
+        through_seq: int,
+        lists: list[str],
+    ) -> bool:
+        """Record an owed rebuild; True when one is due now. A mark that lost
+        its compare-and-swap or faulted is retried from a fresh read
+        (``settle_rebuild``); if that faults too the rebuild runs anyway when
+        the claimed row allows (the rebuild settles its own state), so an
+        out-of-step replica is never left unmarked and unrebuilt."""
+        marked = self._mark_out_of_step(
+            peer_id, subscription_id, claimed_row, through_seq, lists
+        )
+        if marked is not None:
+            return self._rebuild_due(marked)
+        try:
+            self.settle_rebuild(
+                peer_id,
+                subscription_id,
+                rebuilt=False,
+                lists=lists,
+                claimed_seq=through_seq,
+                held_claim=claimed_row.get("claimed_seq"),
+            )
+            return self._rebuild_due(
+                self._read_state_row(peer_id, subscription_id) or {}
+            )
+        except DbError as e:  # folds DbError: the rebuild below settles it
+            logger.error(
+                f"Recording the owed rebuild of {peer_id}:{subscription_id} "
+                f"faulted again: {e}; rebuilding without the record"
+            )
+            return self._rebuild_due({**claimed_row, "rebuild_owed": True})
+
+    def begin_rebuild(
+        self, peer_id: str, subscription_id: str, *, force: bool = False
+    ) -> bool:
+        """Reserve a rebuild attempt: one compare-and-swap that sets
+        ``rebuilt_at`` to now, whether the attempt then succeeds or not, so a
+        failed rebuild is throttled like a successful one and two concurrent
+        deliveries do not both rebuild. False when another attempt started
+        inside the interval (or won the race); ``force`` reserves regardless
+        of the interval. Raises ``DbError`` on a fault."""
+        for _ in range(self._max_retries):
+            row = self._read_state_row(peer_id, subscription_id)
+            if not force and not self._rebuild_due(
+                {**(row or {}), "rebuild_owed": True}
+            ):
+                return False
+            state: dict[str, Any] = dict(row or {"version": 0, "resync_pending": False})
+            state.pop("nonce", None)
+            state["version"] = int(state.get("version", 0) or 0) + 1
+            state["rebuild_owed"] = True
+            state["rebuilt_at"] = time.time()
+            if self._cas_state(peer_id, subscription_id, row, state) is not None:
+                return True
+            force = False  # a concurrent attempt reserved first
+        return False
+
+    def rebuild_state(self, peer_id: str, subscription_id: str) -> dict[str, Any]:
+        """``{"owed": bool, "lists": [...], "rebuilt_at": float | None}`` for
+        a subscription's replica. Raises ``DbError`` on a fault."""
+        row = self._read_state_row(peer_id, subscription_id) or {}
+        return {
+            "owed": bool(row.get("rebuild_owed")),
+            "lists": list(row.get("rebuild_lists") or []),
+            "rebuilt_at": row.get("rebuilt_at"),
+        }
+
+    def settle_rebuild(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        *,
+        rebuilt: bool,
+        restart_interval: bool = True,
+        lists: list[str] | None = None,
+        claimed_seq: int | None = None,
+        held_claim: int | None = None,
+    ) -> bool:
+        """After a rebuild (or a resync): ``rebuilt`` clears the owed rebuild
+        and, with ``restart_interval``, sets ``rebuilt_at``; otherwise it is
+        marked owed (``lists`` join the owed ones). ``claimed_seq`` ends a
+        claim there (a batch stopped for the rebuild) when the row still holds
+        ``held_claim``, the claim that batch took. Retries a lost
+        compare-and-swap a few times. Raises ``DbError`` on a fault."""
+        for _ in range(self._max_retries):
+            row = self._read_state_row(peer_id, subscription_id)
+            state: dict[str, Any] = dict(row or {"version": 0, "resync_pending": False})
+            state.pop("nonce", None)
+            state["version"] = int(state.get("version", 0) or 0) + 1
+            if claimed_seq is not None and (row or {}).get("claimed_seq") == held_claim:
+                # Only the claim this batch held (another delivery's claim is
+                # not this one's to end).
+                state["claimed_seq"] = claimed_seq
+            if rebuilt:
+                state["rebuild_owed"] = False
+                state["rebuild_lists"] = []
+                if restart_interval:
+                    state["rebuilt_at"] = time.time()
+            else:
+                state["rebuild_owed"] = True
+                if lists:
+                    state["rebuild_lists"] = sorted(
+                        set(state.get("rebuild_lists") or []) | {n for n in lists if n}
+                    )
+            if self._cas_state(peer_id, subscription_id, row, state) is not None:
+                return True
+        return False
+
+    def _settle_after_resync(
+        self, peer_id: str, subscription_id: str, *, rebuilt: bool
+    ) -> None:
+        """A resync's handler returned (``rebuilt``) or failed: settle the
+        owed rebuild, best effort, without restarting its interval."""
+        try:
+            row = self._read_state_row(peer_id, subscription_id) or {}
+            if rebuilt and not row.get("rebuild_owed"):
+                return
+            self.settle_rebuild(
+                peer_id, subscription_id, rebuilt=rebuilt, restart_interval=False
+            )
+        except DbError as e:  # folds DbError: best effort, logged
+            logger.error(
+                f"Settling the owed rebuild of {peer_id}:{subscription_id} after a "
+                f"resync faulted: {e}"
+            )
 
     def _get_pending(self, peer_id: str, subscription_id: str) -> list[dict[str, Any]]:
         """Get pending callbacks from storage."""
@@ -432,7 +658,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         callback_type: str = "diff",
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None = None,
     ) -> ProcessResult:
@@ -544,7 +770,9 @@ class CallbackProcessor:
                     sequence=sequence,
                     callback_type=CallbackType.DIFF,
                     data=data,
-                    timestamp=data.get("timestamp", ""),
+                    timestamp=data.get("timestamp", "")
+                    if isinstance(data, dict)
+                    else "",
                 )
             ]
 
@@ -570,7 +798,9 @@ class CallbackProcessor:
                         sequence=next_seq,
                         callback_type=CallbackType.DIFF,
                         data=next_callback["data"],
-                        timestamp=next_callback["data"].get("timestamp", ""),
+                        timestamp=next_callback["data"].get("timestamp", "")
+                        if isinstance(next_callback["data"], dict)
+                        else "",
                     )
                 )
                 drained.append(next_seq)
@@ -588,11 +818,28 @@ class CallbackProcessor:
                 await asyncio.sleep(self._retry_backoff * (2**attempt))
                 continue
 
-            # Invoke handler for all callbacks in order
+            # Invoke handler for all callbacks in order. A callback whose
+            # list diff the replica could not apply marks the rebuild owed;
+            # when one is due the batch stops there (the rebuild supersedes
+            # the rest).
+            out_of_step_lists: list[str] = []
+            stop_at: int | None = None
             if handler:
                 for cb in callbacks_to_process:
                     try:
                         await handler(cb)
+                        if cb.out_of_step:
+                            out_of_step_lists.append(
+                                str(cb.out_of_step.get("list") or "")
+                            )
+                            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
+                                stop_at = cb.sequence
+                                break
+                            logger.warning(
+                                f"Out-of-step diff seq={cb.sequence} for "
+                                f"{peer_id}:{subscription_id} inside the "
+                                "rebuild interval: the rebuild stays owed"
+                            )
                     except DbError:
                         self._release_claim(
                             peer_id, subscription_id, claimed_row, last_seq
@@ -617,8 +864,13 @@ class CallbackProcessor:
 
             # Update sequence in subscription record AFTER successful processing
             # This prevents duplicate detection on retry and ensures sequence only
-            # advances after the callback has been fully processed
-            new_last_seq = callbacks_to_process[-1].sequence
+            # advances after the callback has been fully processed. A batch
+            # stopped for a rebuild advances through the callback that
+            # stopped it; the rest of it is pruned (the rebuild supersedes
+            # it).
+            new_last_seq = (
+                stop_at if stop_at is not None else callbacks_to_process[-1].sequence
+            )
             try:
                 recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
             except DbError as e:  # folds DbError: at-most-once: handlers already ran
@@ -639,7 +891,15 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
-                        self._prune_pending(peer_id, subscription_id, new_last_seq)
+                        # Through the whole batch: a batch stopped for a
+                        # rebuild drops the rest (the rebuild supersedes it;
+                        # a rebuild that fails leaves a gap the gap timeout
+                        # resyncs, as kept entries would wait for it too).
+                        self._prune_pending(
+                            peer_id,
+                            subscription_id,
+                            callbacks_to_process[-1].sequence,
+                        )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
@@ -653,6 +913,28 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
+            if stop_at is not None and self._whole_target(peer_id, subscription_id):
+                # The rest of the batch is dropped (the rebuild supersedes
+                # it): what it deleted is owed too, so the rebuild deletes it
+                # even where it cannot sweep the bucket. Target-level data
+                # only: below it, a diff's keys are not replica names.
+                for dropped in callbacks_to_process:
+                    if dropped.sequence > stop_at:
+                        out_of_step_lists.extend(_deleted_names(dropped.data))
+            if out_of_step_lists:
+                if self._mark_or_owe(
+                    peer_id,
+                    subscription_id,
+                    claimed_row,
+                    new_last_seq,
+                    out_of_step_lists,
+                ):
+                    return ProcessResult.REBUILD
+            elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
+                # Owed from an out-of-step diff inside the interval: the next
+                # callback after it rebuilds.
+                return ProcessResult.REBUILD
+
             return ProcessResult.PROCESSED
 
         # Exhausted retries
@@ -664,7 +946,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
     ) -> ProcessResult:
         """Handle a resync callback from the protocol."""
@@ -690,15 +972,26 @@ class CallbackProcessor:
                 sequence=sequence,
                 callback_type=CallbackType.RESYNC,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
+            failed = False
             try:
                 await handler(callback)
             except DbError:
+                self._settle_after_resync(peer_id, subscription_id, rebuilt=False)
                 raise
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
+                failed = True
+            # A resync that applied cleanly settles an owed rebuild; one that
+            # failed (softly or with a list it could not store) leaves or
+            # sets it, and does not restart the rebuild interval.
+            self._settle_after_resync(
+                peer_id,
+                subscription_id,
+                rebuilt=not failed and not callback.out_of_step,
+            )
 
         # Update subscription sequence AFTER successful processing
         self._update_last_seq(peer_id, subscription_id, sequence)
@@ -708,7 +1001,7 @@ class CallbackProcessor:
     async def _handle_permission(
         self,
         peer_id: str,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
     ) -> ProcessResult:
         """Handle a permission callback.
@@ -726,7 +1019,7 @@ class CallbackProcessor:
                 sequence=0,  # Not used for permissions
                 callback_type=CallbackType.PERMISSION,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             try:
                 await handler(callback)
@@ -786,7 +1079,13 @@ class CallbackProcessor:
         # retried, instead of leaving this peer's state behind.
         all_attrs = db.get_bucket() or {}
         for attr_name in list(all_attrs.keys()):
-            if f":{peer_id}:" in attr_name:
+            # Keys are "state:{peer_id}:{subscription_id}" and
+            # "pending:{peer_id}:{subscription_id}", and a peer id may contain
+            # ":" (a subscription id never does): compare the peer segment,
+            # never a substring, or ending trust with peer "b" would clear
+            # peer "a:b"'s state ("state:a:b:<sub>").
+            head, sep, _sub = attr_name.rpartition(":")
+            if sep and head in (f"state:{peer_id}", f"pending:{peer_id}"):
                 db.delete_attr(name=attr_name)
 
     def process_callback_sync(
@@ -794,7 +1093,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         callback_type: str = "diff",
         handler: Callable[[ProcessedCallback], None] | None = None,
     ) -> ProcessResult:
@@ -906,7 +1205,9 @@ class CallbackProcessor:
                     sequence=sequence,
                     callback_type=CallbackType.DIFF,
                     data=data,
-                    timestamp=data.get("timestamp", ""),
+                    timestamp=data.get("timestamp", "")
+                    if isinstance(data, dict)
+                    else "",
                 )
             ]
 
@@ -932,7 +1233,9 @@ class CallbackProcessor:
                         sequence=next_seq,
                         callback_type=CallbackType.DIFF,
                         data=next_callback["data"],
-                        timestamp=next_callback["data"].get("timestamp", ""),
+                        timestamp=next_callback["data"].get("timestamp", "")
+                        if isinstance(next_callback["data"], dict)
+                        else "",
                     )
                 )
                 drained.append(next_seq)
@@ -950,11 +1253,28 @@ class CallbackProcessor:
                 time.sleep(self._retry_backoff * (2**attempt))
                 continue
 
-            # Invoke handler for all callbacks in order
+            # Invoke handler for all callbacks in order. A callback whose
+            # list diff the replica could not apply marks the rebuild owed;
+            # when one is due the batch stops there (the rebuild supersedes
+            # the rest).
+            out_of_step_lists: list[str] = []
+            stop_at: int | None = None
             if handler:
                 for cb in callbacks_to_process:
                     try:
                         handler(cb)
+                        if cb.out_of_step:
+                            out_of_step_lists.append(
+                                str(cb.out_of_step.get("list") or "")
+                            )
+                            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
+                                stop_at = cb.sequence
+                                break
+                            logger.warning(
+                                f"Out-of-step diff seq={cb.sequence} for "
+                                f"{peer_id}:{subscription_id} inside the "
+                                "rebuild interval: the rebuild stays owed"
+                            )
                     except DbError:
                         self._release_claim(
                             peer_id, subscription_id, claimed_row, last_seq
@@ -979,8 +1299,13 @@ class CallbackProcessor:
 
             # Update sequence in subscription record AFTER successful processing
             # This prevents duplicate detection on retry and ensures sequence only
-            # advances after the callback has been fully processed
-            new_last_seq = callbacks_to_process[-1].sequence
+            # advances after the callback has been fully processed. A batch
+            # stopped for a rebuild advances through the callback that
+            # stopped it; the rest of it is pruned (the rebuild supersedes
+            # it).
+            new_last_seq = (
+                stop_at if stop_at is not None else callbacks_to_process[-1].sequence
+            )
             try:
                 recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
             except DbError as e:  # folds DbError: at-most-once: handlers already ran
@@ -1001,7 +1326,15 @@ class CallbackProcessor:
                 # again (filed in the subscriber hardening todo).
                 if drained:
                     try:
-                        self._prune_pending(peer_id, subscription_id, new_last_seq)
+                        # Through the whole batch: a batch stopped for a
+                        # rebuild drops the rest (the rebuild supersedes it;
+                        # a rebuild that fails leaves a gap the gap timeout
+                        # resyncs, as kept entries would wait for it too).
+                        self._prune_pending(
+                            peer_id,
+                            subscription_id,
+                            callbacks_to_process[-1].sequence,
+                        )
                     except DbError as e:  # folds DbError: best-effort prune
                         logger.error(f"Pruning processed callbacks faulted: {e}")
             else:
@@ -1015,6 +1348,28 @@ class CallbackProcessor:
                     f"the batch may run again once its claim expires"
                 )
 
+            if stop_at is not None and self._whole_target(peer_id, subscription_id):
+                # The rest of the batch is dropped (the rebuild supersedes
+                # it): what it deleted is owed too, so the rebuild deletes it
+                # even where it cannot sweep the bucket. Target-level data
+                # only: below it, a diff's keys are not replica names.
+                for dropped in callbacks_to_process:
+                    if dropped.sequence > stop_at:
+                        out_of_step_lists.extend(_deleted_names(dropped.data))
+            if out_of_step_lists:
+                if self._mark_or_owe(
+                    peer_id,
+                    subscription_id,
+                    claimed_row,
+                    new_last_seq,
+                    out_of_step_lists,
+                ):
+                    return ProcessResult.REBUILD
+            elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
+                # Owed from an out-of-step diff inside the interval: the next
+                # callback after it rebuilds.
+                return ProcessResult.REBUILD
+
             return ProcessResult.PROCESSED
 
         # Exhausted retries
@@ -1026,7 +1381,7 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         sequence: int,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], None] | None,
     ) -> ProcessResult:
         """Handle a resync callback from the protocol (sync version)."""
@@ -1052,15 +1407,26 @@ class CallbackProcessor:
                 sequence=sequence,
                 callback_type=CallbackType.RESYNC,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
+            failed = False
             try:
                 handler(callback)
             except DbError:
+                self._settle_after_resync(peer_id, subscription_id, rebuilt=False)
                 raise
             except Exception as e:
                 # Log with full traceback for debugging
                 logger.error(f"Resync handler error: {e}", exc_info=True)
+                failed = True
+            # A resync that applied cleanly settles an owed rebuild; one that
+            # failed (softly or with a list it could not store) leaves or
+            # sets it, and does not restart the rebuild interval.
+            self._settle_after_resync(
+                peer_id,
+                subscription_id,
+                rebuilt=not failed and not callback.out_of_step,
+            )
 
         # Update subscription sequence AFTER successful processing
         self._update_last_seq(peer_id, subscription_id, sequence)
@@ -1070,7 +1436,7 @@ class CallbackProcessor:
     def _handle_permission_sync(
         self,
         peer_id: str,
-        data: dict[str, Any],
+        data: Any,
         handler: Callable[[ProcessedCallback], None] | None,
     ) -> ProcessResult:
         """Handle a permission callback (sync version).
@@ -1088,7 +1454,7 @@ class CallbackProcessor:
                 sequence=0,  # Not used for permissions
                 callback_type=CallbackType.PERMISSION,
                 data=data,
-                timestamp=data.get("timestamp", ""),
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
             )
             try:
                 handler(callback)

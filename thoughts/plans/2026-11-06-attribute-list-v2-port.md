@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: superseded
+superseded_by: thoughts/plans/2026-11-13-attribute-list-v2-port.md
 ---
 
 # Implementation Plan: `ListAttribute` on the v2 rank format, and list diffs that reach a replica
@@ -9,6 +10,14 @@ status: proposed
 **Branch:** docs/3-16-rollup-records (written here; implement on `release/3.16.0-attribute-list-v2-port`, one PR, one commit per phase)
 
 ## Update Log
+
+- **2026-11-13**: superseded by
+  `thoughts/plans/2026-11-13-attribute-list-v2-port.md` (owner). Attribute
+  lists and property lists are to offer the same interface, so the list
+  format is extracted into one core over two storages; the purpose-built
+  `ListAttribute` of this plan, its claim protocol and its self-compaction
+  are not built. The filter move of Phase 4 was overtaken by #172. This
+  file is kept for its reviews and for what was decided against.
 
 - **2026-11-10, from `2026-11-10-grant-enforcement-per-route.md` Phase 1
   (owner)**: the subscriber's replica replaces a property with what a

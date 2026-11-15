@@ -30,7 +30,7 @@
       {
        "diffs": [
         {
-         "data": "{\"notes\": \"[Empty list property created]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"extend\", \"length\": 0, \"items\": []}}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
         }
@@ -147,12 +147,10 @@
        }
       },
       "replica": {
-       "lists": {},
-       "scalars": {
-        "notes": {
-         "value": "[Empty list property created]"
-        }
-       }
+       "lists": {
+        "notes": []
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -196,7 +194,12 @@
         {
          "actor": "<B>",
          "data": {
-          "notes": "[Empty list property created]"
+          "notes": {
+           "items": [],
+           "length": 0,
+           "list": "notes",
+           "operation": "extend"
+          }
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -212,7 +215,12 @@
        "query": "",
        "request": {
         "data": {
-         "notes": "[Empty list property created]"
+         "notes": {
+          "items": [],
+          "length": 0,
+          "list": "notes",
+          "operation": "extend"
+         }
         },
         "granularity": "high",
         "id": "<A>",

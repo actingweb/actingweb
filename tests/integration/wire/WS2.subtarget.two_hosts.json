@@ -65,11 +65,9 @@
       "replica": {
        "lists": {},
        "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
+        "color": {
+         "hex": "#f00",
+         "shade": "red"
         }
        }
       },
@@ -217,23 +215,20 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 1,
+        "last_seq": 2,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 2
        }
       ],
       "peer_permissions": null,
       "replica": {
        "lists": {},
        "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
+        "color": {
+         "value": "blue"
         }
        }
       },
@@ -243,7 +238,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 1,
+        "sequence": 2,
         "subscriptionid": "<sub1>",
         "subtarget": "color",
         "target": "properties"
@@ -273,7 +268,17 @@
      "children": [
       {
        "auth": "bearer:trust:A-B",
-       "children": [],
+       "children": [
+        {
+         "actor": "<B>",
+         "data": "blue",
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 2,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
        "headers": {},
        "host": "wire_peer_app",
        "method": "POST",
@@ -290,7 +295,7 @@
         "timestamp": "<ts:space>"
        },
        "response": null,
-       "status": 400
+       "status": 204
       }
      ],
      "headers": {},
@@ -367,27 +372,18 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 1,
-        "pending_count": 1,
-        "pending_sequences": [
-         3
-        ],
+        "last_seq": 3,
+        "pending_count": 0,
+        "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 3
        }
       ],
       "peer_permissions": null,
       "replica": {
        "lists": {},
-       "scalars": {
-        "hex": {
-         "value": "#f00"
-        },
-        "shade": {
-         "value": "red"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -395,7 +391,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 1,
+        "sequence": 3,
         "subscriptionid": "<sub1>",
         "subtarget": "color",
         "target": "properties"
@@ -425,7 +421,17 @@
      "children": [
       {
        "auth": "bearer:trust:A-B",
-       "children": [],
+       "children": [
+        {
+         "actor": "<B>",
+         "data": "",
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 3,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
        "headers": {},
        "host": "wire_peer_app",
        "method": "POST",

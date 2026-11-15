@@ -40,286 +40,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 2 items updated, 0 items deleted]\"}",
-         "sequence": 3,
-         "timestamp": "<ts:stored>"
-        }
-       ],
-       "granularity": "high",
-       "peer": "<B>",
-       "sequence": 3,
-       "subscriptionid": "<sub1>",
-       "subtarget": "",
-       "target": "properties"
-      }
-     ],
-     "subscriptions": [
-      {
-       "callback": false,
-       "granularity": "high",
-       "peerid": "<B>",
-       "resource": "",
-       "sequence": 3,
-       "subscriptionid": "<sub1>",
-       "subtarget": "",
-       "target": "properties"
-      }
-     ],
-     "suspensions": [],
-     "trust": {
-      "B": {
-       "approved": true,
-       "baseuri": "http://<wire_peer_app>/<B>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-B>",
-       "verified": true
-      }
-     }
-    },
-    "subscribers": {
-     "B": {
-      "callback_state": [
-       {
-        "last_seq": 3,
-        "pending_count": 0,
-        "pending_sequences": [],
-        "resync_pending": false,
-        "subscriptionid": "<sub1>",
-        "version": 3
-       }
-      ],
-      "peer_permissions": {
-       "actions": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "actor_id": "<B>",
-       "extra_attributes": {
-        "sender_timestamp": "<ts:iso-offset>"
-       },
-       "fetch_error": null,
-       "fetched_at": "<ts:iso-offset>",
-       "methods": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "delete_*",
-         "admin_*",
-         "system_*"
-        ]
-       },
-       "peer_id": "<A>",
-       "prompts": null,
-       "properties": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*",
-         "_internal/*"
-        ],
-        "operations": [
-         "read"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": {
-        "excluded_patterns": [
-         "private/*",
-         "security/*"
-        ],
-        "operations": [
-         "read",
-         "write"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "tools": {
-        "allowed": [
-         "*"
-        ],
-        "denied": [
-         "admin_*",
-         "system_*"
-        ]
-       }
-      },
-      "replica": {
-       "lists": {
-        "notes": [
-         {
-          "id": "a",
-          "text": "one"
-         },
-         {
-          "id": "b",
-          "text": "two"
-         }
-        ]
-       },
-       "scalars": {
-        "notes": {
-         "value": "[Bulk update: 2 items updated, 0 items deleted]"
-        }
-       }
-      },
-      "subscriptions": [
-       {
-        "callback": true,
-        "granularity": "high",
-        "peerid": "<A>",
-        "resource": "",
-        "sequence": 3,
-        "subscriptionid": "<sub1>",
-        "subtarget": "",
-        "target": "properties"
-       }
-      ],
-      "trust": {
-       "approved": true,
-       "baseuri": "http://<wire_app>/<A>",
-       "established_via": "trust",
-       "has_verification_token": true,
-       "peer_approved": true,
-       "relationship": "friend",
-       "secret": "<secret:trust:A-B>",
-       "verified": true
-      }
-     }
-    }
-   },
-   "result": {
-    "body": {
-     "notes": "[Bulk update: 2 items updated, 0 items deleted]"
-    },
-    "status": 201
-   },
-   "step": "2 item changes",
-   "wire": [
-    {
-     "auth": "basic:<A.creator>",
-     "children": [
-      {
-       "auth": "bearer:trust:A-B",
-       "children": [
-        {
-         "actor": "<B>",
-         "data": {
-          "notes": "[Bulk update: 2 items updated, 0 items deleted]"
-         },
-         "event": "subscription_data",
-         "peer": "<A>",
-         "sequence": 3,
-         "target": "properties",
-         "type": "diff"
-        }
-       ],
-       "headers": {},
-       "host": "wire_peer_app",
-       "method": "POST",
-       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
-       "query": "",
-       "request": {
-        "data": {
-         "notes": "[Bulk update: 2 items updated, 0 items deleted]"
-        },
-        "granularity": "high",
-        "id": "<A>",
-        "sequence": 3,
-        "subscriptionid": "<sub1>",
-        "target": "properties",
-        "timestamp": "<ts:space>"
-       },
-       "response": null,
-       "status": 204
-      }
-     ],
-     "headers": {
-      "content-type": "application/json"
-     },
-     "host": "wire_app",
-     "method": "POST",
-     "path": "/<A>/properties",
-     "query": "",
-     "request": {
-      "notes": {
-       "items": [
-        {
-         "index": 0,
-         "n": 2
-        },
-        {
-         "index": 1,
-         "n": 2
-        }
-       ]
-      }
-     },
-     "response": {
-      "notes": "[Bulk update: 2 items updated, 0 items deleted]"
-     },
-     "status": 201
-    }
-   ]
-  },
-  {
-   "after": {
-    "publisher": {
-     "grants": {
-      "B": {
-       "actions": null,
-       "actor_id": "<A>",
-       "created_by": "system",
-       "methods": null,
-       "notes": null,
-       "peer_id": "<B>",
-       "prompts": null,
-       "properties": {
-        "operations": [
-         "read"
-        ],
-        "patterns": [
-         "*"
-        ]
-       },
-       "resources": null,
-       "tools": null,
-       "trust_type": "friend",
-       "updated_at": null
-      }
-     },
-     "queue": [
-      {
-       "diffs": [
-        {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}, \"index\": 0}}",
-         "sequence": 1,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}}",
-         "sequence": 2,
-         "timestamp": "<ts:stored>"
-        },
-        {
-         "data": "{\"notes\": \"[Bulk update: 2 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 25 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -439,20 +165,14 @@
        "lists": {
         "notes": [
          {
-          "id": "a",
-          "text": "one"
+          "n": 2
          },
          {
-          "id": "b",
-          "text": "two"
+          "n": 2
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "value": "[Bulk update: 25 items updated, 0 items deleted]"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -461,6 +181,445 @@
         "peerid": "<A>",
         "resource": "",
         "sequence": 4,
+        "subscriptionid": "<sub1>",
+        "subtarget": "",
+        "target": "properties"
+       }
+      ],
+      "trust": {
+       "approved": true,
+       "baseuri": "http://<wire_app>/<A>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    }
+   },
+   "result": {
+    "body": {
+     "notes": "[Bulk update: 2 items updated, 0 items deleted]"
+    },
+    "status": 201
+   },
+   "step": "2 item changes",
+   "wire": [
+    {
+     "auth": "basic:<A.creator>",
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "index": 0,
+           "item": {
+            "n": 2
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "id": "a",
+            "text": "one"
+           },
+           "operation": "update"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 3,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "index": 0,
+          "item": {
+           "n": 2
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "a",
+           "text": "one"
+          },
+          "operation": "update"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 3,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "index": 1,
+           "item": {
+            "n": 2
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "id": "b",
+            "text": "two"
+           },
+           "operation": "update"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 4,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "index": 1,
+          "item": {
+           "n": 2
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "id": "b",
+           "text": "two"
+          },
+          "operation": "update"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 4,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
+     "headers": {
+      "content-type": "application/json"
+     },
+     "host": "wire_app",
+     "method": "POST",
+     "path": "/<A>/properties",
+     "query": "",
+     "request": {
+      "notes": {
+       "items": [
+        {
+         "index": 0,
+         "n": 2
+        },
+        {
+         "index": 1,
+         "n": 2
+        }
+       ]
+      }
+     },
+     "response": {
+      "notes": "[Bulk update: 2 items updated, 0 items deleted]"
+     },
+     "status": 201
+    }
+   ]
+  },
+  {
+   "after": {
+    "publisher": {
+     "grants": {
+      "B": {
+       "actions": null,
+       "actor_id": "<A>",
+       "created_by": "system",
+       "methods": null,
+       "notes": null,
+       "peer_id": "<B>",
+       "prompts": null,
+       "properties": {
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": null,
+       "tools": null,
+       "trust_type": "friend",
+       "updated_at": null
+      }
+     },
+     "queue": [
+      {
+       "diffs": [
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"id\": \"a\", \"text\": \"one\"}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 2, \"item\": {\"id\": \"b\", \"text\": \"two\"}, \"index\": 1}}",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
+         "sequence": 3,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
+         "sequence": 4,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 0, \"old_item\": {\"n\": 2}}}",
+         "sequence": 5,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 1, \"old_item\": {\"n\": 2}}}",
+         "sequence": 6,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"extend\", \"length\": 25, \"items\": [{\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}]}}",
+         "sequence": 7,
+         "timestamp": "<ts:stored>"
+        }
+       ],
+       "granularity": "high",
+       "peer": "<B>",
+       "sequence": 7,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "subscriptions": [
+      {
+       "callback": false,
+       "granularity": "high",
+       "peerid": "<B>",
+       "resource": "",
+       "sequence": 7,
+       "subscriptionid": "<sub1>",
+       "subtarget": "",
+       "target": "properties"
+      }
+     ],
+     "suspensions": [],
+     "trust": {
+      "B": {
+       "approved": true,
+       "baseuri": "http://<wire_peer_app>/<B>",
+       "established_via": "trust",
+       "has_verification_token": true,
+       "peer_approved": true,
+       "relationship": "friend",
+       "secret": "<secret:trust:A-B>",
+       "verified": true
+      }
+     }
+    },
+    "subscribers": {
+     "B": {
+      "callback_state": [
+       {
+        "last_seq": 7,
+        "pending_count": 0,
+        "pending_sequences": [],
+        "resync_pending": false,
+        "subscriptionid": "<sub1>",
+        "version": 7
+       }
+      ],
+      "peer_permissions": {
+       "actions": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "actor_id": "<B>",
+       "extra_attributes": {
+        "sender_timestamp": "<ts:iso-offset>"
+       },
+       "fetch_error": null,
+       "fetched_at": "<ts:iso-offset>",
+       "methods": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "delete_*",
+         "admin_*",
+         "system_*"
+        ]
+       },
+       "peer_id": "<A>",
+       "prompts": null,
+       "properties": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*",
+         "_internal/*"
+        ],
+        "operations": [
+         "read"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "resources": {
+        "excluded_patterns": [
+         "private/*",
+         "security/*"
+        ],
+        "operations": [
+         "read",
+         "write"
+        ],
+        "patterns": [
+         "*"
+        ]
+       },
+       "tools": {
+        "allowed": [
+         "*"
+        ],
+        "denied": [
+         "admin_*",
+         "system_*"
+        ]
+       }
+      },
+      "replica": {
+       "lists": {
+        "notes": [
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         },
+         {
+          "n": 25
+         }
+        ]
+       },
+       "scalars": {}
+      },
+      "subscriptions": [
+       {
+        "callback": true,
+        "granularity": "high",
+        "peerid": "<A>",
+        "resource": "",
+        "sequence": 7,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -496,11 +655,22 @@
         {
          "actor": "<B>",
          "data": {
-          "notes": "[Bulk update: 25 items updated, 0 items deleted]"
+          "notes": {
+           "index": 0,
+           "item": {
+            "n": 25
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "n": 2
+           },
+           "operation": "update"
+          }
          },
          "event": "subscription_data",
          "peer": "<A>",
-         "sequence": 4,
+         "sequence": 5,
          "target": "properties",
          "type": "diff"
         }
@@ -512,11 +682,262 @@
        "query": "",
        "request": {
         "data": {
-         "notes": "[Bulk update: 25 items updated, 0 items deleted]"
+         "notes": {
+          "index": 0,
+          "item": {
+           "n": 25
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "n": 2
+          },
+          "operation": "update"
+         }
         },
         "granularity": "high",
         "id": "<A>",
-        "sequence": 4,
+        "sequence": 5,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "index": 1,
+           "item": {
+            "n": 25
+           },
+           "length": 2,
+           "list": "notes",
+           "old_item": {
+            "n": 2
+           },
+           "operation": "update"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 6,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "index": 1,
+          "item": {
+           "n": 25
+          },
+          "length": 2,
+          "list": "notes",
+          "old_item": {
+           "n": 2
+          },
+          "operation": "update"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 6,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "items": [
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            },
+            {
+             "n": 25
+            }
+           ],
+           "length": 25,
+           "list": "notes",
+           "operation": "extend"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 7,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "items": [
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           },
+           {
+            "n": 25
+           }
+          ],
+          "length": 25,
+          "list": "notes",
+          "operation": "extend"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 7,
         "subscriptionid": "<sub1>",
         "target": "properties",
         "timestamp": "<ts:space>"
@@ -685,24 +1106,34 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 2 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 25 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 26 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 0, \"old_item\": {\"n\": 2}}}",
          "sequence": 5,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 1, \"old_item\": {\"n\": 2}}}",
+         "sequence": 6,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"extend\", \"length\": 25, \"items\": [{\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}]}}",
+         "sequence": 7,
          "timestamp": "<ts:stored>"
         }
        ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 5,
+       "sequence": 8,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -714,7 +1145,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 5,
+       "sequence": 8,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -738,12 +1169,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 5,
+        "last_seq": 8,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 5
+        "version": 8
        }
       ],
       "peer_permissions": {
@@ -815,20 +1246,86 @@
        "lists": {
         "notes": [
          {
-          "id": "a",
-          "text": "one"
+          "n": 26
          },
          {
-          "id": "b",
-          "text": "two"
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
          }
         ]
        },
-       "scalars": {
-        "notes": {
-         "value": "[Bulk update: 26 items updated, 0 items deleted]"
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -836,7 +1333,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 5,
+        "sequence": 8,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -870,15 +1367,209 @@
        "auth": "bearer:trust:A-B",
        "children": [
         {
+         "auth": "bearer:trust:A-B",
+         "children": [],
+         "headers": {
+          "content-type": "application/json"
+         },
+         "host": "wire_app",
+         "method": "GET",
+         "path": "/<A>/properties",
+         "query": "",
+         "request": null,
+         "response": {
+          "notes": {
+           "_list": true,
+           "count": 26
+          }
+         },
+         "status": 200
+        },
+        {
+         "auth": "bearer:trust:A-B",
+         "children": [],
+         "headers": {
+          "content-type": "application/json"
+         },
+         "host": "wire_app",
+         "method": "GET",
+         "path": "/<A>/properties/notes",
+         "query": "",
+         "request": null,
+         "response": [
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          },
+          {
+           "n": 26
+          }
+         ],
+         "status": 200
+        },
+        {
          "actor": "<B>",
          "data": {
-          "notes": "[Bulk update: 26 items updated, 0 items deleted]"
+          "notes": {
+           "_list": true,
+           "items": [
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            },
+            {
+             "n": 26
+            }
+           ]
+          }
          },
          "event": "subscription_data",
          "peer": "<A>",
-         "sequence": 5,
+         "sequence": 8,
          "target": "properties",
-         "type": "diff"
+         "type": "resync"
         }
        ],
        "headers": {},
@@ -887,15 +1578,15 @@
        "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
        "query": "",
        "request": {
-        "data": {
-         "notes": "[Bulk update: 26 items updated, 0 items deleted]"
-        },
         "granularity": "high",
         "id": "<A>",
-        "sequence": 5,
+        "sequence": 8,
         "subscriptionid": "<sub1>",
+        "subtarget": "",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-offset>",
+        "type": "resync",
+        "url": "http://<wire_app>/<A>/properties"
        },
        "response": null,
        "status": 204
@@ -1065,29 +1756,44 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 2 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 0, \"old_item\": {\"id\": \"a\", \"text\": \"one\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 25 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 2}, \"index\": 1, \"old_item\": {\"id\": \"b\", \"text\": \"two\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 26 items updated, 0 items deleted]\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 0, \"old_item\": {\"n\": 2}}}",
          "sequence": 5,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": \"[Bulk update: 1 items updated, 0 items deleted]\", \"color\": \"red\"}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 2, \"item\": {\"n\": 25}, \"index\": 1, \"old_item\": {\"n\": 2}}}",
          "sequence": 6,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"extend\", \"length\": 25, \"items\": [{\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}, {\"n\": 25}]}}",
+         "sequence": 7,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"color\": \"red\"}",
+         "sequence": 9,
+         "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"update\", \"length\": 26, \"item\": {\"n\": \"mixed\"}, \"index\": 0, \"old_item\": {\"n\": 26}}}",
+         "sequence": 10,
          "timestamp": "<ts:stored>"
         }
        ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 6,
+       "sequence": 10,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -1099,7 +1805,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 6,
+       "sequence": 10,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -1123,12 +1829,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 6,
+        "last_seq": 10,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 6
+        "version": 10
        }
       ],
       "peer_permissions": {
@@ -1200,21 +1906,88 @@
        "lists": {
         "notes": [
          {
-          "id": "a",
-          "text": "one"
+          "n": "mixed"
          },
          {
-          "id": "b",
-          "text": "two"
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
+         },
+         {
+          "n": 26
          }
         ]
        },
        "scalars": {
         "color": {
          "value": "red"
-        },
-        "notes": {
-         "value": "[Bulk update: 1 items updated, 0 items deleted]"
         }
        }
       },
@@ -1224,7 +1997,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 6,
+        "sequence": 10,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -1261,12 +2034,11 @@
         {
          "actor": "<B>",
          "data": {
-          "color": "red",
-          "notes": "[Bulk update: 1 items updated, 0 items deleted]"
+          "color": "red"
          },
          "event": "subscription_data",
          "peer": "<A>",
-         "sequence": 6,
+         "sequence": 9,
          "target": "properties",
          "type": "diff"
         }
@@ -1278,12 +2050,67 @@
        "query": "",
        "request": {
         "data": {
-         "color": "red",
-         "notes": "[Bulk update: 1 items updated, 0 items deleted]"
+         "color": "red"
         },
         "granularity": "high",
         "id": "<A>",
-        "sequence": 6,
+        "sequence": 9,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:space>"
+       },
+       "response": null,
+       "status": 204
+      },
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": {
+          "notes": {
+           "index": 0,
+           "item": {
+            "n": "mixed"
+           },
+           "length": 26,
+           "list": "notes",
+           "old_item": {
+            "n": 26
+           },
+           "operation": "update"
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 10,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_peer_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "notes": {
+          "index": 0,
+          "item": {
+           "n": "mixed"
+          },
+          "length": 26,
+          "list": "notes",
+          "old_item": {
+           "n": 26
+          },
+          "operation": "update"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 10,
         "subscriptionid": "<sub1>",
         "target": "properties",
         "timestamp": "<ts:space>"

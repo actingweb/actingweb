@@ -4,12 +4,13 @@ Simplified subscription management for ActingWeb actors.
 
 import contextvars
 import functools
+import json
 import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..actor import Actor as CoreActor
 from ..actor import TrustReplaced
@@ -174,6 +175,56 @@ class SubscriptionWithDiffs:
             True if the diff was cleared successfully, False otherwise
         """
         return bool(self._core_sub.clear_diff(seqnr=seqnr))
+
+
+def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
+    """A single property's 2xx baseline as the value it is: an empty body
+    or an empty JSON object is empty (``{subtarget: ""}``, which a replica
+    stores as nothing); a body that is not JSON is the property's text only
+    when the publisher itself answered (no redirect followed) as
+    ``application/json``, otherwise it is a failed fetch (None: a login page
+    behind a proxy is not the value); anything else as parsed."""
+    if response != {}:
+        return response
+    raw = proxy.last_response_message
+    text = (
+        raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+    ).strip()
+    if not text:
+        return {subtarget: ""}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = _NOT_JSON
+    if parsed == {}:
+        return {subtarget: ""}
+    if not _own_json_answer(proxy):
+        return None
+    return text
+
+
+def _own_json_answer(proxy: Any) -> bool:
+    """The last answer was the publisher's own JSON: not redirected, and
+    ``application/json`` (any case, parameters ignored)."""
+    if getattr(proxy, "last_response_redirected", False):
+        return False
+    content_type = str(getattr(proxy, "last_response_content_type", "") or "")
+    return content_type.split(";", 1)[0].strip().lower() == "application/json"
+
+
+def _confirms_list(meta: Any, proxy: Any) -> bool:
+    """The metadata route answered for a list: a non-empty object without
+    ``error``, not reached through a redirect (a login page parses as
+    ``{}``)."""
+    return (
+        isinstance(meta, dict)
+        and bool(meta)
+        and "error" not in meta
+        and not getattr(proxy, "last_response_redirected", False)
+    )
+
+
+_NOT_JSON = object()
 
 
 @dataclass
@@ -400,8 +451,14 @@ class SubscriptionManager:
             subtarget=subtarget or None,
             resource=resource or None,
         )
+        if subtarget and transformed_data == {subtarget: ""}:
+            # Not there yet: at a first subscription nothing is stored to
+            # delete, so no baseline, as before 3.16.
+            transformed_data = None
 
-        if transformed_data and config.auto_storage:
+        if (
+            transformed_data is not None if subtarget else transformed_data
+        ) and config.auto_storage:
             # Store baseline data if auto_storage is enabled
             from ..remote_storage import RemotePeerStore
             from .actor_interface import ActorInterface
@@ -412,7 +469,12 @@ class SubscriptionManager:
                 peer_id=peer_id,
                 validate_peer_id=False,
             )
-            store.apply_resync_data(transformed_data)
+            store.apply_resync_data(
+                transformed_data,
+                subtarget=subtarget or None,
+                resource=resource or None,
+                target=target,
+            )
             logger.info(f"Stored initial baseline for {peer_id} from {target}")
 
         # Fetch peer metadata during initial subscription (independent of storage)
@@ -499,8 +561,12 @@ class SubscriptionManager:
             subtarget=subtarget or None,
             resource=resource or None,
         )
+        if subtarget and transformed_data == {subtarget: ""}:
+            transformed_data = None  # as the synchronous subscribe
 
-        if transformed_data and config.auto_storage:
+        if (
+            transformed_data is not None if subtarget else transformed_data
+        ) and config.auto_storage:
             # Store baseline data if auto_storage is enabled
             from ..remote_storage import RemotePeerStore
             from .actor_interface import ActorInterface
@@ -511,7 +577,12 @@ class SubscriptionManager:
                 peer_id=peer_id,
                 validate_peer_id=False,
             )
-            store.apply_resync_data(transformed_data)
+            store.apply_resync_data(
+                transformed_data,
+                subtarget=subtarget or None,
+                resource=resource or None,
+                target=target,
+            )
             logger.info(f"Stored initial baseline for {peer_id} from {target}")
 
         # Fetch peer metadata during initial subscription (independent of storage)
@@ -1017,6 +1088,11 @@ class SubscriptionManager:
         if config is None:
             config = SubscriptionProcessingConfig(enabled=True)
 
+        if self._rebuild_owed_and_due(peer_id, subscription_id, config):
+            # An owed rebuild waits for no further traffic (3.16): a sync runs
+            # it instead of applying retained diffs to a stale replica.
+            return self.rebuild_subscription(peer_id, subscription_id, config=config)
+
         # Verify local subscription exists
         sub = self.get_callback_subscription(peer_id, subscription_id)
         if not sub:
@@ -1095,8 +1171,26 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if transformed_data:
-                # Store baseline data
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # A failed fetch (an error, a redirect, an answer that is not
+                # the publisher's own): not a success, and the sequence stays.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
+            if transformed_data is not None if sub.subtarget else transformed_data:
+                # Store baseline data (a single property's falsy value is a
+                # value, 3.16)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -1107,7 +1201,12 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(transformed_data)
+                store.apply_resync_data(
+                    transformed_data,
+                    subtarget=sub.subtarget or None,
+                    target=sub.target,
+                    resource=sub.resource or None,
+                )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
 
             # Update local subscription sequence after baseline sync
@@ -1176,6 +1275,7 @@ class SubscriptionManager:
         # Process each diff
         diffs_processed = 0
         in_flight = False
+        rebuild_needed = False
         max_sequence = 0
 
         # Set up handler based on config
@@ -1188,9 +1288,33 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
                 if cb.callback_type == CallbackType.RESYNC:
-                    store.apply_resync_data(cb.data)
+                    applied = store.apply_resync_data(
+                        cb.data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    # As the callback handler: a baseline settles an owed
+                    # rebuild only when it stored everything and carried each
+                    # owed list.
+                    owed = CallbackProcessor(actor=actor_interface).rebuild_state(
+                        peer_id, subscription_id
+                    )["lists"]
+                    missing = [n for n in owed if n not in applied]
+                    if not applied.skipped and (applied.failed or missing):
+                        cb.out_of_step = {
+                            "list": (applied.failed or missing)[0],
+                            "operation": "resync",
+                            "why": "the baseline did not settle the replica",
+                        }
                 else:
-                    store.apply_callback_data(cb.data)
+                    applied = store.apply_callback_data(
+                        cb.data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    cb.out_of_step = applied.out_of_step
 
         # Create callback processor if sequence tracking is enabled
         if config.auto_sequence:
@@ -1224,6 +1348,12 @@ class SubscriptionManager:
                     in_flight = True
                     break
 
+                if result == ProcessResult.REBUILD:
+                    # The processor advanced through this diff and dropped
+                    # the rest of its batch: stop, the rebuild replaces it.
+                    rebuild_needed = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -1241,11 +1371,24 @@ class SubscriptionManager:
                         peer_id=peer_id,
                         validate_peer_id=False,
                     )
-                    store.apply_callback_data(data)
+                    applied = store.apply_callback_data(
+                        data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    if applied.out_of_step:
+                        # Records nothing for this or later diffs: the
+                        # rebuild replaces the replica.
+                        rebuild_needed = True
+                        break
 
                 diffs_processed += 1
                 if seq > max_sequence:
                     max_sequence = seq
+
+        if rebuild_needed:
+            return self.rebuild_subscription(peer_id, subscription_id, config=config)
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
@@ -1260,37 +1403,45 @@ class SubscriptionManager:
                 f"fetching baseline for subscription {subscription_id}"
             )
 
-            # Construct target path for baseline fetch
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
+            # Through the shared fetch: a subtarget's list, value, gone and
+            # failure are told apart as everywhere else (3.16).
+            transformed_data = self._fetch_and_transform_baseline(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+            )
 
-            baseline_response = proxy.get_resource(path=target_path)
-
-            if baseline_response and "error" not in baseline_response:
-                # Transform list metadata if needed
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = self._transform_baseline_list_properties(
-                        baseline_data=baseline_response,
-                        peer_id=peer_id,
-                        target=sub.target,
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # As on the no-diffs path: a single property's baseline that
+                # could not be fetched is a failed sync.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
+            if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(
                     actor=actor_interface,
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-                store.apply_resync_data(transformed_data)
+                store.apply_resync_data(
+                    transformed_data,
+                    subtarget=sub.subtarget or None,
+                    target=sub.target,
+                    resource=sub.resource or None,
+                )
                 logger.info(
                     f"Stored baseline data for subscription {subscription_id} "
                     f"after rejecting {diffs_fetched} duplicate diffs"
@@ -1889,6 +2040,11 @@ class SubscriptionManager:
         if config is None:
             config = SubscriptionProcessingConfig(enabled=True)
 
+        if self._rebuild_owed_and_due(peer_id, subscription_id, config):
+            return await self.rebuild_subscription_async(
+                peer_id, subscription_id, config=config
+            )
+
         # Verify local subscription exists
         sub = self.get_callback_subscription(peer_id, subscription_id)
         if not sub:
@@ -1966,8 +2122,26 @@ class SubscriptionManager:
                 resource=sub.resource,
             )
 
-            if transformed_data:
-                # Store baseline data
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # A failed fetch (an error, a redirect, an answer that is not
+                # the publisher's own): not a success, and the sequence stays.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=0,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
+            if transformed_data is not None if sub.subtarget else transformed_data:
+                # Store baseline data (a single property's falsy value is a
+                # value, 3.16)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -1978,7 +2152,12 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(transformed_data)
+                store.apply_resync_data(
+                    transformed_data,
+                    subtarget=sub.subtarget or None,
+                    target=sub.target,
+                    resource=sub.resource or None,
+                )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
 
             # Update local subscription sequence after baseline sync
@@ -2044,6 +2223,7 @@ class SubscriptionManager:
 
         diffs_processed = 0
         in_flight = False
+        rebuild_needed = False
         max_sequence = 0
 
         # Async handler for callback processing
@@ -2056,9 +2236,33 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
                 if cb.callback_type == CallbackType.RESYNC:
-                    store.apply_resync_data(cb.data)
+                    applied = store.apply_resync_data(
+                        cb.data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    # As the callback handler: a baseline settles an owed
+                    # rebuild only when it stored everything and carried each
+                    # owed list.
+                    owed = CallbackProcessor(actor=actor_interface).rebuild_state(
+                        peer_id, subscription_id
+                    )["lists"]
+                    missing = [n for n in owed if n not in applied]
+                    if not applied.skipped and (applied.failed or missing):
+                        cb.out_of_step = {
+                            "list": (applied.failed or missing)[0],
+                            "operation": "resync",
+                            "why": "the baseline did not settle the replica",
+                        }
                 else:
-                    store.apply_callback_data(cb.data)
+                    applied = store.apply_callback_data(
+                        cb.data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    cb.out_of_step = applied.out_of_step
 
         if config.auto_sequence:
             processor = CallbackProcessor(
@@ -2090,6 +2294,12 @@ class SubscriptionManager:
                     in_flight = True
                     break
 
+                if result == ProcessResult.REBUILD:
+                    # The processor advanced through this diff and dropped
+                    # the rest of its batch: stop, the rebuild replaces it.
+                    rebuild_needed = True
+                    break
+
                 if result == ProcessResult.PROCESSED:
                     diffs_processed += 1
 
@@ -2106,11 +2316,26 @@ class SubscriptionManager:
                         peer_id=peer_id,
                         validate_peer_id=False,
                     )
-                    store.apply_callback_data(data)
+                    applied = store.apply_callback_data(
+                        data,
+                        subtarget=sub.subtarget or None,
+                        target=sub.target,
+                        resource=sub.resource or None,
+                    )
+                    if applied.out_of_step:
+                        # Records nothing for this or later diffs: the
+                        # rebuild replaces the replica.
+                        rebuild_needed = True
+                        break
 
                 diffs_processed += 1
                 if seq > max_sequence:
                     max_sequence = seq
+
+        if rebuild_needed:
+            return await self.rebuild_subscription_async(
+                peer_id, subscription_id, config=config
+            )
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
@@ -2125,39 +2350,44 @@ class SubscriptionManager:
                 f"fetching baseline for subscription {subscription_id}"
             )
 
-            # Construct target path for baseline fetch
-            target_path = sub.target
-            if sub.subtarget:
-                target_path = f"{target_path}/{sub.subtarget}"
-            if sub.resource:
-                target_path = f"{target_path}/{sub.resource}"
+            # Through the shared fetch (as the synchronous sync).
+            transformed_data = await self._fetch_and_transform_baseline_async(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+            )
 
-            baseline_response = await proxy.get_resource_async(path=target_path)
-
-            if baseline_response and "error" not in baseline_response:
-                # Transform list metadata if needed
-                if (
-                    sub.target == "properties"
-                    and not sub.subtarget
-                    and not sub.resource
-                ):
-                    transformed_data = (
-                        await self._transform_baseline_list_properties_async(
-                            baseline_data=baseline_response,
-                            peer_id=peer_id,
-                            target=sub.target,
-                        )
-                    )
-                else:
-                    transformed_data = baseline_response
-
+            if (
+                sub.target == "properties"
+                and sub.subtarget
+                and not sub.resource
+                and transformed_data is None
+            ):
+                # As on the no-diffs path: a single property's baseline that
+                # could not be fetched is a failed sync.
+                return SubscriptionSyncResult(
+                    subscription_id=subscription_id,
+                    success=False,
+                    diffs_fetched=diffs_fetched,
+                    diffs_processed=0,
+                    final_sequence=0,
+                    error=f"The baseline of {sub.subtarget!r} could not be fetched",
+                    error_code=502,
+                )
+            if transformed_data is not None:
                 # Apply baseline data
                 store = RemotePeerStore(
                     actor=actor_interface,
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-                store.apply_resync_data(transformed_data)
+                store.apply_resync_data(
+                    transformed_data,
+                    subtarget=sub.subtarget or None,
+                    target=sub.target,
+                    resource=sub.resource or None,
+                )
                 logger.info(
                     f"Stored baseline data for subscription {subscription_id} "
                     f"after rejecting {diffs_fetched} duplicate diffs"
@@ -2251,13 +2481,302 @@ class SubscriptionManager:
             in_flight=in_flight,
         )
 
+    def rebuild_subscription(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+        *,
+        force: bool = False,
+    ) -> SubscriptionSyncResult:
+        """Rebuild this subscription's replica from a baseline, for a replica
+        that could not apply a list diff (it no longer holds what the
+        publisher's list held).
+
+        Not ``sync_subscription()``: that applies the publisher's retained
+        diffs first, which the replica may already hold. In this order:
+        reserve the attempt (``CallbackProcessor.begin_rebuild``: at most one
+        attempt a minute per subscription, successful or not, and never two
+        at once; ``force`` skips the interval, not the race); read the
+        subscription's sequence from the publisher; fetch the baseline; read
+        the sequence again, and fetch again (up to three times) when it moved,
+        so the baseline matches the sequence recorded; apply it; delete what
+        the baseline no longer carries (at target level every replica name
+        it does not carry, at subtarget level the subtarget, and each list
+        recorded as out of step); record the sequence (never moving it
+        backwards), prune the pending queue through it and clear the
+        publisher's diffs up to it; settle the owed rebuild. A sequence that
+        kept moving, or an entry that could not be stored, leaves the rebuild
+        owed after the rest is applied. A failure leaves it owed (the next
+        callback or sync after the interval runs it again).
+        """
+        from ..callback_processor import CallbackProcessor
+        from ..remote_storage import RemotePeerStore
+        from ..replica_revocation import stores_another_target
+        from ..subscription import Subscription
+        from ..subscription_config import SubscriptionProcessingConfig
+        from .actor_interface import ActorInterface
+
+        if config is None:
+            config = SubscriptionProcessingConfig(enabled=True)
+        actor_interface = ActorInterface(self._core_actor)
+        processor = CallbackProcessor(
+            actor=actor_interface,
+            gap_timeout_seconds=config.gap_timeout_seconds,
+            max_pending=config.max_pending,
+        )
+
+        def result(
+            success: bool, error: str | None = None, code: int | None = None
+        ) -> SubscriptionSyncResult:
+            return SubscriptionSyncResult(
+                subscription_id=subscription_id,
+                success=success,
+                diffs_fetched=0,
+                diffs_processed=1 if success else 0,
+                final_sequence=0,
+                error=error,
+                error_code=code,
+            )
+
+        def failed(error: str, code: int = 502) -> SubscriptionSyncResult:
+            logger.warning(
+                f"Rebuild of {peer_id}:{subscription_id} failed ({error}); the "
+                "rebuild stays owed"
+            )
+            processor.settle_rebuild(peer_id, subscription_id, rebuilt=False)
+            return result(False, error, code)
+
+        if not processor.begin_rebuild(peer_id, subscription_id, force=force):
+            logger.info(
+                f"Rebuild of {peer_id}:{subscription_id} not started: another "
+                "attempt started inside the rebuild interval"
+            )
+            return result(False, "A rebuild was attempted inside the interval", 429)
+
+        sub = self.get_callback_subscription(peer_id, subscription_id)
+        if not sub:
+            return failed("Subscription not found", 404)
+        proxy = self._get_peer_proxy(peer_id)
+        if proxy is None or proxy.trust is None:
+            return failed("No trust relationship with peer", 404)
+        path = f"subscriptions/{self._core_actor.id}/{subscription_id}"
+
+        def read_sequence() -> int | None:
+            response = proxy.get_resource(path=path)
+            if response is None or "error" in response:
+                return None
+            sequence = response.get("sequence", 0)
+            if not isinstance(sequence, int) or isinstance(sequence, bool):
+                return None
+            return sequence
+
+        # The lists owed and the recorded sequence before the baseline is
+        # read: a list marked, or any callback recorded, while it is read and
+        # applied leaves the rebuild owed (that callback's change may be in
+        # the baseline and applied again, or overwritten by it).
+        owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
+        sub_obj = Subscription(
+            actor_id=self._core_actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._core_actor.config,
+        )
+        recorded_before = (
+            (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+        )
+        settled = True
+        baseline: Any = None
+        sequence: int | None = None
+        fetched: Any
+        for _ in range(3):
+            sequence = read_sequence()
+            if sequence is None:
+                return failed("Failed to read the subscription's sequence")
+            fetched = self._fetch_and_transform_baseline(
+                peer_id=peer_id,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
+                resource=sub.resource or None,
+            )
+            if fetched is None:
+                return failed("Failed to fetch the baseline")
+            baseline = fetched
+            after = read_sequence()
+            if after is None:
+                return failed("Failed to read the subscription's sequence")
+            if after == sequence:
+                break
+        else:
+            # Still moving: apply the latest baseline at the sequence read
+            # before it (a diff after it may apply twice) and stay owed.
+            logger.warning(
+                f"Rebuild of {peer_id}:{subscription_id}: the publisher's "
+                "sequence kept moving; the rebuild stays owed"
+            )
+            settled = False
+        assert sequence is not None
+        # A resource-level baseline may be any value (merged at its path).
+        baseline_data: dict[str, Any] = cast(dict[str, Any], baseline)
+
+        if config.auto_storage:
+            store = RemotePeerStore(
+                actor=actor_interface, peer_id=peer_id, validate_peer_id=False
+            )
+            applied = store.apply_resync_data(
+                baseline_data,
+                subtarget=sub.subtarget or None,
+                target=sub.target,
+                resource=sub.resource or None,
+            )
+            if applied.failed:
+                logger.warning(
+                    f"Rebuild of {peer_id}:{subscription_id}: {applied.failed!r} "
+                    "could not be stored; the rebuild stays owed"
+                )
+                settled = False
+            carried = set(applied)
+            # A skipped apply (a whole-target subscription stores these
+            # names) sweeps nothing: what this baseline lacks is not stale.
+            stale: set[str] = (
+                set()
+                if applied.skipped
+                else {name for name in owed if name not in carried}
+            )
+            if applied.skipped:
+                pass
+            elif (
+                sub.target == "properties"
+                and not sub.subtarget
+                and isinstance(baseline, dict)
+                and not stores_another_target(
+                    self._core_actor.config, self._core_actor.id or "", peer_id
+                )
+            ):
+                # A whole-target baseline carries every name the peer may
+                # read: a replica name it lacks was deleted at the publisher
+                # (perhaps in the batch this rebuild dropped). Properties
+                # only, and only when no subscription to another target of
+                # the peer stores into the same bucket (its names are not in
+                # this baseline).
+                stale |= {
+                    name
+                    for name in [*store.list_all_lists(), *store.list_scalar_names()]
+                    if name not in carried
+                }
+            elif sub.subtarget and not sub.resource and sub.subtarget not in carried:
+                stale.add(sub.subtarget)
+            for name in sorted(stale):
+                if store._list_exists(name):  # noqa: SLF001
+                    store.delete_list(name)
+                else:
+                    store.delete_value(name)
+        # Read afresh: a Subscription serves its first read from a cache, and
+        # the check below must see what a callback recorded meanwhile.
+        sub_obj = Subscription(
+            actor_id=self._core_actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._core_actor.config,
+        )
+        if sub_obj.handle:
+            current = sub_obj.get() or {}
+            recorded = current.get("sequence", 0)
+            if not isinstance(recorded, int) or recorded < sequence:
+                # Never backwards: a callback processed while this ran may
+                # have recorded a later sequence.
+                sub_obj.handle.modify(seqnr=sequence)
+            if recorded != recorded_before:
+                logger.warning(
+                    f"Rebuild of {peer_id}:{subscription_id}: a callback "
+                    f"(sequence {recorded}) was processed during it; the "
+                    "rebuild stays owed"
+                )
+                settled = False
+        processor._prune_pending(peer_id, subscription_id, sequence)  # noqa: SLF001
+        if sequence > 0:
+            proxy.change_resource(path=path, params={"sequence": sequence})
+        if settled and set(
+            processor.rebuild_state(peer_id, subscription_id)["lists"]
+        ) - set(owed):
+            # A list was marked out of step after the baseline was read.
+            settled = False
+        if not processor.settle_rebuild(peer_id, subscription_id, rebuilt=settled):
+            logger.error(
+                f"Rebuild of {peer_id}:{subscription_id}: settling its state lost "
+                "every compare-and-swap; it may run again after the interval"
+            )
+        logger.info(
+            f"Rebuilt the replica of {peer_id}:{subscription_id} from a baseline "
+            f"at sequence {sequence}"
+        )
+        return SubscriptionSyncResult(
+            subscription_id=subscription_id,
+            success=settled,
+            diffs_fetched=0,
+            diffs_processed=1,
+            final_sequence=sequence,
+            error=None if settled else "The rebuild stays owed",
+        )
+
+    def _rebuild_owed_and_due(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig",
+    ) -> bool:
+        """Whether this subscription's replica owes a rebuild whose interval
+        has passed (auto-storage only; a read fault answers False and the
+        sync runs as before)."""
+        if not config.auto_storage:
+            return False
+        from ..callback_processor import CallbackProcessor
+        from .actor_interface import ActorInterface
+
+        try:
+            processor = CallbackProcessor(actor=ActorInterface(self._core_actor))
+            state = processor.rebuild_state(peer_id, subscription_id)
+        except Exception as e:  # folds DbError: the sync below still runs
+            logger.warning(f"Reading the rebuild state of {peer_id} faulted: {e}")
+            return False
+        if not state["owed"]:
+            return False
+        return processor._rebuild_due(  # noqa: SLF001
+            {"rebuild_owed": True, "rebuilt_at": state["rebuilt_at"]}
+        )
+
+    async def rebuild_subscription_async(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+        *,
+        force: bool = False,
+    ) -> SubscriptionSyncResult:
+        """``rebuild_subscription()`` for async callers (run in a worker
+        thread)."""
+        import asyncio
+
+        return await asyncio.to_thread(
+            functools.partial(
+                self.rebuild_subscription,
+                peer_id,
+                subscription_id,
+                config,
+                force=force,
+            )
+        )
+
     def _fetch_and_transform_baseline(
         self,
         peer_id: str,
         target: str,
         subtarget: str | None = None,
         resource: str | None = None,
-    ) -> dict[str, Any] | None:
+        known_list: bool = False,
+    ) -> Any:
         """
         Fetch and transform baseline data from peer (synchronous).
 
@@ -2294,6 +2813,48 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
+        if target == "properties" and subtarget and not resource:
+            # A single property's baseline, told apart by facts on the wire
+            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # fetch; a 2xx body is the value (the spec's properties are
+            # untyped: an empty body or ``{}`` is empty, text is text), and
+            # an array is a list's items only when the spec's metadata route
+            # answers for it (404 there: a value that is an array).
+            code = int(proxy.last_response_code or 0)
+            if (
+                baseline_response is not None
+                and code == 404
+                and not getattr(proxy, "last_response_redirected", False)
+            ):
+                return {subtarget: ""}
+            if baseline_response is None or not 200 <= code <= 299:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
+                )
+                return None
+            value = _subtarget_value(baseline_response, proxy, subtarget)
+            if value is None:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: a body that is "
+                    "not JSON and not the publisher's own answer"
+                )
+                return None
+            if not isinstance(value, list):
+                return value
+            if known_list:
+                return {subtarget: {"_list": True, "items": value}}
+            meta = proxy.get_resource(path=f"properties/{subtarget}/metadata")
+            if _confirms_list(meta, proxy):
+                return {subtarget: {"_list": True, "items": value}}
+            if proxy.last_response_code == 404 and not getattr(
+                proxy, "last_response_redirected", False
+            ):
+                return value
+            logger.warning(
+                f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                f"list from a value ({proxy.last_response_code})"
+            )
+            return None
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
@@ -2308,8 +2869,7 @@ class SubscriptionManager:
                 peer_id=peer_id,
                 target=target,
             )
-        else:
-            return baseline_response
+        return baseline_response
 
     async def _fetch_and_transform_baseline_async(
         self,
@@ -2317,7 +2877,8 @@ class SubscriptionManager:
         target: str,
         subtarget: str | None = None,
         resource: str | None = None,
-    ) -> dict[str, Any] | None:
+        known_list: bool = False,
+    ) -> Any:
         """
         Fetch and transform baseline data from peer (asynchronous).
 
@@ -2354,6 +2915,50 @@ class SubscriptionManager:
             logger.warning(f"Failed to fetch baseline for {peer_id} from {target}: {e}")
             return None
 
+        if target == "properties" and subtarget and not resource:
+            # A single property's baseline, told apart by facts on the wire
+            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # fetch; a 2xx body is the value (the spec's properties are
+            # untyped: an empty body or ``{}`` is empty, text is text), and
+            # an array is a list's items only when the spec's metadata route
+            # answers for it (404 there: a value that is an array).
+            code = int(proxy.last_response_code or 0)
+            if (
+                baseline_response is not None
+                and code == 404
+                and not getattr(proxy, "last_response_redirected", False)
+            ):
+                return {subtarget: ""}
+            if baseline_response is None or not 200 <= code <= 299:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id} failed ({code})"
+                )
+                return None
+            value = _subtarget_value(baseline_response, proxy, subtarget)
+            if value is None:
+                logger.warning(
+                    f"Baseline of {subtarget!r} from {peer_id}: a body that is "
+                    "not JSON and not the publisher's own answer"
+                )
+                return None
+            if not isinstance(value, list):
+                return value
+            if known_list:
+                return {subtarget: {"_list": True, "items": value}}
+            meta = await proxy.get_resource_async(
+                path=f"properties/{subtarget}/metadata"
+            )
+            if _confirms_list(meta, proxy):
+                return {subtarget: {"_list": True, "items": value}}
+            if proxy.last_response_code == 404 and not getattr(
+                proxy, "last_response_redirected", False
+            ):
+                return value
+            logger.warning(
+                f"Baseline of {subtarget!r} from {peer_id}: could not tell a "
+                f"list from a value ({proxy.last_response_code})"
+            )
+            return None
         if not baseline_response or "error" in baseline_response:
             logger.warning(
                 f"No baseline data available for {peer_id} from {target}: "
@@ -2364,7 +2969,7 @@ class SubscriptionManager:
         # For properties subscriptions, transform list metadata into actual items
         if target == "properties" and not subtarget and not resource:
             return await self._transform_baseline_list_properties_async(
-                baseline_data=baseline_response,
+                baseline_data=cast(dict[str, Any], baseline_response),
                 peer_id=peer_id,
                 target=target,
             )
@@ -2585,8 +3190,22 @@ class SubscriptionManager:
                 # A failed fetch carries no permissions: it never replaces
                 # the stored copy (as in sync_peer).
                 if not permissions.fetch_error:
+                    from ..replica_revocation import cleanup_after_store
+
                     store = get_peer_permission_store(actor_config)
-                    store.store_permissions(permissions)
+                    old_grant = (
+                        store.read_stored_permissions(actor_id, peer_id)[1]
+                        if getattr(actor_config, "auto_delete_on_revocation", False)
+                        else None
+                    )
+                    if store.store_permissions(permissions):
+                        cleanup_after_store(
+                            actor_config,
+                            self._core_actor,
+                            peer_id,
+                            old_grant,
+                            permissions,
+                        )
                     logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
@@ -2670,8 +3289,22 @@ class SubscriptionManager:
                 # A failed fetch carries no permissions: it never replaces
                 # the stored copy (as in sync_peer).
                 if not permissions.fetch_error:
+                    from ..replica_revocation import cleanup_after_store
+
                     store = get_peer_permission_store(actor_config)
-                    store.store_permissions(permissions)
+                    old_grant = (
+                        store.read_stored_permissions(actor_id, peer_id)[1]
+                        if getattr(actor_config, "auto_delete_on_revocation", False)
+                        else None
+                    )
+                    if store.store_permissions(permissions):
+                        cleanup_after_store(
+                            actor_config,
+                            self._core_actor,
+                            peer_id,
+                            old_grant,
+                            permissions,
+                        )
                     logger.debug(f"Refreshed peer permissions for {peer_id}")
             except Exception as e:  # folds DbError: cache warm after the subscription and baseline committed
                 logger.warning(f"Failed to refresh peer permissions: {e}")
@@ -2980,8 +3613,22 @@ class SubscriptionManager:
                 # Only store if fetch was successful (no error)
                 # Don't overwrite callback-received permissions with empty data from 404
                 if not permissions.fetch_error:
+                    from ..replica_revocation import cleanup_after_store
+
                     store = get_peer_permission_store(actor_config)
-                    store.store_permissions(permissions)
+                    old_grant = (
+                        store.read_stored_permissions(actor_id, peer_id)[1]
+                        if getattr(actor_config, "auto_delete_on_revocation", False)
+                        else None
+                    )
+                    if store.store_permissions(permissions):
+                        cleanup_after_store(
+                            actor_config,
+                            self._core_actor,
+                            peer_id,
+                            old_grant,
+                            permissions,
+                        )
                     logger.debug(
                         f"Refreshed peer permissions (async) during sync_peer for {peer_id}"
                     )

@@ -23,6 +23,9 @@ import json
 import pytest
 
 from actingweb.property_list import ListProperty
+from tests._attribute_parity import (
+    list_class,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 from tests.test_property_list_integrity import (
     CountingPropertyDb,
     FakePropertyDb,
@@ -269,6 +272,7 @@ class TestCountHintRegressionCompatibility:
         assert fresh.get_metadata()["length"] == 1
         assert _meta(fake_store, actor_id, name)["count_hint"] == 1
 
+    @pytest.mark.property_only("the property v1 format and its migration")
     def test_v1_lists_are_untouched(self, monkeypatch, fake_store):
         from tests.test_property_list_integrity import _seed_list
 

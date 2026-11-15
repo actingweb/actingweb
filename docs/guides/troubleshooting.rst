@@ -285,6 +285,69 @@ Peer Data Not Cleaned Up After Trust Deletion
         store = RemotePeerStore(actor, peer_id)
         store.delete_all()
 
+``ListLayoutConflictError`` on an attribute list
+------------------------------------------------
+
+- **Symptom**: every access to an attribute list (``actor.attribute_lists(...)``,
+  or a peer's replica list read through ``RemotePeerStore``) raises
+  ``ListLayoutConflictError`` ("rows of both layouts"), or
+  ``actingweb-verify-property-lists --attributes`` reports a list as UNHEALTHY with
+  rows of both layouts.
+- **Cause**: the list was converted to the 3.16 layout, and a pre-3.16 process (a
+  rolling deploy, or a rollback) then wrote it in the old layout beside the new one.
+  Neither copy is known to be right, so nothing is merged.
+- **Fixes**:
+
+  1. **A replica** (bucket ``remote:<peer_id>``): nothing to do by hand. The next
+     diff for that list finds it out of step and the replica is rebuilt from the
+     publisher. To clear it at once, run
+     ``actingweb-verify-property-lists --attributes --repair --delete-damaged-replicas``
+     (it deletes the list; the next baseline rebuilds it), or
+     ``actor.subscriptions.rebuild_subscription(peer_id, subscription_id, force=True)``.
+  2. **An application's own bucket**: nothing rebuilds it, and ``--repair`` leaves it
+     unhealthy. Decide which copy is right, then ``clear()`` or ``delete()`` the list
+     (both remove the rows of both layouts) and write it again.
+  3. Finish the rolling deploy before lists convert, so no pre-3.16 process writes
+     them; see :doc:`../migration/v3.16` ("Attribute lists and list diffs").
+
+Repeated rebuild warnings for one subscription
+----------------------------------------------
+
+- **Symptom**: the subscriber logs, for the same peer and subscription, ``Replica of
+  peer ... is out of step: a '<operation>' diff for list '<name>' could not be
+  applied``, followed by ``Rebuild of <peer>:<subscription> ...; it stays owed``
+  or ``Out-of-step diff ... inside the rebuild interval: the rebuild stays owed``,
+  again and again.
+- **Background**: a list diff the replica cannot apply (an index out of range, a
+  damaged or conflicting list, a reference to a spanned item, a scalar for a list's
+  name) has the replica rebuilt from a baseline, at most once a minute per
+  subscription. One warning after a lost callback is expected; a stream is not.
+- **Causes and fixes**:
+
+  1. **The rebuild itself fails.** The WARNING names why. A publisher that answers
+     403 on the subscription or the baseline (its grant or access rows), or cannot be
+     reached, leaves the rebuild owed. Run it by hand to see the result:
+
+     .. code-block:: python
+
+        result = actor.subscriptions.rebuild_subscription(
+            peer_id, subscription_id, force=True
+        )
+        print(result.success, result.error)
+
+  2. **The publisher's sequence keeps moving** (``the publisher's sequence kept
+     moving``): a busy list. The rebuild retries on the next callback after the
+     interval; it settles once the publisher pauses.
+  3. **A baseline entry cannot be stored** (``... could not be stored``): an item
+     over the replica's row limit. That list is deleted and reported, and the
+     rebuild stays owed until the publisher's item shrinks.
+  4. **Overlapping subscriptions** to one peer (a whole-target and a subtarget
+     subscription) deliver every change twice: an ``append`` is then held twice, and
+     a positional diff applied twice can leave the replica out of step. Keep one of
+     them.
+  5. **A publisher older than 3.16** sends REST list edits as scalars; a scalar for
+     a list's name is out of step. Upgrade the publisher.
+
 Subscriber Returning 429 (Too Many Requests)
 --------------------------------------------
 

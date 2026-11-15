@@ -40,7 +40,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"notes\": {\"action\": \"add\", \"index\": 2, \"value\": {\"id\": \"c\", \"text\": \"x\"}}}",
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 3, \"item\": {\"id\": \"c\", \"text\": \"x\"}, \"index\": 2}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -166,19 +166,14 @@
          {
           "id": "b",
           "text": "two"
-         }
-        ]
-       },
-       "scalars": {
-        "notes": {
-         "action": "add",
-         "index": 2,
-         "value": {
+         },
+         {
           "id": "c",
           "text": "x"
          }
-        }
-       }
+        ]
+       },
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -224,12 +219,14 @@
          "actor": "<B>",
          "data": {
           "notes": {
-           "action": "add",
            "index": 2,
-           "value": {
+           "item": {
             "id": "c",
             "text": "x"
-           }
+           },
+           "length": 3,
+           "list": "notes",
+           "operation": "append"
           }
          },
          "event": "subscription_data",
@@ -247,12 +244,14 @@
        "request": {
         "data": {
          "notes": {
-          "action": "add",
           "index": 2,
-          "value": {
+          "item": {
            "id": "c",
            "text": "x"
-          }
+          },
+          "length": 3,
+          "list": "notes",
+          "operation": "append"
          }
         },
         "granularity": "high",

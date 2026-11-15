@@ -12,7 +12,8 @@ from actingweb.property_list import (
     ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,
-    diff_reference,
+    build_list_diff,
+    handle_old_item_fields,
 )
 
 from ..access_decision import (
@@ -321,6 +322,133 @@ def _resource_blob(stored: Any, path: list[str], blob: str) -> str:
     return json.dumps(stored[path[1]])
 
 
+def register_list_diff(
+    myself: Any, config: Any, name: str, operation: str, **fields: Any
+) -> None:
+    """Register a list diff (``build_list_diff``) for ``name`` on the
+    subtarget that is the list's own name (3.16: list edits over REST and
+    the web UI send list diffs, not the scalars they sent before)."""
+    myself.register_diffs(
+        target="properties",
+        subtarget=name,
+        blob=json.dumps(build_list_diff(name, operation, config=config, **fields)),
+    )
+
+
+# A bulk list update over this many changes is announced as one resync of
+# the list after the batch instead of a diff per change (3.16).
+BULK_LIST_DIFF_LIMIT = 25
+
+
+class _PostListDiffs:
+    """What one list key of a ``POST /properties`` announces, recorded as
+    the changes land so a request stopped part way announces what was
+    written: one list diff per change, a run of appends as one ``extend``;
+    or, for a batch over :data:`BULK_LIST_DIFF_LIMIT` changes, one resync
+    of the list once anything was written (a batch stopped part way
+    included). A resync whose request faults is logged, not answered as 503:
+    the batch is committed, and a retried batch would apply its positional
+    deletes to shifted items."""
+
+    def __init__(self, name: str, length: int = 0) -> None:
+        self.name = name
+        self.length = length
+        self.entries: list[dict[str, Any]] = []
+        self.resync = False
+        self.applied = False
+
+    def created(self) -> None:
+        self.entries.append({"operation": "extend", "items": [], "length": self.length})
+
+    def appended(self, item: Any) -> None:
+        if self.resync:
+            self.applied = True
+            return
+        self.entries.append({"operation": "append", "item": item, "index": self.length})
+        self.length += 1
+        self.entries[-1]["length"] = self.length
+
+    def updated(self, index: int, item: Any, **old_fields: Any) -> None:
+        if self.resync:
+            self.applied = True
+            return
+        self.entries.append(
+            {
+                "operation": "update",
+                "item": item,
+                "index": index,
+                "length": self.length,
+                **old_fields,
+            }
+        )
+
+    def deleted(self, index: int, old_fields: dict[str, Any] | None = None) -> None:
+        if self.resync:
+            self.applied = True
+            return
+        self.length = max(self.length - 1, 0)
+        entry: dict[str, Any] = {
+            "operation": "delete",
+            "index": index,
+            "length": self.length,
+        }
+        if old_fields and "old_item" in old_fields:
+            # The receiver tells equal items apart by the index (a batch can
+            # create a duplicate of the item it then deletes).
+            entry["old_item"] = old_fields["old_item"]
+        self.entries.append(entry)
+
+    def diffs(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for entry in self.entries:
+            last = out[-1] if out else None
+            if (
+                entry["operation"] == "append"
+                and last is not None
+                and last["operation"] in ("append", "extend")
+                and not (last["operation"] == "extend" and not last["items"])
+            ):
+                items = (
+                    last["items"] if last["operation"] == "extend" else [last["item"]]
+                )
+                out[-1] = {
+                    "operation": "extend",
+                    "items": [*items, entry["item"]],
+                    "length": entry["length"],
+                }
+            else:
+                out.append(dict(entry))
+        return out
+
+    def register(self, myself: Any, config: Any) -> None:
+        if self.resync:
+            if self.applied:
+                try:
+                    myself.request_resync("properties", self.name)
+                except DbError as e:  # folds DbError: the batch is committed; a 503 would have the client re-apply positional deletes
+                    logger.error(
+                        f"Resync of list {self.name!r} after a bulk update "
+                        f"faulted; its subscribers may be stale until the next "
+                        f"change or resync: {e}"
+                    )
+            return
+        for diff in self.diffs():
+            fields = dict(diff)
+            operation = fields.pop("operation")
+            register_list_diff(myself, config, self.name, operation, **fields)
+
+
+def list_length_hint(list_prop: Any) -> int:
+    """The length a diff carries when the caller has not counted the list:
+    the metadata's (exact under v1, advisory under v2), 0 when unreadable."""
+    try:
+        return int(list_prop.get_metadata().get("length", 0) or 0)
+    except DbError:
+        raise
+    except Exception:
+        return 0
+
+
 def _items_problem(name: str, value: Any) -> str | None:
     """The 400 a bulk list update's ``items`` would answer, checked before
     any key of the request is applied; None when its shape is valid."""
@@ -477,6 +605,27 @@ class PropertiesHandler(_PropertyHandlerBase):
     ) -> None:
         """Write the structured 413 response for a ListItemTooLargeError."""
         _write_list_item_too_large_response(self.response, name, error)
+
+    def _post_list(self, name: str, list_prop: Any, length: int | None = None) -> Any:
+        """The diff recorder for list ``name`` in this POST."""
+        recorder = self._post_lists.get(name)
+        if recorder is None:
+            recorder = _PostListDiffs(
+                name, list_length_hint(list_prop) if length is None else length
+            )
+            self._post_lists[name] = recorder
+        return recorder
+
+    def _register_post_diffs(self, myself: Any, pair: dict[str, Any]) -> None:
+        """Register what a POST changed: the scalar keys as one blob, as
+        before; each list key as its own list diffs on the list's
+        subtarget, or one resync for a batch over the limit."""
+        lists = getattr(self, "_post_lists", {})
+        scalars = {k: v for k, v in pair.items() if k not in lists}
+        if scalars:
+            myself.register_diffs(target="properties", blob=json.dumps(scalars))
+        for recorder in lists.values():
+            recorder.register(myself, self.config)
 
     def _finish_bulk_list_update(
         self,
@@ -1191,8 +1340,11 @@ class PropertiesHandler(_PropertyHandlerBase):
 
                 # Set the item at the index (append if it equals the
                 # current length; otherwise it's a bounds-checked replace)
+                diff_fields: dict[str, Any] = {}
                 if index == length:
                     list_prop.append(item_value)
+                    operation = "append"
+                    diff_fields = {"length": length + 1, "index": length}
                 elif v2_pairs is not None:
                     # v2 replace: a conditional write against the handle
                     # resolved above, not the old unconditional
@@ -1203,6 +1355,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     # metadata CAS exhaustion does -- the client's correct
                     # response is the same either way: re-read and retry.
                     handle = v2_pairs[index][0]
+                    old_fields = handle_old_item_fields(list_prop, handle)
                     if not list_prop.update_by_handle(handle, item_value):
                         self._respond_list_metadata_contended(
                             RuntimeError(
@@ -1211,18 +1364,20 @@ class PropertiesHandler(_PropertyHandlerBase):
                             )
                         )
                         return
+                    operation = "update"
+                    diff_fields = {"length": length, "index": index, **old_fields}
                 else:
                     list_prop[index] = item_value
+                    operation = "update"
+                    diff_fields = {"length": length, "index": index}
 
-                # Register diff
-                myself.register_diffs(
-                    target="properties",
-                    subtarget=name,
-                    blob=json.dumps(
-                        diff_reference(
-                            {"index": index, "value": item_value}, self.config
-                        )
-                    ),
+                register_list_diff(
+                    myself,
+                    self.config,
+                    name,
+                    operation,
+                    item=item_value,
+                    **diff_fields,
                 )
 
                 if self.response:
@@ -1423,6 +1578,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                 self.response.set_status(400)
             return
         pair = {}
+        # The list keys' diffs, kept apart from ``pair``, which is the
+        # response body (3.16: it was the diff too).
+        self._post_lists: dict[str, _PostListDiffs] = {}
         # Every name the request writes is validated and authorised before
         # anything is applied: one refusal is a 403 with nothing changed
         # (3.16, spec: a bulk POST is one operation).
@@ -1445,16 +1603,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     list_prop = getattr(myself.property_lists, prop_name)
                     # The ListProperty is now created with metadata, but no items
 
-                    # Set description and explanation if provided
-                    description = self.request.get("description") or ""
-                    explanation = self.request.get("explanation") or ""
-
-                    if description:
-                        list_prop.set_description(description)
-                    if explanation:
-                        list_prop.set_explanation(explanation)
-
-                    # Execute property post hook if available for list creation
+                    # The post hook first: a refused list leaves nothing behind (3.16)
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -1472,7 +1621,21 @@ class PropertiesHandler(_PropertyHandlerBase):
                                     self.response.set_status(403)
                                 return
 
+                    # Set description and explanation if provided
+                    description = self.request.get("description") or ""
+                    explanation = self.request.get("explanation") or ""
+
+                    if description:
+                        list_prop.set_description(description)
+                    if explanation:
+                        list_prop.set_explanation(explanation)
+                    if not description and not explanation:
+                        # Persist the metadata, or the list does not exist (3.16:
+                        # a form without a description created nothing).
+                        list_prop.set_description("")
+
                     pair[prop_name] = "[Empty list property created]"
+                    self._post_list(prop_name, list_prop).created()
                 else:
                     if self.response:
                         self.response.set_status(500, "List properties not supported")
@@ -1533,8 +1696,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             except (DbError, _HookDenied):
                 # As the JSON branch (3.16): the keys already written get
                 # their diffs before the 503 (or a hook's 403).
-                if pair:
-                    myself.register_diffs(target="properties", blob=json.dumps(pair))
+                self._register_post_diffs(myself, pair)
                 raise
         else:
             try:
@@ -1558,21 +1720,19 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # A storage fault, or a hook's PERMISSION_DENIED, after some
                 # keys were applied: their diffs are registered (subscribers
                 # learn what changed), then 503 or 403.
-                if pair:
-                    myself.register_diffs(target="properties", blob=json.dumps(pair))
+                self._register_post_diffs(myself, pair)
                 raise
             if self.response and self.response.status_code not in (None, 200, 201):
                 # Stopped part way (a 400, 413 or a hook's 403): what was
                 # written before the stop still reaches the subscribers.
-                if pair:
-                    myself.register_diffs(target="properties", blob=json.dumps(pair))
+                self._register_post_diffs(myself, pair)
                 return
         if not pair:
             if self.response:
                 self.response.set_status(403, "No attributes accepted")
             return
         out = json.dumps(pair)
-        myself.register_diffs(target="properties", blob=out)
+        self._register_post_diffs(myself, pair)
         if self.response:
             self.response.write(out)
             self.response.headers["Content-Type"] = "application/json"
@@ -1699,18 +1859,8 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if myself and hasattr(myself, "property_lists"):
                     list_prop = getattr(myself.property_lists, key)
 
-                    # Set description and explanation if provided, or ensure metadata is persisted
-                    description_set = False
-                    if "description" in val:
-                        list_prop.set_description(val["description"])
-                        description_set = True
-                    if "explanation" in val:
-                        list_prop.set_explanation(val["explanation"])
-                    elif not description_set:
-                        # Ensure metadata is persisted even if no description/explanation provided
-                        list_prop.set_description("")
-
-                    # Execute property post hook if available for list creation
+                    # The post hook first: a refused list leaves nothing
+                    # behind (3.16; the metadata was written before it).
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -1723,12 +1873,21 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 [key],
                                 auth_context,
                             )
-                            if transformed is not None:
-                                pair[key] = "[Empty list property created]"
-                            else:
+                            if transformed is None:
                                 continue
-                    else:
-                        pair[key] = "[Empty list property created]"
+
+                    # Set description and explanation if provided, or ensure metadata is persisted
+                    description_set = False
+                    if "description" in val:
+                        list_prop.set_description(val["description"])
+                        description_set = True
+                    if "explanation" in val:
+                        list_prop.set_explanation(val["explanation"])
+                    elif not description_set:
+                        # Ensure metadata is persisted even if no description/explanation provided
+                        list_prop.set_description("")
+                    pair[key] = "[Empty list property created]"
+                    self._post_list(key, list_prop).created()
                 else:
                     # List properties not supported
                     continue
@@ -1743,6 +1902,8 @@ class PropertiesHandler(_PropertyHandlerBase):
                         f"Empty 'items' array for property '{key}': no updates to perform"
                     )
                     pair[key] = "[No items to update]"
+                    # Nothing changed: no diff (it was sent as a scalar).
+                    self._post_lists[key] = _PostListDiffs(key)
                     continue
 
                 # This is a bulk update for a list property
@@ -1780,6 +1941,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                             # row instead.
                             pairs = list_prop.items_with_handles(resolve=False)
                             snapshot_length = len(pairs)
+                            recorder = self._post_list(
+                                key, list_prop, length=snapshot_length
+                            )
                             pending_updates_v2: list[tuple[int, dict[str, Any]]] = []
                             pending_deletes_v2: list[int] = []
                             projected_length = snapshot_length
@@ -1868,6 +2032,16 @@ class PropertiesHandler(_PropertyHandlerBase):
                             # whole-list query) rather than a handle,
                             # since there is no pre-existing row to
                             # address.
+                            changes = sum(
+                                1
+                                for index in final_value_by_index
+                                if index not in skip_new_indices
+                            ) + sum(
+                                1
+                                for index in pending_deletes_v2
+                                if index < snapshot_length
+                            )
+                            recorder.resync = changes > BULK_LIST_DIFF_LIMIT
                             index_succeeded: dict[int, bool] = {}
                             for index in sorted(final_value_by_index):
                                 if index in skip_new_indices:
@@ -1875,10 +2049,18 @@ class PropertiesHandler(_PropertyHandlerBase):
                                     continue
                                 if index < snapshot_length:
                                     handle = pairs[index][0]
+                                    old_fields = handle_old_item_fields(
+                                        list_prop, handle
+                                    )
                                     if list_prop.update_by_handle(
                                         handle, final_value_by_index[index]
                                     ):
                                         index_succeeded[index] = True
+                                        recorder.updated(
+                                            index,
+                                            final_value_by_index[index],
+                                            **old_fields,
+                                        )
                                     else:
                                         logger.warning(
                                             f"Cannot update item at index {index}: concurrently modified since the batch snapshot was read"
@@ -1888,6 +2070,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 else:
                                     list_prop.append(final_value_by_index[index])
                                     index_succeeded[index] = True
+                                    recorder.appended(final_value_by_index[index])
 
                             # Reported per request entry, matching the
                             # v1 branch's accounting, even though a
@@ -1910,8 +2093,12 @@ class PropertiesHandler(_PropertyHandlerBase):
                                     items_deleted += 1
                                 elif index < snapshot_length:
                                     handle = pairs[index][0]
+                                    old_fields = handle_old_item_fields(
+                                        list_prop, handle
+                                    )
                                     if list_prop.delete_by_handle(handle):
                                         items_deleted += 1
+                                        recorder.deleted(index, old_fields)
                                     else:
                                         logger.warning(
                                             f"Cannot delete item at index {index}: concurrently modified since the batch snapshot was read"
@@ -1957,6 +2144,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                         # keep their pre-batch meaning per the ordering
                         # semantics documented above.
                         projected_length = len(list_prop)
+                        recorder = self._post_list(
+                            key, list_prop, length=projected_length
+                        )
 
                         for i, item_spec in enumerate(val["items"]):
                             # Shape checked for the whole request (``_items_problem``).
@@ -2006,6 +2196,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 list_prop.check_item_size(item_data)
                                 pending_updates.append((index, item_data))
 
+                        recorder.resync = (
+                            len(pending_updates) + len(pending_deletes)
+                            > BULK_LIST_DIFF_LIMIT
+                        )
                         # Pass 1: updates, in the given order.
                         for index, item_data in pending_updates:
                             try:
@@ -2014,11 +2208,17 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 # pre_batch_length check above: updates
                                 # never shrink the list, so len() here
                                 # is always >= pre_batch_length.
+                                appends = False
                                 while len(list_prop) <= index:
                                     list_prop.append(None)
+                                    appends = True
                                 # Store the complete object
                                 list_prop[index] = item_data
                                 items_updated += 1
+                                if appends:
+                                    recorder.appended(item_data)
+                                else:
+                                    recorder.updated(index, item_data)
                             except ListItemTooLargeError:
                                 raise
                             except (IndexError, ValueError) as e:
@@ -2041,6 +2241,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 if index < len(list_prop):
                                     del list_prop[index]
                                     items_deleted += 1
+                                    recorder.deleted(index)
                                 else:
                                     logger.warning(
                                         f"Cannot delete item at index {index}: index out of range (list length: {len(list_prop)})"
@@ -2204,7 +2405,9 @@ class PropertiesHandler(_PropertyHandlerBase):
 
                     # Delete the entire list including metadata
                     list_prop.delete()
-                    myself.register_diffs(target="properties", subtarget=name, blob="")
+                    register_list_diff(
+                        myself, self.config, name, "delete_all", length=0
+                    )
                     self.response.set_status(204)
                     return
 
@@ -2391,11 +2594,9 @@ class PropertyMetadataHandler(_PropertyHandlerBase):
             self._respond_list_metadata_contended(e)
             return
 
-        # Register diff for metadata changes
-        myself.register_diffs(
-            target="properties",
-            subtarget=name,
-            blob=json.dumps({"action": "metadata_update", **params}),
+        # A metadata diff: the receiver keeps its own items.
+        register_list_diff(
+            myself, self.config, name, "metadata", length=list_length_hint(list_prop)
         )
 
         if self.response:
@@ -2548,20 +2749,14 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                 # len(list_prop) - 1 calls for the diff and the response.
                 new_index = len(list_prop) - 1
 
-                # Register diff for subscription notifications
-                myself.register_diffs(
-                    target="properties",
-                    subtarget=name,
-                    blob=json.dumps(
-                        diff_reference(
-                            {
-                                "action": "add",
-                                "index": new_index,
-                                "value": item_value,
-                            },
-                            self.config,
-                        )
-                    ),
+                register_list_diff(
+                    myself,
+                    self.config,
+                    name,
+                    "append",
+                    item=item_value,
+                    index=new_index,
+                    length=new_index + 1,
                 )
 
                 if self.response:
@@ -2601,6 +2796,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                 # concurrent writer. Under v1, __setitem__ still raises
                 # IndexError on an out-of-range index at no extra query
                 # cost, so that branch is unchanged.
+                update_fields: dict[str, Any] = {}
                 try:
                     if list_prop.storage_format() == 2:
                         pairs = list_prop.items_with_handles(resolve=False)
@@ -2610,7 +2806,12 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                                     400, f"Index {index} out of range"
                                 )
                             return
-                        if not list_prop.update_by_handle(pairs[index][0], item_value):
+                        handle = pairs[index][0]
+                        update_fields = {
+                            "length": len(pairs),
+                            **handle_old_item_fields(list_prop, handle),
+                        }
+                        if not list_prop.update_by_handle(handle, item_value):
                             self._respond_list_metadata_contended(
                                 RuntimeError(
                                     f"list '{name}' item at index {index} was "
@@ -2620,6 +2821,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                             return
                     else:
                         list_prop[index] = item_value
+                        update_fields = {"length": list_length_hint(list_prop)}
                 except ListItemSpanError as e:
                     # A ListCorruptionError, so an IndexError too: caught
                     # here, ahead of the out-of-range arm, so a broken span
@@ -2631,16 +2833,14 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                         self.response.set_status(400, f"Index {index} out of range")
                     return
 
-                # Register diff for subscription notifications
-                myself.register_diffs(
-                    target="properties",
-                    subtarget=name,
-                    blob=json.dumps(
-                        diff_reference(
-                            {"action": "update", "index": index, "value": item_value},
-                            self.config,
-                        )
-                    ),
+                register_list_diff(
+                    myself,
+                    self.config,
+                    name,
+                    "update",
+                    item=item_value,
+                    index=index,
+                    **update_fields,
                 )
 
                 if self.response:
@@ -2663,7 +2863,12 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                     return
 
                 # v1/v2 split -- see the "update" branch above for the
-                # rationale.
+                # rationale. Announced as ``delete`` by index, with the item
+                # (``old_item``) when it was read: the receiver deletes the one
+                # equal item, or the one at the index among equal ones, so
+                # duplicates do not take the wrong row.
+                delete_operation = "delete"
+                delete_fields: dict[str, Any] = {"index": index}
                 try:
                     if list_prop.storage_format() == 2:
                         pairs = list_prop.items_with_handles(resolve=False)
@@ -2673,7 +2878,12 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                                     400, f"Index {index} out of range"
                                 )
                             return
-                        if not list_prop.delete_by_handle(pairs[index][0]):
+                        handle = pairs[index][0]
+                        old_fields = handle_old_item_fields(list_prop, handle)
+                        if "old_item" in old_fields:
+                            delete_fields["old_item"] = old_fields["old_item"]
+                        delete_fields["length"] = len(pairs) - 1
+                        if not list_prop.delete_by_handle(handle):
                             self._respond_list_metadata_contended(
                                 RuntimeError(
                                     f"list '{name}' item at index {index} was "
@@ -2683,6 +2893,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                             return
                     else:
                         del list_prop[index]
+                        delete_fields["length"] = list_length_hint(list_prop)
                 except ListItemSpanError as e:
                     # A ListCorruptionError, so an IndexError too: caught
                     # here, ahead of the out-of-range arm, so a broken span
@@ -2694,11 +2905,8 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                         self.response.set_status(400, f"Index {index} out of range")
                     return
 
-                # Register diff for subscription notifications
-                myself.register_diffs(
-                    target="properties",
-                    subtarget=name,
-                    blob=json.dumps({"action": "delete", "index": index}),
+                register_list_diff(
+                    myself, self.config, name, delete_operation, **delete_fields
                 )
 
                 if self.response:

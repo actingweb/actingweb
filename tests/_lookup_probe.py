@@ -30,6 +30,7 @@ _real_probe: Callable[[Any], None] | None = None
 _real_unique: Callable[[Any], None] | None = None
 _real_pg_index: Callable[[], bool] | None = None
 _real_ddb_backfill: Callable[[], str] | None = None
+_real_email: Callable[[Any], None] | None = None
 
 
 def real_probe() -> Callable[[Any], None]:
@@ -180,3 +181,43 @@ def real_dynamodb_backfill_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     )
     yield
     _backfill_probe.reset_backfill_probe()
+
+
+def real_email_probe_fn() -> Callable[[Any], None]:
+    """The real ``ActingWebApp._check_email_as_creator_ready``."""
+    global _real_email
+    if _real_email is None:
+        from actingweb.interface.app import ActingWebApp
+
+        _real_email = ActingWebApp._check_email_as_creator_ready  # pyright: ignore[reportPrivateUsage]
+    return _real_email
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stub_email_as_creator_probe() -> None:
+    """Stub the email-as-creator readiness check for the whole process.
+
+    ``with_email_as_creator`` is on in most test configs, and the shared
+    stores hold actors that never ran the ``creator-to-email`` sweep, so
+    every ``integrate_*`` call would refuse. Tests that are about the check
+    request ``real_email_probe``.
+    """
+    from actingweb.interface.app import ActingWebApp
+
+    real_email_probe_fn()
+    ActingWebApp._check_email_as_creator_ready = lambda self: None  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.fixture
+def real_email_probe(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the real email-as-creator readiness check in this test, with a
+    clean process cache before and after."""
+    from actingweb.interface.app import ActingWebApp
+    from actingweb.maintenance import email_as_creator
+
+    email_as_creator.reset_probe()
+    monkeypatch.setattr(
+        ActingWebApp, "_check_email_as_creator_ready", real_email_probe_fn()
+    )
+    yield
+    email_as_creator.reset_probe()

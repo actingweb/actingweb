@@ -988,14 +988,74 @@ a load does to it today.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Run the contract's `### Checks` full tier before the phase commit, one
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Run the contract's `### Checks` full tier before the phase commit, one
       run at a time
-- [ ] `poetry run actingweb-unique-creators creator-to-email --help` and
+- [x] `poetry run actingweb-unique-creators creator-to-email --help` and
       `poetry run actingweb-mark-actors-vouched --help` exit 0
-- [ ] Codex review of the phase's diff
+- [x] Codex review of the phase's diff
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+**Deviations and learnings (2026-11-15):**
+
+- **The sweep's logic lives in `actingweb/maintenance/email_as_creator.py`**
+  beside the marker and the probe; `unique_creators.py` adds only the
+  subcommand (`_run_creator_to_email`).
+- **From the codex review of this phase:**
+  - **Only a holder vouched for the address blocks.** As planned, only an
+    unvouched `factory` holder was reported without blocking; any other
+    unvouched holder (a typed address, `email_unverified`; a trustee
+    handoff, `creator_changed`) blocked the marker, and `--clear-held-email`
+    would then have deleted the swept actor's proven email in favour of an
+    address nobody proved. Any unvouched holder is now `squatted`, the
+    classification `classify_marker(config, holder, target)` gives; an
+    unreadable holder blocks. A `CreatorTaken` during the rename is
+    classified the same way.
+  - **A holder is confirmed by a consistent read of its row.** A record or
+    index entry naming an actor that is gone or holds another creator is
+    not a holder; under enforcement a stale record is released
+    (`release_stale_creator`), as `resolve` does.
+  - **In scope means vouched for the current creator**
+    (`is_vouched_store(store, creator)`), not the marker-only form: an
+    actor renamed on purpose with `Actor.modify(creator=…)` reads
+    unvouched for its new creator (its recorded address and email name the
+    old one) and is not moved back on every run the guide prescribes. The
+    load and the write path (Phase 2) keep the marker-only form.
+  - **`--clear-held-email` deletes only while the email holds what was
+    read** (`delete_attr_if_data_equals`), and only for a vouched holder.
+  - **Two actors moving to one address in one run:** the second meets the
+    first's claim (tracked in the run, since an index may lag) and is
+    reported held.
+  - **A marker that cannot be written** after every actor was handled logs
+    the counts and exits 2.
+  - **`mark-actors-vouched --email-as-creator` resets the email only for an
+    address creator.** As planned it also deleted the email of an actor
+    whose creator is not an address, which includes the default creator,
+    whose email `resolve --default-creator-to-email` (the next step of the
+    same upgrade) moves it to. Those now keep the email and are counted
+    `email_differs`.
+  - `--rate-limit` must be positive and paces about four reads per actor.
+- **`tests/test_demo_example.py` is unchanged**: the session stub
+  (`_stub_email_as_creator_probe`) covers the demo as it does the other
+  probes; the two demo tests still hold.
+- **Accepted from the review, no code:**
+  - Before uniqueness is enforced the holder check is a consistent read of
+    the index, which matches the lowercased address only: a legacy
+    mixed-case holder is not seen and a case-duplicate can result. The same
+    caveat `move_default_creator` documents; the guide's order runs
+    `enable --apply` first, and `report` lists unnormalised creators.
+  - Marking an empty store is not atomic with a first actor's creation by a
+    flag-off or 3.15 process; the marker means only "the sweep completed
+    once" (owner, 2026-11-15) and the guide's post-deploy run covers it.
+  - The probe's process cache is keyed by backend and table prefix or
+    schema, not host; one process serves one store.
+  - A `squatted` decision is not re-read before the marker is written.
+  - `mark-actors-vouched` writes the email reset, `vouched_creator` and the
+    marker as separate confirmed writes, unconditioned on the listed
+    creator, as it did before; it runs before the application serves.
+
+---
 
 ---
 

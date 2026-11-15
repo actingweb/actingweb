@@ -16,6 +16,7 @@ from .actor_interface import ActorInterface
 from .app import (
     ActingWebApp,
     AttributeSchemaNotReady,
+    EmailAsCreatorNotReady,
     PropertyLookupNotReady,
     StoreNotReady,
     UniqueCreatorNotReady,
@@ -54,6 +55,7 @@ __all__ = [
     "ActingWebApp",
     "AttributeListStore",
     "AttributeSchemaNotReady",
+    "EmailAsCreatorNotReady",
     "PropertyLookupNotReady",
     "StoreNotReady",
     "UniqueCreatorNotReady",

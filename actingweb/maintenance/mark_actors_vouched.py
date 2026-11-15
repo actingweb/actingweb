@@ -37,6 +37,14 @@ Rules:
   line) gives the value. After errors, re-run without it: the errored actors
   sort before that id.
 - ``--dry-run`` reports what would be written without writing.
+- ``--email-as-creator``, for an application running
+  ``with_email_as_creator``: an actor whose creator is an address and whose
+  stored email is another address first gets the creator as its stored
+  email, so the vouch does not hand it to an address nobody proved when
+  ``actingweb-unique-creators creator-to-email`` runs. Other differing actors
+  (a provider id, the default creator, ``trustee``) keep their email and are
+  counted (``email_differs``) with a warning, as all are without it. The
+  command's own config cannot tell whether the application has the flag on.
 - An actor whose marker cannot be read is an error, never marked: on
   PostgreSQL a read fault looks like "no marker", and marking it could vouch
   for a ``"factory"`` actor. A write is counted only once it reads back.
@@ -87,6 +95,7 @@ def _mark_one(
     include_factory: bool,
     counts: dict[str, int],
     creator: str = "",
+    email_as_creator: bool = False,
 ) -> None:
     """Mark one actor if it qualifies, counting the outcome. The address
     the marker vouches for (``creator``, from the listing) is recorded
@@ -106,9 +115,45 @@ def _mark_one(
         if not qualifies:
             counts["skipped"] += 1
             return
+        email = store.email
+        differs = (
+            isinstance(email, str)
+            and "@" in email
+            and email.lower() != normalise_creator(creator)
+        )
+        # Only an address creator can be the stored email. Any other (a
+        # provider id, the default creator, trustee) keeps its email: the
+        # default creator's is what resolve --default-creator-to-email moves
+        # it to, and the sweep moves an actor only while it is vouched for
+        # its current creator.
+        resettable = differs and "@" in (creator or "")
+        if differs and not (email_as_creator and resettable):
+            counts["email_differs"] += 1
+            logger.warning(
+                f"{actor_id}: its stored email differs from its creator; under "
+                "with_email_as_creator, actingweb-unique-creators creator-to-email "
+                "would move the creator to that email"
+                + (
+                    ". Pass --email-as-creator to set the email to the vouched "
+                    "creator instead"
+                    if resettable
+                    else " (its creator is not an address, so --email-as-creator "
+                    "leaves the email)"
+                )
+            )
         if dry_run:
             logger.info(f"[dry-run] would mark {actor_id} ({current!r} -> {marker!r})")
+            if resettable and email_as_creator:
+                counts["email_reset"] += 1
         else:
+            if resettable and email_as_creator:
+                # Before the marker: vouched, the actor would be moved to the
+                # address in its store, which nobody proved.
+                if not store.set_confirmed("email", normalise_creator(creator)):
+                    counts["errors"] += 1
+                    logger.error(f"email reset for {actor_id} did not read back")
+                    return
+                counts["email_reset"] += 1
             if not store.set_confirmed(
                 VOUCHED_CREATOR, normalise_creator(creator)
             ) or not store.set_confirmed("auth_method", marker):
@@ -137,8 +182,15 @@ def mark_actors(
     start_after: str | None = None,
     dry_run: bool = False,
     rate_limit: float | None = None,
+    email_as_creator: bool = False,
 ) -> dict[str, int]:
     """Write ``marker`` on the actors that qualify; return the counts.
+
+    ``email_as_creator``: an actor whose creator is an address and whose
+    stored email is another address first gets the creator as its stored
+    email, so a later ``creator-to-email`` sweep has nothing to move it to.
+    Any other differing actor (and every one without the option) is counted
+    in ``email_differs`` with a warning, its email left.
 
     Raises:
         ValueError: ``marker`` does not vouch.
@@ -174,7 +226,15 @@ def mark_actors(
             selected.append((actor_id, row_creator))
     except Exception as e:  # folds DbError: becomes ActorListUnavailable (exit 2)
         raise ActorListUnavailable(f"the actor list could not be read: {e}") from e
-    counts = {"scanned": 0, "marked": 0, "skipped": 0, "pending": 0, "errors": 0}
+    counts = {
+        "scanned": 0,
+        "marked": 0,
+        "skipped": 0,
+        "pending": 0,
+        "email_reset": 0,
+        "email_differs": 0,
+        "errors": 0,
+    }
     last: str | None = None
     for actor_id, row_creator in sorted(selected):
         counts["scanned"] += 1
@@ -187,6 +247,7 @@ def mark_actors(
             include_factory=include_factory,
             counts=counts,
             creator=row_creator,
+            email_as_creator=email_as_creator,
         )
         # Only once the actor is handled (an interrupt skips this), so
         # resuming after it skips nothing; an interrupted run never reaches
@@ -229,6 +290,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-after", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--email-as-creator",
+        action="store_true",
+        help=(
+            "the application runs with_email_as_creator: set a differing stored "
+            "email to the vouched creator before marking"
+        ),
+    )
+    parser.add_argument(
         "--rate-limit",
         type=float,
         default=None,
@@ -252,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
             start_after=args.start_after,
             dry_run=args.dry_run,
             rate_limit=args.rate_limit,
+            email_as_creator=args.email_as_creator,
         )
     except ValueError as e:
         parser.error(str(e))
@@ -261,7 +331,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(
         f"scanned={counts['scanned']} marked={counts['marked']} "
         f"skipped={counts['skipped']} pending={counts['pending']} "
-        f"errors={counts['errors']}"
+        f"email_reset={counts['email_reset']} "
+        f"email_differs={counts['email_differs']} errors={counts['errors']}"
     )
     return 1 if counts["errors"] else 0
 

@@ -69,6 +69,16 @@ Subcommands:
   PostgreSQL: builds ``ux_actors_creator``
   ``CONCURRENTLY`` on a separate autocommit connection, dropping an INVALID
   one a failed run left, and checks it is valid. Re-running is safe.
+- ``creator-to-email [--apply] [--creator X] [--start-after ID]
+  [--clear-held-email] [--show-addresses] [--unmark]``: under
+  ``with_email_as_creator``, moves each vouched actor whose stored email
+  differs from its creator to that email, and after a complete clean
+  ``--apply`` run writes the marker the application's startup check reads
+  (``actingweb.maintenance.email_as_creator``). An address another vouched
+  actor holds is reported and keeps the marker back unless
+  ``--clear-held-email`` clears the stored email of the actor that cannot
+  move; one held by an unvouched ``factory`` actor is reported only.
+  ``--unmark --apply`` withdraws the marker. Run it again after the deploy.
 - ``disable [--apply]``: PostgreSQL drops the index; DynamoDB deletes every
   record and the backfill-complete item, so a later ``enable`` starts from
   the actors, not from records that went stale while the flag was off (the
@@ -1190,6 +1200,13 @@ def missing_enforcement(config: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _positive(value: str) -> float:
+    number = float(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return number
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
@@ -1227,6 +1244,30 @@ def main(argv: list[str] | None = None) -> int:
                 default="10s",
                 help="PostgreSQL lock_timeout for the index build",
             )
+    p = sub.add_parser(
+        "creator-to-email",
+        help="move vouched actors to their stored email (with_email_as_creator)",
+    )
+    p.add_argument("--creator", default=None, help="only this creator")
+    p.add_argument("--start-after", default=None, help="resume after this actor id")
+    p.add_argument(
+        "--rate-limit",
+        type=_positive,
+        default=None,
+        help="DynamoDB scan, and the per-actor reads (about four): units per second",
+    )
+    p.add_argument("--apply", action="store_true", help="write")
+    p.add_argument(
+        "--clear-held-email",
+        action="store_true",
+        help="clear the stored email of an actor whose address a vouched actor holds",
+    )
+    p.add_argument(
+        "--show-addresses", action="store_true", help="print the addresses too"
+    )
+    p.add_argument(
+        "--unmark", action="store_true", help="withdraw the marker (with --apply)"
+    )
     args = parser.parse_args(argv)
     if args.command in ("enable", "disable") and args.creator:
         # Both act on the whole store: enable writes the backfill-complete
@@ -1249,6 +1290,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any) -> int:
     try:
+        if args.command == "creator-to-email":
+            return _run_creator_to_email(args, config)
         if args.command == "disable":
             outcome = disable(config, apply=args.apply)
             logger.info(f"command=disable outcome={outcome}")
@@ -1300,6 +1343,43 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
     except StoreUnavailable as e:
         logger.error(f"{e}; re-run when the database answers")
         return 2
+
+
+def _run_creator_to_email(args: argparse.Namespace, config: Any) -> int:
+    """``creator-to-email``: exit 0 when nothing is left to move (or the
+    marker was written), 1 when actors would move (dry run) or could not
+    be, 2 when the store could not be read (raised to ``_run``)."""
+    from actingweb.maintenance import email_as_creator
+
+    try:
+        if args.unmark:
+            present = email_as_creator.read_marker(config) is not None
+            if args.apply and present:
+                email_as_creator.delete_marker(config)
+            logger.info(
+                f"command=creator-to-email unmark apply={args.apply} "
+                f"marker_was_present={present}"
+            )
+            return 0
+    except DbError as e:  # folds DbError: becomes StoreUnavailable (exit 2)
+        raise StoreUnavailable(f"the marker could not be read or written: {e}") from e
+    counts = email_as_creator.sweep(
+        config,
+        apply=args.apply,
+        only=args.creator,
+        start_after=args.start_after,
+        rate_limit=args.rate_limit,
+        clear_held_email=args.clear_held_email,
+        show_addresses=args.show_addresses,
+    )
+    logger.info(
+        f"command=creator-to-email apply={args.apply} "
+        + " ".join(f"{k}={v}" for k, v in counts.items())
+    )
+    blocking = counts["held"] or counts["changed"] or counts["errors"]
+    if not args.apply and counts["moved"]:
+        return 1
+    return 1 if blocking else 0
 
 
 if __name__ == "__main__":

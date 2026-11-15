@@ -62,7 +62,10 @@ baseline's failures by name and nothing else:
   test does not look for it (an adoption item on Emm's side)
   (`thoughts/verifications/2026-11-15-email-as-creator-at-write-time-2.md`).
 
-Still to run: `spec-1-5`, `3-16-release-validation` (the last; it deletes
+- `spec-1-5` (environment 9, on `2f1a891`, `creator-to-email` first:
+  nothing to move): the baseline's failures, nothing new.
+
+Still to run: `3-16-release-validation` (the last; it deletes
 this file). A run now starts with `creator-to-email` (dry run, then
 `--apply`) on the environment's database before the preview server.
 

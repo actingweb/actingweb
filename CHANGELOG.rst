@@ -618,37 +618,25 @@ SECURITY
   stored email). An actor vouched before 3.16 has no recorded address and
   is judged by its marker alone until a sign-in or ``mark_actors_vouched``
   writes one. ``ActorInterface.modify_creator`` without ``unvouch`` moves
-  the recorded address with the rename (the application vouches for it): it
-  writes the new address as ``vouched_creator_pending`` first and promotes
-  it after the rename, so a sign-in during a rename finds the actor vouched
-  under the old creator and the new one, for an email or a provider-id
-  creator alike. A fault writing the pending address refuses the rename
-  (False). The rename reads ``_internal`` afresh, and when the current
-  creator is vouched only through its stored email (a provider-id creator
-  that ``force_email_prop_as_creator`` moved to the email) it first records
-  the current creator as the vouched address, refusing (False) on a fault,
-  so the moves below never leave it unvouched. It answers True once the creator is renamed, also when moving
-  the recorded address afterwards faults (logged; the pending value keeps
-  the new creator vouched). **Behavior change:** with
+  the recorded address with the rename (the application vouches for it), in
+  one atomic backend operation (``DbActor.rename_creator``): the creator, its
+  uniqueness record, the recorded address and, with
+  ``force_email_prop_as_creator`` on and an address as the new creator, the
+  stored email (also when none was stored, so a sign-in seeding a missing
+  email from the old creator loses), all only while the creator and the
+  ``auth_method`` marker are as the rename read them. No state shows the
+  actor vouched under neither address, for an email or a provider-id
+  creator alike. It answers False with nothing moved when either changed
+  since the read, and raises ``CreatorTaken`` or ``DbError`` with nothing
+  moved; after a fault whose outcome is unknown it reads the row, and a
+  rename that landed answers True. **Behavior change:** with
   ``force_email_prop_as_creator`` on, a vouched rename to an address moves
-  the stored email to the new address first, and writes one when there was
-  none (a sign-in seeding a missing email from the old creator would
-  otherwise move the creator back at the next load). Since every
-  load moves the creator to the stored email, that write commits the
-  rename: a ``DbError`` after it leaves the rename to complete at the next
-  load (or when the call is repeated), and a rename that loses because a
-  load already moved the creator counts as renamed. The email is put back
-  only when the rename definitely did not land (``CreatorTaken``, or a
-  fresh load still showing another creator), and only while it still holds
-  the new address; logged when it cannot be. Before, the next load rewrote
-  the creator back to the old stored email, undoing the rename.
-  Such a rename to a creator that is not an address is refused (False),
-  since the load would undo it too. ``modify_creator`` (without
-  ``unvouch``) refuses a rename when the actor's ``_internal`` bucket could
-  not be read, in every configuration: unread, a vouched actor looks
-  unvouched and its vouch would not move with it. Two concurrent renames of one actor share the one pending value,
-  so a sign-in between them can still find it unvouched; serialise renames
-  of one actor.
+  the stored email with it (before, the next load rewrote the creator back
+  to the old stored email, undoing the rename), and a rename to a creator
+  that is not an address is refused (False) while an email is stored.
+  ``modify_creator`` (without ``unvouch``) refuses a rename when the actor's
+  ``_internal`` bucket could not be read, in every configuration: unread, a
+  vouched actor looks unvouched and its vouch would not move with it.
   The emailed verification link proves only the address it was sent to: an
   actor whose creator changed since answers 409, and the link stays
   unused. A restore after a failed change replaces only that change's
@@ -665,8 +653,9 @@ SECURITY
   trusts, subscriptions or sessions; data kept) at the next sign-in by that
   address. With ``force_email_prop_as_creator`` on and a stored email, the
   endpoint refuses a ``creator`` other than that email or ``trustee`` with
-  400: the creator is restored from the email on the next load anyway, and a sign-in
-  for the new address in between resolved to this actor.
+  400: the creator and the stored email are kept equal for a vouched actor,
+  and a creator moved away from the email would leave the actor where a
+  sign-in for the email no longer finds it.
   ``ActorInterface.modify_creator`` and ``force_email_prop_as_creator`` do
   not unvouch: the application, or a provider-written email, vouches for
   those. A route of your own that passes user input to ``modify_creator``
@@ -772,7 +761,7 @@ SECURITY
   (Google can return such an address with ``verified_email: false``) signed
   in to the actor of that address, and a provider-id actor (``google:…``)
   had the address written into ``store.email``, which vouches for it and,
-  under ``force_email_prop_as_creator``, renamed the creator to it at load.
+  under ``force_email_prop_as_creator``, renamed the creator to it.
   An address now counts only when the provider vouches for it: Google's
   ``verified_email`` (web userinfo) or ``email_verified`` (id_token) is
   true, Apple's signed id_token says ``email_verified`` true, or the GitHub
@@ -940,6 +929,60 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **Under ``with_email_as_creator`` the creator follows the stored email
+  where the email is written, not when the actor is next loaded.**
+  Every load of an actor read its whole ``_internal`` bucket to compare the
+  creator with ``store.email`` and renamed the creator when they differed,
+  and a vouched rename was several writes that relied on the next load to
+  finish. Now a write of a vouched actor's ``store.email`` to another
+  address (``store.email = …``, ``set_confirmed``, ``replace_if_equal``,
+  ``set_if_absent``) renames the creator, its uniqueness record and its
+  recorded vouch in the same atomic backend operation
+  (``DbActor.rename_creator``), conditioned on the creator and the
+  ``auth_method`` marker as read just before; a load is one read of the
+  actor row. **Behavior change:** a write of ``store.email`` to an address
+  another actor holds raises ``CreatorTaken`` (409 through the
+  integrations), where before the write landed and every later load logged
+  a refused rename. An email written outside the library (a backend write,
+  a restore, devtest) is no longer picked up by a load: run
+  ``actingweb-unique-creators creator-to-email`` after one. The application
+  refuses to start under the flag until that command has run once
+  (``EmailAsCreatorNotReady``; an empty store marks itself ready).
+  **Check:** application code that writes ``core_actor.store.email`` and
+  does not expect ``CreatorTaken``; the steps in the migration guide's
+  "The creator follows the stored email" before the first start.
+- **Behavior change: a creator changed directly is no longer undone.** With
+  ``force_email_prop_as_creator`` on, ``Actor.modify(creator=…)`` on a
+  vouched actor used to be reverted by the next load. Now it stays, and the
+  stored email is left as it was: an actor with a recorded vouched address
+  then reads as unvouched for the new creator (a sign-in for it cleans the
+  actor in place), while one vouched before 3.16 with no recorded address
+  stays vouched. **Check:** callers of ``Actor.modify(creator=…)``; use
+  ``ActorInterface.modify_creator`` to move the creator, the email and the
+  vouch together.
+- **Behavior change: a handoff to the trustee persists under the email
+  flag.** ``PUT /<id>/trust/trustee {"creator": "trustee"}`` (the creator, a
+  trustee or an admin peer may send it) set the creator to ``trustee``, and
+  with ``force_email_prop_as_creator`` on the next load of a vouched actor
+  moved it back to the stored email, ending the trustee's access. It now
+  stays until the trustee hands it back with ``PUT {"creator": <stored
+  email>}``, which answers 409 if the owner has meanwhile signed in to a new
+  actor holding that address.
+- **Breaking: a custom actor backend implements ``rename_creator``.**
+  ``DbActor.rename_creator(actor_id, *, expected, creator, internal=(),
+  marker=None) -> RenameOutcome`` moves a creator together with writes to
+  the actor's ``_internal`` attributes as one atomic operation (types in
+  ``actingweb.db.creator_rename``; the migration guide's "Custom database
+  backends" states the contract). ``check_ready()`` refuses a backend
+  without it, with the email flag on or off: ``modify_creator`` uses it in
+  every configuration.
+- **Behavior change: on DynamoDB a creator rename touches the attributes
+  table in the same transaction.** **Check:** an IAM policy scoped per
+  table allows ``dynamodb:ConditionCheckItem``, ``PutItem`` and
+  ``DeleteItem`` on the attributes table, beside what the actors and
+  creators tables already allow (a transaction is authorised per item
+  action).
+
 - **Breaking: list edits over REST and the web UI send list diffs.** ``PUT
   /properties/<list>?index=N``, ``POST /properties/<list>/items``, ``PUT
   /properties/<list>/metadata``, ``DELETE /properties/<list>``, a bulk
@@ -1102,8 +1145,7 @@ CHANGED
   ``actor.services`` client cost a storage read per request; a warm MCP
   request reads the actor row, so a backend throttle answers 503 where it
   used to succeed from memory, and under FastAPI that read runs on the event
-  loop for every authenticated MCP request. ``actor.creator`` is not
-  re-synced to the stored email on an MCP request. The validated-token and
+  loop for every authenticated MCP request. The validated-token and
   trust caches stay (per process, 5 minutes; a resolved trust entry now
   expires after 300 seconds too), and the periodic debug line no longer
   reports actor hits. **Check:** hooks that read-modify-write a property on
@@ -1329,12 +1371,10 @@ CHANGED
   keeping the email; once uniqueness is enabled, an address another actor
   holds is reported and left (before ``enable`` the check is a read
   followed by the rename, so a concurrent sign-in can still take the
-  address; ``report`` then lists the pair). **Behavior change:** loading an
-  actor moves its creator to its stored email only when the actor is
-  vouched (a provider or the emailed link proved the address); an unvouched
-  one, such as a factory create left with the default creator, keeps its
-  creator until ``resolve`` or a sign-in's adoption moves it. **Check:** if
-  you relied on the sweep or on the load, run the command once after the
+  address; ``report`` then lists the pair). **Behavior change:** an
+  unvouched actor, such as a factory create left with the default creator,
+  keeps its creator until ``resolve`` or a sign-in's adoption moves it.
+  **Check:** if you relied on the sweep, run the command once after the
   upgrade.
 
 - **``GET /?format=json`` allowed credentialed cross-origin reads of a public
@@ -1551,9 +1591,6 @@ CHANGED
     the squatter. There is no ranking and no sibling sweep with the flag on.
     A squatter mid-deletion is finished by the replacement; when its
     deletion status cannot be read the sign-in answers 503.
-  - With ``force_email_prop_as_creator`` on, loading an actor whose stored
-    email another actor holds leaves the creator as it is after one read of
-    the record, instead of a refused rename and a WARNING on every load.
   - Two concurrent sign-ins for one identifier (a first sign-in, or two
     replacing the same squatter) both end on the actor the winner created,
     unless that actor carries no ``auth_method`` marker (a row an older
@@ -2059,6 +2096,25 @@ CHANGED
 ADDED
 ~~~~~
 
+- ``actingweb-unique-creators creator-to-email [--apply]``: moves each actor
+  vouched for its current creator whose stored email is another address to
+  that email (conditioned on what it read, so a concurrent sign-in wins),
+  and after a complete clean ``--apply`` run writes the marker the start-up
+  check reads. An address another vouched actor holds is reported and keeps
+  the marker back (``--clear-held-email`` clears the stored email of the
+  actor that cannot move); one held by an unvouched actor is reported
+  only. ``--unmark --apply`` withdraws the marker; ``--show-addresses``
+  prints addresses (ids only by default). The marker means the sweep
+  completed once: run it again after the deploy and after any period with
+  the flag off.
+- ``actingweb-mark-actors-vouched --email-as-creator``: before vouching an
+  actor whose creator is an address and whose stored email is another one,
+  sets the email to the creator, so the sweep does not then hand the actor
+  to an address nobody proved. Without it such actors are counted
+  (``email_differs``).
+- ``EmailAsCreatorNotReady`` (``actingweb.interface``), the fourth
+  ``check_ready()`` refusal.
+
 - **Attribute lists with the property list interface.**
   ``actor.attribute_lists(bucket)`` returns an ``AttributeListStore`` whose
   lists (``.get(name)`` or attribute access) are ``ListAttribute``
@@ -2431,6 +2487,17 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **Every actor load under ``with_email_as_creator`` read the whole
+  ``_internal`` bucket.** The creator-equals-email check ran on every load
+  (one strongly consistent Query on each SPA request for a deployment with
+  the flag on), only to compare two values. A load is now one read of the
+  actor row (``{GetItem: 1}`` on DynamoDB, one query on PostgreSQL); the
+  rule is enforced where the email is written.
+- **A vouched rename could be left half-done.** ``modify_creator`` wrote a
+  pending vouch, the email, the creator and the recorded vouch in up to four
+  steps and relied on the next load to finish a rename a fault interrupted.
+  It is one atomic operation now; nothing is left for a load to finish.
 
 - **An interrupted ``insert`` or ``delete`` diff could damage a replica's
   list.** The replica's list shifted every later item, row by row; a crash
@@ -3020,8 +3087,9 @@ FIXED
 - **``force_email_prop_as_creator`` renamed an unvouched actor's creator
   at load.** ``Actor.get`` copied ``store.email`` into the creator of every
   actor whose two differed, so an address a previous creator wrote was
-  restored before adoption could clean it. It now does so only for a vouched
-  actor.
+  restored before adoption could clean it. No load renames any more; the
+  creator follows the email where it is written, for a vouched actor only
+  (see "the creator follows the stored email" under CHANGED).
 
 - **A rejected sign-in kept the provider's tokens.** The OAuth callback,
   both SPA completions and the email form wrote the provider's access and

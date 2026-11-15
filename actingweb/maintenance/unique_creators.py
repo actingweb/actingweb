@@ -32,8 +32,9 @@ Subcommands:
   Also ``@`` addresses stored with capitals: lookups use the lowercase value,
   so such an actor would not be found once the flag is on.
 - ``resolve [--apply] [--keep ID]``: keeps one actor per group and renames the
-  others to ``{creator}#dup-{hash}``, clearing their stored ``email`` so the
-  ``force_email_prop_as_creator`` rewrite cannot undo the rename. No user data
+  others to ``{creator}#dup-{hash}``, clearing their stored ``email`` so it
+  no longer claims the address (``creator-to-email`` would otherwise move the
+  renamed actor back to it). No user data
   is deleted. The kept actor is the best by marker (vouched, then unvouched,
   then ``factory``), then the oldest (PostgreSQL's ``created_at``; on DynamoDB
   the ``created_at`` the OAuth path stores, unknown ages last), then the lowest
@@ -174,8 +175,9 @@ class Report:
 
 def make_config() -> Any:
     """The command's own config (``unique_creator`` stays off now that the
-    library default is on): the application's backend, and no
-    ``force_email_prop_as_creator`` rewrite while it reads actors.
+    library default is on): the application's backend, and
+    ``force_email_prop_as_creator`` off, so a write of an actor's email by
+    the command never renames it.
 
     ``unique_creator`` stays off here: the command writes the DynamoDB
     records itself (``enable``), and a ``#dup-`` value is never recorded, so

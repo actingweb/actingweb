@@ -200,6 +200,15 @@ once and start again::
 ``.with_unique_creator(False)`` opts out and keeps the older, duplicate-tolerant
 behaviour.
 
+With ``.with_email_as_creator()`` on a database that already has actors, the
+application also refuses to start (``EmailAsCreatorNotReady``) until the
+existing actors have been moved to their stored email once::
+
+    actingweb-unique-creators creator-to-email           # dry run: lists them
+    actingweb-unique-creators creator-to-email --apply
+
+A fresh database marks itself ready at the first start.
+
 All Configuration Options
 --------------------------
 
@@ -218,7 +227,7 @@ Configuration methods:
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
 - ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database. **On by default**; ``False`` opts out. See the first-run note below and :doc:`../migration/v3.16`
 - ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``); close it for OAuth-only deployments
-- ``.with_email_as_creator(enable=True)`` - Use email property as creator
+- ``.with_email_as_creator(enable=True)`` - A vouched actor's creator follows its stored ``_internal`` email, renamed where the email is written (off on ``ActingWebApp`` until called). See the first-run note below
 - ``.add_actor_type(name, factory, relationship)`` - Add known actor type
 
 Customizing Behavior with Hooks

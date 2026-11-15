@@ -1168,19 +1168,39 @@ a load does to it today.
 
 ### Verification
 
-- [ ] `poetry run sphinx-build -W …` as in the contract's `### Checks`, and
-      the fast tier
-- [ ] `grep -n "every load\|next load" CHANGELOG.rst docs/migration/v3.16.rst`
-      shows no sentence about the creator following the email
-- [ ] `grep -rn "email property\|Copy .*email" docs/quickstart` returns
+- [x] `poetry run sphinx-build -W …` as in the contract's `### Checks`, and
+      the fast tier (5,983 passed)
+- [x] `grep -n "every load\|next load" CHANGELOG.rst docs/migration/v3.16.rst`
+      shows no sentence about the creator following the email (the hits
+      left describe the behaviour before 3.16, as "before" or "used to")
+- [x] `grep -rn "email property\|Copy .*email" docs/quickstart` returns
       nothing
-- [ ] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
+- [x] `thoughts/todo/INDEX.md` has no row for a file that no longer exists
 - [ ] Emm's suite on this branch, before the PR opens, run as
       `thoughts/todo/emm-suite-against-master.md` describes: no failure the
       run on `master` did not have, and the result recorded in this plan's
       verification document
 
-### Implementation Status: Not Started
+### Implementation Status: Complete (the Emm run is the verification's)
+
+**Deviations and learnings (2026-11-15):**
+
+- **The upgrade order is a subsection of the new guide section**, "The
+  creator follows the stored email", stated against Step 0's numbered
+  steps, not a renumbering of Step 0: other sections and pages cite those
+  numbers.
+- **The first new changelog entry has no "Breaking:" lead**: it changes
+  behaviour (a write may raise `CreatorTaken`; a load renames nothing), not
+  a wire shape or a signature. The `rename_creator` entry for custom
+  backends carries it.
+- **Also corrected:** the flag's default per entry point was stated wrongly
+  in `docs/guides/authentication.rst` ("(default)"): it is off on
+  `ActingWebApp` until `with_email_as_creator()`, on in a bare `Config()`.
+  The IAM paragraph of `docs/quickstart/configuration.rst` names the
+  attributes table's actions. Two docstrings of `unique_creators.py` that
+  described the load-time rewrite.
+- **The consumer note** (a load is one read; `restore_actor.py --full`
+  needs the sweep's dry run after it) goes in the PR description.
 
 ---
 

@@ -131,6 +131,30 @@ Notes
 - For base paths (reverse proxies, API gateways), templates should use ``actor_root`` and ``actor_www``; see :doc:`../guides/web-ui`.
 - See :doc:`../reference/routing-overview` for generated routes and structure.
 
+Operator commands
+=================
+
+``integrate_flask`` and ``integrate_fastapi`` call ``ActingWebApp.check_ready()``,
+which refuses to start on a database that is not ready for this version. The
+commands that make it ready run with the application's environment
+(``DATABASE_BACKEND``, the database settings, ``AWS_DB_PREFIX``,
+credentials), in this order, before a deploy:
+
+1. ``actingweb-mark-actors-vouched`` (with ``--email-as-creator`` under
+   ``with_email_as_creator``), if legacy actors are to be vouched.
+2. ``actingweb-unique-creators report``, ``resolve --apply`` and
+   ``enable --apply`` (creator uniqueness, on by default).
+3. ``actingweb-property-lookup backfill --apply`` (reverse lookup, when
+   properties are indexed).
+4. ``alembic upgrade head`` on PostgreSQL.
+5. ``actingweb-unique-creators creator-to-email`` and then its ``--apply``
+   (under ``with_email_as_creator``).
+
+After the deploy, run ``enable --apply`` and ``creator-to-email --apply``
+again: processes of the old version can leave work behind during the
+rollout. Run ``creator-to-email`` again after a restore or after any period
+with the email flag off. :doc:`../migration/v3.16` gives the details.
+
 Health Checks
 =============
 

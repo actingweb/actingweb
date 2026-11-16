@@ -158,6 +158,7 @@ needs ``jq``):
      -d "{\"url\": \"http://localhost:5000/$actor_a_id\", \"relationship\": \"friend\"}"
 
    # Actor B subscribes to actor A's properties, authenticated as actor B's owner
+   # (granularity "high", "low" or "none"; any other value is 400)
    curl -s -u "b@example.com:$actor_b_pass" -X POST "http://localhost:5000/$actor_b_id/subscriptions" \
      -H 'Content-Type: application/json' \
      -d "{\"peerid\": \"$actor_a_id\", \"target\": \"properties\", \"granularity\": \"high\"}"

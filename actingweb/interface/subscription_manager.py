@@ -1428,7 +1428,7 @@ class SubscriptionManager:
                     sequence=seq,
                     data=data,
                     callback_type="diff",
-                    handler=process_handler if config.auto_storage else None,
+                    handler=process_handler,  # stores only with auto_storage; hooks always
                 )
 
                 if result == ProcessResult.IN_PROGRESS:
@@ -2401,7 +2401,7 @@ class SubscriptionManager:
                     sequence=seq,
                     data=data,
                     callback_type="diff",
-                    handler=process_handler_async if config.auto_storage else None,
+                    handler=process_handler_async,  # stores only with auto_storage; hooks always
                 )
 
                 if result == ProcessResult.IN_PROGRESS:

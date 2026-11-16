@@ -139,6 +139,14 @@ Subscriptions require an established trust relationship:
    * - Deleted
      - All subscriptions terminated, peer data cleaned up (if ``auto_cleanup=True``)
 
+**Trust answers (3.16, specification 1.5).** The answer to a trust request
+carries ``approved``, ``peer_approved`` and ``verified`` as JSON booleans,
+as a ``GET`` of the relationship does. ``approved`` in a ``PUT`` accepts
+``true`` (or the web UI form's ``"true"``) only; anything else, ``false``
+included, is 400 with nothing changed. A permission endpoint for a trust
+whose type is not registered answers 404. See
+:doc:`access-control` for the permission endpoints.
+
 **Automatic Cleanup on Trust Deletion**
 
 When ``auto_cleanup=True`` is enabled (default), deleting a trust relationship triggers automatic cleanup:

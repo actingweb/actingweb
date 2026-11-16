@@ -1016,9 +1016,12 @@ class RemotePeerStore:
                     f"Skipping list {key!r} in resync: metadata without items "
                     f"(transformation may have failed)"
                 )
+                # A failure (3.16, verification M5): the baseline did not
+                # carry the list, so an owed rebuild stays owed.
                 return key, {
                     "operation": "skip",
                     "reason": "metadata_without_items",
+                    "error": "metadata_without_items",
                     "success": False,
                 }
             return as_list(key, list(value.get("items") or []))

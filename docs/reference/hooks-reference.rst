@@ -110,8 +110,9 @@ credentials. Registering the hook with ``allow_anonymous=True`` (3.16) lets a
   ``/callbacks``), so a hook that acts on a provider's event verifies the
   provider's signature over ``raw_body`` or a shared secret in a header, in
   constant time, whatever ``data["anonymous"]`` says, and returns ``False``
-  otherwise. An authenticated request carries no ``headers`` or
-  ``raw_body``, so such a hook refuses it.
+  otherwise. ``headers`` and ``raw_body`` always come from the request
+  itself, on both paths, so a body cannot supply its own; ``headers``
+  leaves out the caller's ``Authorization`` and ``Cookie``.
 - **A provider that sends its own ``Authorization`` header** (Basic
   credentials in the webhook URL, a bearer token) is authenticated as an
   actor caller, and refused (403), so it cannot use the flag: point it at
@@ -152,7 +153,7 @@ The special ``www`` callback hook can render custom templates by returning a dic
                 },
             }
 
-        return False  # Fall through to default handling
+        return False  # Not handled: the page answers 404 (3.16)
 
 The template will receive:
 

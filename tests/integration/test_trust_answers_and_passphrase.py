@@ -206,3 +206,49 @@ def test_a_peer_never_matches_the_creators_rows() -> None:
     assert not access_table_admits(
         config, relationship="creator", approved=True, path="www"
     )
+
+
+def test_the_trustee_changes_and_clears_the_trustee_root(actor_factory: Any) -> None:
+    """Verification 2026-11-16 (M6): every test called the route with the
+    creator's Basic auth; the trustee's own branch was never run."""
+    t = actor_factory.create("trustee")
+    r = requests.put(
+        f"{t['url']}/trust/trustee",
+        json={"trustee_root": "https://trustee.example.com/t"},
+        auth=_owner(t),
+    )
+    assert r.status_code == 204, r.text
+    r = requests.put(
+        f"{t['url']}/trust/trustee",
+        json={"trustee_root": "https://trustee.example.com/t2"},
+        headers=_bearer(t["passphrase"]),
+    )
+    assert r.status_code == 204, r.text
+    root = requests.get(f"{t['url']}/meta/trustee_root", auth=_owner(t)).text
+    assert root == "https://trustee.example.com/t2"
+    r = requests.delete(f"{t['url']}/trust/trustee", headers=_bearer(t["passphrase"]))
+    assert r.status_code == 204, r.text
+
+
+def test_the_receivers_answer_carries_booleans(actor_factory: Any) -> None:
+    """Verification 2026-11-16 (M6): only the initiator's answer, which was
+    already boolean, had a test; the receiver's 201 or 202 is the one
+    Phase 2 changed (T13)."""
+    a = actor_factory.create("pp-requester@example.com")
+    b = actor_factory.create("pp-receiver@example.com")
+    r = requests.post(
+        f"{b['url']}/trust/friend",
+        json={
+            "baseuri": a["url"],
+            "id": a["id"],
+            "secret": "s" * 40,
+            "type": "urn:actingweb:test:integration",
+            "desc": "receiver flags",
+        },
+    )
+    assert r.status_code in (201, 202), r.text
+    body = r.json()
+    for flag in FLAGS:
+        if flag in body:
+            assert isinstance(body[flag], bool), (flag, body[flag])
+    assert "approved" in body

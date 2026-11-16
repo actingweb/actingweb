@@ -2,6 +2,7 @@
 Simplified property store interface for ActingWeb actors.
 """
 
+import contextlib
 import json
 import logging
 from collections.abc import Iterator
@@ -239,10 +240,29 @@ class PropertyStore:
         replica). The other order would lose the notification for good.
         A caller that gets an exception from ``clear()`` calls it again: some
         subscribers may already have been told.
+
+        Its callbacks are sent after the deletes (``deferred_callbacks``): a
+        subscriber that reads this actor back on the callback (a rebuild it
+        owes) finds the names gone. A name whose value changed after the
+        snapshot (another write) is not deleted, and a diff with its value
+        follows the clear's, so the subscribers end where the actor does;
+        a write that lands between that check and the delete is still lost,
+        as with any clear.
         """
         snapshot = self.to_dict()
         if not snapshot:
             return
+        actor = self._actor
+        defer = (
+            actor.deferred_callbacks()
+            if actor is not None
+            and callable(getattr(type(actor), "deferred_callbacks", None))
+            else contextlib.nullcontext()
+        )
+        with defer:
+            self._clear_snapshot(snapshot)
+
+    def _clear_snapshot(self, snapshot: dict[str, Any]) -> None:
         if self._actor:
             previous = (
                 self._actor.previous_for_resource_subscribers(
@@ -260,7 +280,18 @@ class PropertyStore:
                 blob=json.dumps(dict.fromkeys(snapshot, "")),
                 **kwargs,
             )
-        for key in snapshot:
+        now = self.to_dict()
+        for key, value in snapshot.items():
+            if key not in now:
+                continue  # already gone
+            if now[key] != value:
+                # Written after the snapshot: kept, and told after the
+                # clear's diff (verification M3).
+                if self._actor:
+                    self._actor.register_diffs(
+                        target="properties", subtarget=key, blob=now[key]
+                    )
+                continue
             self._core_store[key] = None
 
     def to_dict(self) -> dict[str, Any]:

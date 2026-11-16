@@ -51,9 +51,12 @@ When the web UI is enabled (``with_web_ui(True)``), ActingWeb handles browser re
 This eliminates the need for custom route handlers to redirect browsers.
 
 A ``/<actor_id>/www/<path>`` that the library does not serve is passed to
-the application's ``www`` callback hook. With no ``www`` hook registered it
-answers 404 (3.16; it answered 200 with the text ``False``); a hook that
-returns ``False`` keeps the answer it had.
+the application's ``www`` callback hook. A path the hook does not handle
+(it returns ``False`` or ``None``), or any path when no ``www`` hook is
+registered, answers 404 (3.16; it answered 200 with the text ``False``).
+*What to check:* a hook that returned ``False`` for a page it does serve
+(for example after writing a response itself) returns what the page shows
+instead.
 
 Web Interface Features
 ----------------------

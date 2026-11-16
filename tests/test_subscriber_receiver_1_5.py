@@ -19,7 +19,7 @@ from actingweb.subscription_config import SubscriptionProcessingConfig
 from tests._adoption_helpers import aid, create_core_actor, make_config, uuid_email
 
 
-def _setup(subtarget: str = "") -> tuple[Any, Any]:
+def _setup(subtarget: str = "", resource: str = "") -> tuple[Any, Any]:
     config = make_config()
     config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
         enabled=True, auto_sequence=True, auto_storage=True
@@ -27,7 +27,9 @@ def _setup(subtarget: str = "") -> tuple[Any, Any]:
     actor = create_core_actor(config, uuid_email())
     assert Subscription(
         actor_id=aid(actor), peerid="peer1", subid="sub1", callback=True, config=config
-    ).create(target="properties", subtarget=subtarget, granularity="high")
+    ).create(
+        target="properties", subtarget=subtarget, resource=resource, granularity="high"
+    )
     return config, actor
 
 
@@ -55,7 +57,9 @@ def _proxy(body: Any, code: int, redirected: bool = False) -> Any:
     return proxy
 
 
-@pytest.mark.parametrize("subtarget", ["", "color"])
+@pytest.mark.parametrize(
+    ("subtarget", "resource"), [("", ""), ("color", ""), ("color", "shade")]
+)
 @pytest.mark.parametrize(
     "proxy",
     [
@@ -65,9 +69,10 @@ def _proxy(body: Any, code: int, redirected: bool = False) -> Any:
     ],
 )
 def test_a_resync_whose_fetch_fails_is_503_and_owes_the_rebuild(
-    subtarget: str, proxy: Any
+    subtarget: str, resource: str, proxy: Any
 ) -> None:
-    config, actor = _setup(subtarget)
+    """The resource level added by the verification of 2026-11-16 (M6)."""
+    config, actor = _setup(subtarget, resource)
     body = {"sequence": 5, "type": "resync", "url": "https://peer.example.com/p"}
     with (
         mock.patch.object(SubscriptionManager, "_get_peer_proxy", return_value=proxy),
@@ -156,3 +161,93 @@ def test_a_granularity_that_is_not_text_is_refused(granularity: Any) -> None:
             is False
         )
     post.assert_not_called()
+
+
+@pytest.mark.parametrize("auto_storage", [True, False])
+def test_the_poll_runs_the_data_hooks_whether_or_not_it_stores(
+    auto_storage: bool,
+) -> None:
+    """Verification 2026-11-16 (M4): with ``auto_storage`` off the poll gave
+    the processor no handler, so an application that stores data itself
+    never saw a polled diff (owner 2026-11-07: the gap resync runs the data
+    hook for what it applies)."""
+    config = make_config()
+    seen: list[tuple[int, Any]] = []
+
+    def hook(_a: Any, _p: str, _t: str, data: Any, seq: int, _c: str) -> None:
+        seen.append((seq, data))
+
+    sub_config = SubscriptionProcessingConfig(
+        enabled=True,
+        auto_sequence=True,
+        auto_storage=auto_storage,
+        subscription_data_hooks={"properties": [hook]},
+    )
+    config._subscription_config = sub_config  # type: ignore[attr-defined]
+    actor = create_core_actor(config, uuid_email())
+    assert Subscription(
+        actor_id=aid(actor), peerid="peer1", subid="sub1", callback=True, config=config
+    ).create(target="properties", granularity="high")
+    proxy = mock.MagicMock()
+    proxy.trust = {"baseuri": "https://peer.example.com/peer1", "secret": "s"}
+    proxy.get_resource.return_value = {
+        "sequence": 2,
+        "data": [
+            {"sequence": 1, "timestamp": "2026-11-16T00:00:00Z", "data": {"a": 1}},
+            {"sequence": 2, "timestamp": "2026-11-16T00:00:01Z", "data": {"b": 2}},
+        ],
+    }
+    proxy.change_resource.return_value = {}
+    mgr = SubscriptionManager(actor)
+    with mock.patch.object(mgr, "_get_peer_proxy", return_value=proxy):
+        result = mgr.sync_subscription("peer1", "sub1", config=sub_config)
+    assert result.success, result.error
+    assert seen == [(1, {"a": 1}), (2, {"b": 2})]
+
+
+@pytest.mark.parametrize("declared", [None, "10"])
+def test_an_anonymous_body_over_the_cap_is_413_whatever_content_length_says(
+    declared: str | None,
+) -> None:
+    """Verification 2026-11-16 (M6): only the Content-Length branch of the
+    1 MB cap had a test; a body with none, or one that understates it, is
+    measured."""
+    from actingweb.handlers.callbacks import ANONYMOUS_CALLBACK_MAX_BYTES
+
+    headers = {} if declared is None else {"Content-Length": declared}
+    webobj = AWWebObj(
+        url="https://test.example.com/x",
+        body="x" * (ANONYMOUS_CALLBACK_MAX_BYTES + 1),
+        headers=headers,
+    )
+    handler = CallbacksHandler(webobj, make_config())
+    handler._post_anonymous("a" * 32, "incoming")  # noqa: SLF001
+    assert webobj.response.status_code == 413
+
+
+@pytest.mark.parametrize("seq", [None, [1], {"n": 1}, True, "x"])
+def test_a_clearing_put_whose_sequence_is_not_a_number_is_400(seq: Any) -> None:
+    """Verification 2026-11-16 (Low): specification 1.5 says a sequence that
+    is not a number is 400; ``null`` and an array raised ``TypeError`` (a
+    500) and ``true`` cleared through 1. (The publisher's side, kept here
+    with the other 1.5 answers.)"""
+    from actingweb.handlers import subscription as sub_handlers
+
+    webobj = AWWebObj(
+        url="https://test.example.com/x", body=json.dumps({"sequence": seq})
+    )
+    handler = sub_handlers.SubscriptionHandler(webobj, make_config())
+    with (
+        mock.patch.object(
+            handler,
+            "authenticate_actor",
+            return_value=mock.Mock(success=True, actor=mock.Mock()),
+        ),
+        mock.patch.object(
+            sub_handlers, "_authorize_subscription_write", return_value=True
+        ),
+        mock.patch.object(handler, "_get_actor_interface") as iface,
+    ):
+        handler.put("a" * 32, "peer1", "sub1")
+    assert webobj.response.status_code == 400
+    iface.assert_not_called()

@@ -973,3 +973,6 @@ class TestApplyResyncData:
             assert results["list_without_items"]["success"] is False
             assert results["list_without_items"]["operation"] == "skip"
             assert results["list_without_items"]["reason"] == "metadata_without_items"
+            # Verification 2026-11-16 (M5): a list whose items the baseline
+            # could not fetch is a failure, so an owed rebuild stays owed.
+            assert results.failed == ["list_without_items"]

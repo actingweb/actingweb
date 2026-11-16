@@ -848,7 +848,8 @@ class WwwHandler(base_handler.BaseHandler):
             }
             return
         # Execute callback hook for custom web paths. A path no ``www`` hook
-        # is registered for is 404 (3.16; it answered 200 "False").
+        # is registered for, or one the hook does not handle (it returns
+        # ``False`` or ``None``), is 404 (3.16; it answered 200 "False").
         output = None
         if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
@@ -856,7 +857,7 @@ class WwwHandler(base_handler.BaseHandler):
                 hook_result = self.hooks.execute_callback_hooks(
                     "www", actor_interface, {"path": path, "method": "GET"}
                 )
-                if hook_result is not None:
+                if hook_result is not None and hook_result is not False:
                     # Check if hook wants to render a template
                     if isinstance(hook_result, dict) and "template" in hook_result:
                         # Hook returned template rendering request
@@ -1672,7 +1673,7 @@ class WwwHandler(base_handler.BaseHandler):
                 return
 
         # Handle other POST operations or custom web paths (404 when no
-        # ``www`` hook is registered, 3.16)
+        # ``www`` hook is registered or it does not handle the path, 3.16)
         output = None
         if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
@@ -1680,7 +1681,7 @@ class WwwHandler(base_handler.BaseHandler):
                 hook_result = self.hooks.execute_callback_hooks(
                     "www", actor_interface, {"path": path, "method": "POST"}
                 )
-                if hook_result is not None:
+                if hook_result is not None and hook_result is not False:
                     if isinstance(hook_result, str):
                         output = hook_result  # type: ignore[unreachable]
                     elif isinstance(hook_result, dict):

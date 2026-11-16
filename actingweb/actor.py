@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import datetime
 import json
 import logging
@@ -7,7 +8,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import requests
@@ -4031,7 +4032,12 @@ class Actor:
         )
 
     def _prepare_callback(
-        self, peerid=None, sub_obj=None, sub=None, diff=None, blob=None
+        self,
+        peerid: str | None = None,
+        sub_obj: Any = None,
+        sub: dict[str, Any] | None = None,
+        diff: dict[str, Any] | None = None,
+        blob: str | None = None,
     ) -> "callback_sender.Unit | None":
         """The callback one subscriber is owed for ``diff``: its permission
         filter applied and its body built, or None when nothing is sent
@@ -5597,6 +5603,30 @@ class Actor:
     # Diff Registration
     # =========================================================================
 
+    @contextlib.contextmanager
+    def deferred_callbacks(self) -> Iterator[None]:
+        """Inside, :meth:`register_diffs` stores and numbers each diff as
+        always but holds its callbacks; they are delivered together when the
+        block ends, also when it raises (3.16, verification H1: a clear
+        registers first and deletes after, and its subscribers are told
+        after the deletes). Nested blocks deliver once, at the outermost."""
+        if getattr(self, "_deferred_units", None) is not None:
+            yield
+            return
+        self._deferred_units: list[callback_sender.Unit] | None = []
+        try:
+            yield
+        finally:
+            units, self._deferred_units = self._deferred_units or [], None
+            if units:
+                callback_sender.deliver(
+                    units,
+                    self.config,
+                    wait=bool(
+                        getattr(self.config, "sync_subscription_callbacks", False)
+                    ),
+                )
+
     def previous_for_resource_subscribers(
         self, target: str, subtarget: str | None, read: Callable[[], Any]
     ) -> Callable[[], Any] | None:
@@ -5746,14 +5776,15 @@ class Actor:
                         # covers
                         try:
                             jsonblob = json.loads(blob)
-                            if not subtarget:
-                                subblob = json.dumps(
-                                    jsonblob[sub_obj_data["subtarget"]][
-                                        sub_obj_data["resource"]
-                                    ]
-                                )
-                            else:
-                                subblob = json.dumps(jsonblob[sub_obj_data["resource"]])
+                            parent = (
+                                jsonblob[sub_obj_data["subtarget"]]
+                                if not subtarget
+                                else jsonblob
+                            )
+                            # A parent stored as JSON text is read as what it
+                            # holds (3.16, verification M2).
+                            parent = _parsed_value(parent)
+                            subblob = json.dumps(parent[sub_obj_data["resource"]])
                         except (TypeError, ValueError, KeyError):
                             if _resource_went(blob, previous, subtarget, sub_obj_data):
                                 # The resource went with its parent (3.16).
@@ -5885,12 +5916,19 @@ class Actor:
                             lost = lost or e
         finally:
             # Delivered even when preparing one subscriber raised: the
-            # others' diffs are stored and numbered.
-            callback_sender.deliver(
-                units,
-                self.config,
-                wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
-            )
+            # others' diffs are stored and numbered. Inside
+            # deferred_callbacks() the block delivers them when it ends.
+            deferred = getattr(self, "_deferred_units", None)
+            if deferred is not None:
+                deferred.extend(units)
+            else:
+                callback_sender.deliver(
+                    units,
+                    self.config,
+                    wait=bool(
+                        getattr(self.config, "sync_subscription_callbacks", False)
+                    ),
+                )
         if lost is not None:
             # Neither a diff nor a gap for some subscriber: the change is
             # undetectable for it. The write stands; the caller answers 503.
@@ -5935,8 +5973,13 @@ def _resource_went(
         return False
     before = previous()
     if not subtarget:
-        # A target-level write: only a name it carries was touched.
+        # A target-level write: only a name it carries was touched, and a
+        # value it carries as JSON text that still holds the resource did
+        # not remove it (verification M2).
         if not isinstance(new, dict) or sub["subtarget"] not in new:
+            return False
+        now = _parsed_value(new[sub["subtarget"]])
+        if isinstance(now, dict) and sub["resource"] in now:
             return False
         before = before.get(sub["subtarget"]) if isinstance(before, dict) else None
     before = _parsed_value(before)

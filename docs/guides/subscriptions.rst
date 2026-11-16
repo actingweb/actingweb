@@ -120,7 +120,8 @@ Where the write waits:
 run: it is for handlers that run off the loop.
 
 **The delivery budget** (``callback_delivery_budget_seconds``, off by
-default) gives one write a total time for delivering its callbacks: each
+default) gives one request a total time for delivering its callbacks (every
+write in it shares the deadline): each
 send's timeouts are clipped to what is left, and a send that would start with
 nothing left is not made. Every diff was stored and numbered before any send,
 so a subscriber that was skipped sees the gap at its next callback, or polls.
@@ -215,7 +216,7 @@ The ``with_subscription_processing()`` method accepts these parameters:
        (read since 3.16; it was 10 and read by nothing)
    * - ``callback_delivery_budget_seconds``
      - ``None``
-     - Total time one write may spend delivering its callbacks; off unless
+     - Total time one request may spend delivering its callbacks; off unless
        set (see "Callback Delivery")
    * - ``serialize_own_host_callbacks``
      - ``True``

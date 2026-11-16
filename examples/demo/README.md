@@ -91,8 +91,9 @@ are registered with `allow_anonymous=True`, so a provider can `POST` to
 credentials. Each hook then authenticates the caller itself, on every
 request (an authenticated peer reaches a callback hook too): the
 `X-Webhook-Secret` header must equal `DEMO_WEBHOOK_SECRET`, compared in
-constant time. Anything else is refused with 403 and nothing written, and
-with `DEMO_WEBHOOK_SECRET` unset every request is refused. A production hook
+constant time. Anything else is refused and nothing is written (403 for an
+anonymous request; an authenticated caller gets the hook's `false` with
+200), and with `DEMO_WEBHOOK_SECRET` unset every request is refused. A production hook
 verifies the provider's own signature over `data["raw_body"]` instead.
 
 ```bash

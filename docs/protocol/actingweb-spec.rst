@@ -1575,7 +1575,10 @@ index position within the list: the second path segment, after the list's
 name, addresses an item when it is a canonical non-negative integer (``0``,
 ``7``; not ``-1`` or ``01``) and the first segment names an existing list.
 Any other second segment keeps the meaning it has for the name (a nested
-key of a simple property, or ``metadata``, see List Property Metadata).
+key of a simple property, or ``metadata``, see List Property Metadata). An
+implementation MAY reserve further second segments for its own list
+operations (for example ``items``); a nested key with such a name is then
+not reachable by path.
 Access to an item, for every method, is decided on the list's name, as for
 the list itself.
 
@@ -1773,8 +1776,8 @@ callback URL should be included in the request data representation. The
 A successful action MUST return a 2xx code: 200 OK when the action was
 executed and its outcome is in the body, or 201 Created when the response
 names a new action instance in a Location header (below). A request for an
-action the actor does not offer MUST fail with a 4xx code (404 Not Found or
-400 Bad Request). The body of the response
+action the actor does not offer MUST fail with a 4xx code (for example 404
+Not Found, 400 Bad Request, or 403 Forbidden for a DELETE). The body of the response
 MAY contain a mini-application specific data representation detailing
 the outcome of the action. The response MAY include a Location header
 pointing to a URL representing the action requested (e.g.

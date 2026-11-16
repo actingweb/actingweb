@@ -20,11 +20,11 @@ class SubscriptionProcessingConfig:
         auto_storage: Automatically store received data in RemotePeerStore
         auto_cleanup: Register hook to clean up when trust is deleted
         gap_timeout_seconds: Time before triggering resync on sequence gap
-        max_pending: Maximum pending callbacks before back-pressure (429)
+        max_pending: Maximum pending callbacks; a callback beyond it is refused with 400
         storage_prefix: Bucket prefix for RemotePeerStore
         max_concurrent_callbacks: Callbacks of one write sent at once to
             subscribers on other hosts (3.16: read by the sender; default 4)
-        callback_delivery_budget_seconds: Total time one write may spend
+        callback_delivery_budget_seconds: Total time one request may spend
             delivering its callbacks; None (the default) for no budget
         serialize_own_host_callbacks: Send subscribers on the publisher's own
             host one at a time (default True; turn off for a deployment that

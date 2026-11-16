@@ -25,7 +25,7 @@ DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 PEER = "f" * 32
 
 
-def _aw_app() -> ActingWebApp:
+def _aw_app(web_ui: bool = False) -> ActingWebApp:
     app = (
         ActingWebApp(
             aw_type="urn:actingweb:test:publisher_diffs",
@@ -34,7 +34,7 @@ def _aw_app() -> ActingWebApp:
             proto="http://",
         )
         .with_unique_creator(False)
-        .with_web_ui(enable=False)
+        .with_web_ui(enable=web_ui)
     )
 
     @app.property_hook("shout")
@@ -52,9 +52,9 @@ def _aw_app() -> ActingWebApp:
 
 
 class _Pub:
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, web_ui: bool = False) -> None:
         self.kind = kind
-        self.aw = _aw_app()
+        self.aw = _aw_app(web_ui)
         if kind == "flask":
             from flask import Flask
 
@@ -117,11 +117,10 @@ class _Pub:
         return [json.loads(d["diff"]) for d in rows]
 
 
-@pytest.fixture(params=["flask", "fastapi"])
-def pub(request: pytest.FixtureRequest, worker_info: dict) -> Iterator[_Pub]:
+def _started(kind: str, worker_info: dict, web_ui: bool = False) -> _Pub:
     if DATABASE_BACKEND == "postgresql":
         os.environ["PG_DB_PREFIX"] = worker_info["db_prefix"]
-    p = _Pub(request.param)
+    p = _Pub(kind, web_ui)
     r = p.request(
         "POST", "/", json={"creator": f"pd-{uuid.uuid4().hex[:8]}@example.com"}
     )
@@ -135,6 +134,19 @@ def pub(request: pytest.FixtureRequest, worker_info: dict) -> Iterator[_Pub]:
     p.subscribe("target")
     p.subscribe("subtarget", subtarget="x")
     p.subscribe("resource", subtarget="x", resource="r")
+    return p
+
+
+@pytest.fixture(params=["flask", "fastapi"])
+def pub(request: pytest.FixtureRequest, worker_info: dict) -> Iterator[_Pub]:
+    p = _started(request.param, worker_info)
+    yield p
+    p.request("DELETE", f"/{p.actor_id}")
+
+
+@pytest.fixture(params=["flask", "fastapi"])
+def pub_ui(request: pytest.FixtureRequest, worker_info: dict) -> Iterator[_Pub]:
+    p = _started(request.param, worker_info, web_ui=True)
     yield p
     p.request("DELETE", f"/{p.actor_id}")
 
@@ -334,3 +346,39 @@ def test_a_post_that_keeps_the_resource_sends_it_its_value(pub: _Pub) -> None:
     r = pub.request("POST", f"/{pub.actor_id}/properties", json={"x": {"r": 7}})
     assert r.status_code == 201
     assert pub.diffs("resource") == [7]
+
+
+def test_a_post_of_json_text_holding_the_resource_sends_its_value(
+    pub: _Pub,
+) -> None:
+    """Verification 2026-11-16 (M2): a target-level write of a value stored
+    as JSON text told the resource subscriber its resource was deleted while
+    the publisher still served it."""
+    r = pub.request(
+        "POST", f"/{pub.actor_id}/properties", json={"x": json.dumps({"r": 9})}
+    )
+    assert r.status_code == 201, r.status_code
+    assert pub.diffs("resource") == [9]
+
+
+def test_an_sdk_write_of_json_text_sends_the_resource_its_value(pub: _Pub) -> None:
+    from actingweb.interface.actor_interface import ActorInterface
+
+    actor = ActorInterface.get_by_id(pub.actor_id, pub.aw.get_config())
+    assert actor is not None
+    actor.properties["x"] = json.dumps({"r": 9, "s": 2})
+    assert pub.diffs("resource") == [9]
+
+
+def test_a_web_ui_delete_reaches_every_level(pub_ui: _Pub) -> None:
+    """Verification 2026-11-16 (M6): the web UI's delete sends the encoded
+    ``""`` every writer sends (Phase 3), at every level."""
+    r = pub_ui.request(
+        "GET",
+        f"/{pub_ui.actor_id}/www/properties/x?_method=DELETE",
+        headers={"Sec-Fetch-Site": "same-origin"},
+    )
+    assert r.status_code in (200, 204, 302), r.status_code
+    assert pub_ui.diffs("target") == [{"x": ""}]
+    assert pub_ui.diffs("subtarget") == [""]
+    assert pub_ui.diffs("resource") == [""]

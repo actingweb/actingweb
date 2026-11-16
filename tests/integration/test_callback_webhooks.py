@@ -79,6 +79,8 @@ def _aw_app(*, with_www: bool, with_wildcard: bool) -> ActingWebApp:
         def www(actor: Any, name: str, data: Any) -> Any:
             if data.get("path") == "known":
                 return {"page": "known"}
+            if data.get("path") == "nothing":
+                return None
             return False
 
     return app
@@ -217,9 +219,19 @@ def test_a_www_hook_keeps_its_answers(www: _Client) -> None:
     r = www.request("GET", f"/{www.actor_id}/www/known", headers=headers)
     assert r.status_code == 200
     assert json.loads(www.text(r)) == {"page": "known"}
-    # A hook that ran and returned False: today's answer.
-    r = www.request("GET", f"/{www.actor_id}/www/other", headers=headers)
-    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("path", ["other", "nothing"])
+def test_a_www_path_the_hook_does_not_handle_is_404(
+    www: _Client, method: str, path: str
+) -> None:
+    """Owner 2026-11-16 (verification M7): a ``www`` hook's ``False`` or
+    ``None`` is "not handled" and answers 404, not 200 with ``False``."""
+    headers = {**www.auth, "Sec-Fetch-Site": "same-origin"}
+    r = www.request(method, f"/{www.actor_id}/www/{path}", headers=headers)
+    assert r.status_code == 404
+    assert "False" not in www.text(r)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +253,41 @@ def test_an_anonymous_post_runs_the_flagged_hook(client: _Client) -> None:
     assert data["event"] == "x"
     assert json.loads(data["raw_body"]) == {"event": "x"}
     assert {k.lower(): v for k, v in data["headers"].items()}["x-signature"] == "abc"
+
+
+def test_an_authenticated_caller_cannot_choose_headers_or_raw_body(
+    client: _Client,
+) -> None:
+    """Verification 2026-11-16 (M1): the authenticated path took ``headers``
+    and ``raw_body`` from the caller's JSON, so a hook that verifies a
+    signature over ``raw_body`` checked what the caller chose."""
+    forged = {"event": "paid", "headers": {"X-Signature": "forged"}, "raw_body": "x"}
+    r = client.request(
+        "POST",
+        _cb(client, "incoming"),
+        json=forged,
+        headers={**client.auth, "X-Signature": "real"},
+    )
+    assert r.status_code == 200, client.text(r)
+    _name, data = SEEN[-1]
+    assert data["anonymous"] is False
+    assert json.loads(data["raw_body"]) == forged  # the bytes that arrived
+    seen = {k.lower(): v for k, v in data["headers"].items()}
+    assert seen["x-signature"] == "real"
+    # Credentials are not handed to the hook, on either path.
+    assert "authorization" not in seen and "cookie" not in seen
+
+
+def test_an_anonymous_hook_is_not_given_cookies(client: _Client) -> None:
+    r = client.request(
+        "POST",
+        _cb(client, "incoming"),
+        json={"event": "x"},
+        headers={"Cookie": "session=secret"},
+    )
+    assert r.status_code == 200, client.text(r)
+    _name, data = SEEN[-1]
+    assert "cookie" not in {k.lower() for k in data["headers"]}
 
 
 def test_the_wildcard_hook_does_not_run_anonymously(wild: _Client) -> None:

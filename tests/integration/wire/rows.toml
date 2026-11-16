@@ -1184,8 +1184,8 @@ test = "test_wire_queue_and_lifecycle.py::test_wq6_null_sequence"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3"]
 exposure = false
-expected = "PUT .../<subid> {sequence: null} with B's bearer: 500 (the handler's TypeError reaches the integration's catch-all); the diff stays queued."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
+expected = "PUT .../<subid> {sequence: null} with B's bearer: 400 (specification 1.5: a sequence that is not a number); the diff stays queued."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-16 a null sequence is 400, not 500 (spec-1-5 iteration 9)"]
 
 [rows."WC5"]
 test = "test_wire_queue_and_lifecycle.py::test_wc5_trust_deleted"

@@ -341,7 +341,7 @@ def register_list_diff(
     )
 
 
-_ITEM_INDEX_RE = re.compile(r"(?:0|[1-9][0-9]*)")
+_ITEM_INDEX_RE = re.compile(r"(?:0|[1-9][0-9]{0,17})")  # under 10**18
 
 
 def item_index(segment: str) -> int | None:
@@ -364,8 +364,9 @@ def delete_list_item(
     list_prop: Any, index: int, approve: Callable[[Any], bool] | None = None
 ) -> dict[str, Any] | None:
     """Delete the item at ``index`` and return the ``delete`` diff's fields
-    (``index``, ``length``, ``old_item`` when it was read); None when the
-    index is out of range. Shared by ``/items`` and the path form (3.16).
+    (``index``, ``length``, and ``old_item`` when it was read: on a v2 list
+    with a delete hook; a v1 list's diff carries none); None when the index
+    is out of range. Shared by ``/items`` and the path form (3.16).
 
     ``approve`` is given the item before anything is deleted; False raises
     ``_DeleteRefused``. On a v2 list the item it is given is the one the
@@ -1782,8 +1783,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                 self._respond_name_taken(e)
                 return
             except ValueError as e:
-                # The store refuses a name it cannot key (control character,
-                # collision with an existing list); the request is malformed.
+                # The store refuses a name it cannot key (a control
+                # character); the request is malformed. A collision with a
+                # list is ListNameTakenError, answered 409 above.
                 self.response.set_status(400, str(e))
                 return
         myself.register_diffs(

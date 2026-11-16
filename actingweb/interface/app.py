@@ -1413,14 +1413,14 @@ class ActingWebApp:
             auto_storage: Automatically store received data in RemotePeerStore
             auto_cleanup: Register hook to clean up when trust is deleted
             gap_timeout_seconds: Time before triggering resync on sequence gap
-            max_pending: Maximum pending callbacks before back-pressure (429)
+            max_pending: Maximum pending callbacks; a callback beyond it is refused with 400
             storage_prefix: Bucket prefix for RemotePeerStore
             max_concurrent_callbacks: Callbacks of one write sent at once to
                 subscribers on other hosts (default 4, 3.16). A FastAPI
                 deployment whose subscribers call it back through another
                 origin sizes its handler pool for this; see the deployment
                 guide.
-            callback_delivery_budget_seconds: Total time one write may spend
+            callback_delivery_budget_seconds: Total time one request may spend
                 delivering its callbacks (off by default). Set it under a
                 gateway's response limit; sends not started are skipped and
                 sends in flight end with it, the diffs are stored either way.

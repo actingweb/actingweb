@@ -30,6 +30,8 @@ RESERVED_CALLBACK_NAMES = frozenset(
 # The largest body an anonymous webhook POST may carry (3.16); larger answers
 # 413. An authenticated caller is not limited here.
 ANONYMOUS_CALLBACK_MAX_BYTES = 1024 * 1024
+# Left out of the headers a callback hook is given (see _request_headers).
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie"})
 
 # How far ahead of the receiver's clock a permission callback's timestamp may
 # be: ordinary clock skew. Further ahead answers 400.
@@ -275,11 +277,32 @@ class CallbacksHandler(base_handler.BaseHandler):
         )
 
     def _request_headers(self) -> dict[str, str]:
+        """The request's headers for a callback hook, without the caller's
+        credentials (``Authorization``, ``Cookie``): a provider signs
+        neither, and a hook does not need them."""
         headers = getattr(self.request, "headers", None) or {}
         try:
-            return {str(k): str(v) for k, v in dict(headers).items()}
+            return {
+                str(k): str(v)
+                for k, v in dict(headers).items()
+                if str(k).lower() not in _CREDENTIAL_HEADERS
+            }
         except (TypeError, ValueError):
             return {}
+
+    def _request_hook_data(
+        self, raw: bytes, method: str, anonymous: bool
+    ) -> dict[str, Any]:
+        """A callback hook's ``data``: the body's JSON object, then what the
+        library sets from the request itself, which a body cannot override
+        (3.16, verification M1: an authenticated caller's JSON supplied
+        ``headers`` and ``raw_body``)."""
+        hook_data = self._hook_data(raw)
+        hook_data["method"] = method
+        hook_data["anonymous"] = anonymous
+        hook_data["headers"] = self._request_headers()
+        hook_data["raw_body"] = raw
+        return hook_data
 
     def _raw_body(self) -> bytes:
         body = self.request.body
@@ -326,11 +349,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(500, "Internal error")
             return
-        hook_data = self._hook_data(raw)
-        hook_data["method"] = "POST"
-        hook_data["anonymous"] = True
-        hook_data["headers"] = self._request_headers()
-        hook_data["raw_body"] = raw
+        hook_data = self._request_hook_data(raw, "POST", anonymous=True)
         hook_result = self.hooks.execute_callback_hooks(
             name, actor_interface, hook_data, anonymous=True
         )
@@ -899,9 +918,9 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                hook_data = self._hook_data(self._raw_body())
-                hook_data["method"] = method
-                hook_data["anonymous"] = False
+                hook_data = self._request_hook_data(
+                    self._raw_body(), method, anonymous=False
+                )
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )

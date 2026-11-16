@@ -117,8 +117,8 @@ the sends are tasks the library keeps until done. On a function platform the
 instance may freeze before they finish, which is why that shape sets the
 flag.
 
-The library sets neither new setting by itself and does not detect the
-platform.
+The library sets neither new setting by itself; it only warns, below, when
+it detects Lambda without ``with_sync_callbacks()``.
 
 .. note::
    ActingWeb automatically detects Lambda environments (via ``AWS_LAMBDA_FUNCTION_NAME`` or ``AWS_EXECUTION_ENV`` environment variables) and logs a warning if sync callbacks are not enabled. This helps catch misconfigurations during development and deployment.

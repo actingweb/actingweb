@@ -528,11 +528,13 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     400, "Error in json body and no GET parameters"
                 )
                 return
+        # A number, or a string of one (a query parameter); anything else,
+        # ``true`` and ``null`` included, is 400 (specification 1.5; null
+        # raised a 500 and ``true`` cleared through 1).
         try:
-            if not isinstance(seq, int):
-                seqnr = int(seq)
-            else:
-                seqnr = seq
+            if isinstance(seq, bool) or not isinstance(seq, int | str):
+                raise ValueError(seq)
+            seqnr = seq if isinstance(seq, int) else int(seq)
         except ValueError:
             self.response.set_status(400, "Sequence does not contain a number")
             return

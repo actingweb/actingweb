@@ -33,7 +33,7 @@ def register_ui_hooks(app):
 
         Returns:
             For template rendering: {"template": "template-name.html", "data": {...}}
-            False to fall through to default handling
+            False when the path is not one of these: the page answers 404
 
         Template Rendering:
             When returning {"template": "...", "data": {...}}, ActingWeb renders
@@ -51,5 +51,5 @@ def register_ui_hooks(app):
                 "data": {},
             }
 
-        # Fall through to default handling for unknown paths
+        # Not handled: the library answers 404 (3.16)
         return False

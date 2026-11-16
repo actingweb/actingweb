@@ -42,7 +42,7 @@ Web UI Routes (when with_web_ui(True))
 - `/<actor_id>/www/properties` and `/<actor_id>/www/properties/<name>`
 - `/<actor_id>/www/trust` and `/<actor_id>/www/trust/new`
 - `/<actor_id>/www/init`: Initialization helpers
-- Any other `/<actor_id>/www/<path>`: the application's `www` callback hook; 404 when none is registered
+- Any other `/<actor_id>/www/<path>`: the application's `www` callback hook; 404 when none is registered or it returns `False` or `None`
 
 Authentication
 ==============

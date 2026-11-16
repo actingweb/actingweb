@@ -443,15 +443,21 @@ def test_the_meta_object_is_json(client: _Client) -> None:
 
 
 class _Peer:
-    def __init__(self, actor_factory: Any, trust_helper: Any, grant: dict[str, Any]):
+    def __init__(
+        self,
+        actor_factory: Any,
+        trust_helper: Any,
+        grant: dict[str, Any],
+        relationship: str = "friend",
+    ):
         self.a = actor_factory.create(f"items-owner-{uuid.uuid4().hex[:6]}@example.com")
         self.f = actor_factory.create(
             f"items-friend-{uuid.uuid4().hex[:6]}@example.com"
         )
-        self.secret = trust_helper.establish(self.f, self.a, "friend")["secret"]
+        self.secret = trust_helper.establish(self.f, self.a, relationship)["secret"]
         owner = (self.a["creator"], self.a["passphrase"])
         r = requests.put(
-            f"{self.a['url']}/trust/friend/{self.f['id']}/permissions",
+            f"{self.a['url']}/trust/{relationship}/{self.f['id']}/permissions",
             json={"properties": grant},
             auth=owner,
         )
@@ -584,3 +590,40 @@ def test_an_attribute_list_reports_where_an_append_landed(client: _Client) -> No
     assert lst.append_indexed("a") == 0
     assert lst.append_indexed("b") == 1
     assert lst.to_list() == ["a", "b"]
+
+
+def test_a_grant_naming_the_item_paths_but_not_the_list_refuses_them(
+    actor_factory: Any, trust_helper: Any
+) -> None:
+    """Verification 2026-11-16 (M6): access to a list item is decided on the
+    list's name, so a pattern that names ``secret/*`` and not ``secret``
+    admits no item form (the exclusion test above passes either way). An
+    ``associate``: its default grant (``public/*``) is unioned with the
+    override, and a ``friend``'s ``*`` would name the list."""
+    peer = _Peer(
+        actor_factory,
+        trust_helper,
+        {
+            "patterns": ["shared", "shared/*", "secret/*"],
+            "operations": ["read", "write", "delete"],
+        },
+        relationship="associate",
+    )
+    assert peer("GET", "/shared/0").status_code == 200
+    for method, tail, body in [
+        ("GET", "/secret/0", None),
+        ("PUT", "/secret/0", "x"),
+        ("DELETE", "/secret/0", None),
+        ("POST", "/secret", "x"),
+    ]:
+        r = peer(method, tail, json=body) if body is not None else peer(method, tail)
+        assert r.status_code == 403, (method, tail, r.status_code, r.text)
+
+
+def test_an_index_too_long_for_an_int_is_not_an_item_path() -> None:
+    """Verification 2026-11-16 (Low): ``int()`` refuses more than 4,300
+    digits, so such a segment raised (a 500)."""
+    from actingweb.handlers.properties import item_index
+
+    assert item_index("1" * 5000) is None
+    assert item_index("123") == 123

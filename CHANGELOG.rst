@@ -998,9 +998,13 @@ CHANGED
   deleted level and ``{name: ""}`` above it, a resource subscription gets
   ``""`` when its key existed and went, a subscription above a nested write
   gets the parent's whole stored value, the diff is the stored value, and a
-  clear is one diff naming every deleted property (lists are not cleared).
+  clear is one diff naming every deleted property (lists are not cleared),
+  sent after the deletes; a name written while the clear ran is kept, and
+  a diff with its value follows.
   The previous value is read only when a resource-level subscription exists,
   by ``PUT``, ``DELETE``, ``POST /properties``, the web UI and the SDK alike.
+  A parent written as JSON text is read as the JSON it holds: a resource it
+  still holds gets its value, not a delete.
   ``Actor.register_diffs`` takes keyword-only ``previous`` and ``whole``.
   **Behavior change:** see ``docs/migration/v3.16.rst``, "What a subscriber
   receives", for what a subscriber application checks.
@@ -1021,8 +1025,9 @@ CHANGED
 - **A ``none`` subscription polls its resync.** It was sent a resync callback
   it could not use; the resync is now a ``type: resync`` marker in its queue,
   and ``sync_subscription`` acts on a marker as a resync (a rebuild). The
-  poll runs the application's data hooks for what it applies when given the
-  configuration, which the gap resync now passes. **Behavior change.**
+  poll runs the application's data hooks for each diff it processes when
+  given the configuration, which the gap resync now passes, with or without
+  ``auto_storage``. **Behavior change.**
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
   nothing (it cleared the queue); a callback with ``data`` and no integer
   ``sequence`` answers 400 (it was dropped with 204); a granularity other
@@ -1040,9 +1045,11 @@ CHANGED
   dict (a JSON array was a 500), and the hook's ``data`` carries
   ``anonymous: False``. **Behavior change:** a probe that expected 200 from
   an unhandled callback gets 403.
-- **A ``/www/<path>`` with no ``www`` hook registered answers 404** (it
-  answered 200 with the text ``False``). A ``www`` hook that returns
-  ``False`` keeps its answer. **Behavior change.**
+- **A ``/www/<path>`` that nothing handles answers 404** (it answered 200
+  with the text ``False``): with no ``www`` hook registered, or when the
+  hook returns ``False`` or ``None`` for the path. **Behavior change:** a
+  ``www`` hook that returned ``False`` for a page it served gets 404; it
+  returns what the page shows instead.
 - **Trust answers follow the specification.** ``approved`` in a trust
   ``PUT`` accepts ``true`` (or the string ``"true"`` a form sends) only;
   ``false``, ``null`` and anything else answer 400 with nothing changed
@@ -1074,7 +1081,8 @@ CHANGED
   /properties/<name>`` sent stored text as ``application/json``, which a
   client could not parse. Now text is ``text/plain; charset=utf-8`` and a
   JSON value ``application/json``. A subscriber accepts a text baseline
-  labelled either way. **Behavior change:** a 3.15 subscriber of a 3.16
+  labelled either way. **Behavior change:** a client that parsed the body as JSON because
+  of the label checks the label first; a 3.15 subscriber of a 3.16
   publisher reads a text value at a property-name subscription as a failed
   fetch; upgrade subscribers first.
 - **A name taken by a list or a property answers 409 on every route.** A
@@ -2285,7 +2293,10 @@ ADDED
   library's callback names, never the ``"*"`` hooks; 413 above 1 MB). The
   hook authenticates its caller itself from ``data["headers"]`` and
   ``data["raw_body"]`` (``data["anonymous"]`` is ``True``), and its falsy
-  result answers 403 (a truthy one 200). Since 3.16 made
+  result answers 403 (a truthy one 200). Every callback hook, anonymous or
+  not, gets ``headers`` (without ``Authorization`` and ``Cookie``) and
+  ``raw_body`` from the request itself; a JSON body cannot supply them, so
+  a hook's signature check holds whoever calls. Since 3.16 made
   every callback authenticated, this is how a provider webhook works again.
   The demo's ``sms_webhook`` and ``payment_webhook`` use it with a shared
   secret.

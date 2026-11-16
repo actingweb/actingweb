@@ -2331,11 +2331,12 @@ affected and the section that says what to check:
        ``allow_anonymous``
      - third party
      - :doc:`../reference/hooks-reference`
-   * - ``/www/<unknown path>``
+   * - ``/www/<unknown path>`` (no ``www`` hook, or the hook returns
+       ``False`` or ``None``)
      - 200 ``False``
      - 404
      - browser
-     - `Peer paths are bound to their peer`_
+     - :doc:`../guides/web-ui`
    * - ``GET /<actor_id>`` as a peer
      - with ``passphrase``
      - without it

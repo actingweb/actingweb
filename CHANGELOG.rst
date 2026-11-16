@@ -2291,7 +2291,8 @@ ADDED
   ``callback_delivery_budget_seconds`` and ``serialize_own_host_callbacks``**
   (also accepted by ``with_subscription_processing()``): a total time one
   request may spend delivering its callbacks, shared by every diff it
-  registers (off by default; sends not started are skipped, sends in flight
+  registers (off by default; only on a write that waits for its callbacks, the
+  event loop's sends are past the response already; sends not started are skipped, sends in flight
   end with it, the diffs are stored either way), and a switch
   to send own-host subscribers under the bound for a deployment that serves
   one request per function instance. See ``docs/quickstart/deployment.rst``.

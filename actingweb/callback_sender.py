@@ -204,7 +204,9 @@ def send_sync(send: PreparedSend, deadline: _Deadline | None = None) -> int:
 
 
 async def send_async(send: PreparedSend) -> int:
-    """POST one callback with ``httpx`` (a task on a running loop)."""
+    """POST one callback with ``httpx`` (a task on a running loop). No
+    delivery budget: the write has answered already, so there is no response
+    for a budget to protect."""
     import httpx
 
     try:
@@ -215,7 +217,10 @@ async def send_async(send: PreparedSend) -> int:
                 send.url, content=send.body, headers=send.headers
             )
     except (httpx.HTTPError, httpx.TimeoutException) as e:
-        logger.debug(f"Peer did not respond to callback on url({send.url}): {e}")
+        logger.warning(
+            f"Callback seq={send.sequence} to {send.peer_id} failed - peer did "
+            f"not respond: {e}"
+        )
         return 0
     if not _ok(response.status_code):
         logger.warning(
@@ -258,7 +263,8 @@ async def _run_unit_async(unit: Unit, gate: asyncio.Semaphore) -> None:
         unit.delivered = delivered
         if unit.on_result is not None:
             try:
-                unit.on_result(delivered)
+                # A database write: off the loop, so it does not block it.
+                await asyncio.to_thread(unit.on_result, delivered)
             except Exception as e:  # folds DbError: best effort, logged
                 logger.error(f"Recording a callback's outcome failed: {e}")
 
@@ -293,9 +299,11 @@ def deliver(units: list[Unit], config: Any, *, wait: bool) -> bool:
         return False
 
     deadline = _Deadline.for_request(settings.budget)
+    # Partitioned by the unit's flag, not by membership: units are
+    # dataclasses, and two equal ones must not be taken for each other.
     own = [u for u in units if u.own_host and settings.serialize_own_host]
-    remote = [u for u in units if u not in own]
-    if len(remote) <= 1 and not own or len(remote) == 0:
+    remote = [u for u in units if not (u.own_host and settings.serialize_own_host)]
+    if not remote or (len(remote) == 1 and not own):
         # Nothing to overlap with: on the calling thread, as before.
         for unit in remote:
             _run_unit_sync(unit, deadline)

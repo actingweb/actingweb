@@ -113,7 +113,9 @@ limit, not as a tuning knob: lower, it cuts deliveries that would have
 succeeded.
 
 **An event loop without** ``with_sync_callbacks()``. The write does not wait;
-the sends are tasks the library keeps until done. On a function platform the
+the sends are tasks the library keeps until done, and the delivery budget
+does not apply to them (it protects a response that, here, was already
+sent). On a function platform the
 instance may freeze before they finish, which is why that shape sets the
 flag.
 

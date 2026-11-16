@@ -2,8 +2,8 @@
 
 Found 2026-11-15 while writing `spec-1-5` Phase 4's two-write test
 (`tests/integration/test_callback_delivery_shapes.py`,
-`test_two_simultaneous_low_granularity_writes_reach_every_replica`, a strict
-`xfail`). Two writes to one publisher at the same moment, four
+`test_two_simultaneous_low_granularity_writes_reach_every_replica`, an
+`xfail`, not strict since it passed once on CI, PR #178). Two writes to one publisher at the same moment, four
 low-granularity subscribers on another origin of the same process: both
 writes are answered, but one subscriber's replica lacks one of the two
 values after 20 s. It fails the same way with the serial sender of Phase 3

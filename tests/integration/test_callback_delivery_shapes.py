@@ -128,7 +128,9 @@ def test_two_simultaneous_writes_with_fetching_subscribers_complete(
 
 
 @pytest.mark.xfail(
-    strict=True,
+    # Not strict: the race is timing-dependent and passes now and then
+    # (it XPASSed on CI, Python 3.11 with DynamoDB, PR #178).
+    strict=False,
     reason=(
         "Pre-existing, not the sender's: two concurrent low-granularity "
         "writes leave one subscriber without one of them until its next "

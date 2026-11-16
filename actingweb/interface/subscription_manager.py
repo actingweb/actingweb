@@ -728,19 +728,29 @@ class SubscriptionManager:
         if target == "properties" and subtarget and resource:
             whole = functools.partial(self._stored_property, subtarget)
 
+        # Only when there is one: an application's override of
+        # register_diffs with the older signature keeps working.
+        whole_kw: dict[str, Any] = {} if whole is None else {"whole": whole}
         self._core_actor.register_diffs(
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
             blob=blob,
-            whole=whole,
+            **whole_kw,
         )
 
     def _stored_property(self, name: str) -> str | None:
         """A property's stored value (JSON text), or None when the store
         holds none under the name."""
+        from ..db.exceptions import DbError
+
         store = self._core_actor.property
-        value = store[name] if store is not None else None
+        try:
+            value = store[name] if store is not None else None
+        except DbError:
+            raise
+        except Exception:  # a name the store does not key (``list:...``)
+            return None
         return value if isinstance(value, str) and value != "" else None
 
     def get_subscription(
@@ -1206,8 +1216,11 @@ class SubscriptionManager:
         when the poll replaced the replica from one (an owed rebuild, a
         resync marker, a diff that could not be applied, no diffs to fetch,
         or diffs that were all applied already); the result's ``baseline``
-        is that value. A rebuild after a list diff the same poll told tells
-        nothing more.
+        is that value. Only a baseline that was applied, all of it: one that
+        was skipped (another subscription covers the replica), had an entry
+        that could not be stored, or was empty for a whole target with
+        nothing to fetch, tells nothing. A rebuild after a list diff the same
+        poll told tells nothing more.
 
         Args:
             peer_id: ID of the peer actor we subscribed to
@@ -1355,14 +1368,17 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(
+                applied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                stored_baseline = transformed_data
+                # Told to the hooks only when it was applied, all of it
+                # (not skipped for a covering subscription, no entry failed).
+                if not applied.skipped and not applied.failed:
+                    stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -1629,7 +1645,7 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-                store.apply_resync_data(
+                reapplied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
@@ -1682,7 +1698,12 @@ class SubscriptionManager:
                     diffs_fetched=diffs_fetched,
                     diffs_processed=1,  # Count baseline as 1 processed
                     final_sequence=response.get("sequence", 0),
-                    baseline=transformed_data,
+                    # Told to the hooks only when all of it was applied.
+                    baseline=(
+                        None
+                        if reapplied.skipped or reapplied.failed
+                        else transformed_data
+                    ),
                     target=sub.target,
                     subtarget=sub.subtarget or None,
                 )
@@ -2357,14 +2378,17 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(
+                applied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                stored_baseline = transformed_data
+                # Told to the hooks only when it was applied, all of it
+                # (not skipped for a covering subscription, no entry failed).
+                if not applied.skipped and not applied.failed:
+                    stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -2631,7 +2655,7 @@ class SubscriptionManager:
                     peer_id=peer_id,
                     validate_peer_id=False,
                 )
-                store.apply_resync_data(
+                reapplied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
@@ -2684,7 +2708,12 @@ class SubscriptionManager:
                     diffs_fetched=diffs_fetched,
                     diffs_processed=1,  # Count baseline as 1 processed
                     final_sequence=response.get("sequence", 0),
-                    baseline=transformed_data,
+                    # Told to the hooks only when all of it was applied.
+                    baseline=(
+                        None
+                        if reapplied.skipped or reapplied.failed
+                        else transformed_data
+                    ),
                     target=sub.target,
                     subtarget=sub.subtarget or None,
                 )

@@ -97,7 +97,12 @@ Trust Relationships
 
 The trust interface (``/<actor_id>/www/trust``) allows users to:
 
-- View existing trust relationships with permission status indicators
+- View existing trust relationships with a status that covers both sides
+  (3.16): **Active** (both approved), **Waiting for peer** (you approved),
+  **Awaiting your approval** (the peer approved), **Awaiting both**, and
+  **Unverified** (the request did not verify and cannot be approved). A row
+  whose peer has no side of its own (an OAuth2 or MCP client) keeps the
+  approved and verified badges
 - View and edit relationship-specific permissions 
 - Approve pending relationships
 - Manage trust connections with other actors
@@ -108,6 +113,15 @@ The trust interface (``/<actor_id>/www/trust``) allows users to:
 - Select trust type from configured registry
 - Specify peer actor URL and relationship details  
 - Creates reciprocal trust relationships
+- Linked from the dashboard and from the trust list
+- Every submit answers with a redirect (3.16): to the trust list when the
+  trust was created, to the trust list with a notice when the peer already
+  has one, and back to the form with a message when it failed. The redirect
+  carries a code (``?error=<code>`` or ``?notice=<code>``); the page shows
+  the library's fixed text for a code it knows and nothing otherwise, and
+  the form is not prefilled, so nothing from a request is rendered. Every
+  failure on the peer's side (unreachable, not an actor, refused) has one
+  message
 - Relationship names must be URL-safe (letters, numbers, underscores, hyphens only)
 
 Property Hooks and Web Interface
@@ -258,7 +272,8 @@ Available Templates
     Available variables:
     - ``url``: Base URL for navigation
     - ``id``: Actor ID
-    - ``trusts``: List of trust relationship objects
+    - ``trusts``: List of trust relationship objects; each has ``status_label`` (3.16: ``Active``, ``Waiting for peer``, ``Awaiting your approval``, ``Awaiting both`` or ``Unverified``; ``None`` for a row whose peer has no side of its own)
+    - ``notice``: A message to show above the list (after a new-trust submit for a peer that already has a trust), or ``None``
     - ``trust_connections``: Connection metadata for each trust with ``peerid``, ``established_via``, ``created_at``, ``last_connected_at``, and ``last_connected_via``
 
 **aw-actor-www-trust-new.html**
@@ -270,7 +285,7 @@ Available Templates
     - ``form_action``: Form submission URL
     - ``form_method``: HTTP method for form (typically "POST")
     - ``trust_types``: List of available trust types from registry
-    - ``error``: Error message if trust types are not configured
+    - ``error``: Error message: trust types are not configured, or why the last submit failed (a fixed text; ``None`` otherwise)
     - ``default_relationship``: Default relationship name
 
 **aw-actor-www-init.html**

@@ -130,3 +130,10 @@ and position).
   after the delete. The drain's claim reads a state row that is gone and
   ends, so no handler runs; the row is an orphan until the peer's state is
   cleared. Recorded by the same plan; not tested.
+- **A queued callback whose handler faults every time blocks the queue**
+  (`CallbackProcessor`, since the pre-validation plan): while the next
+  callback in line is itself queued the gap timeout does not fire (a resync
+  there cleared callbacks already answered), so a head that raises `DbError`
+  on every drain is retried by each delivery and later callbacks queue behind
+  it until the queue is full. A poll or a resync callback still recovers it.
+  A bound on the attempts per queued callback, then the resync.

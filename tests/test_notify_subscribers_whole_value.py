@@ -128,3 +128,25 @@ def test_another_target_passes_the_data_through() -> None:
     ):
         _notify(w, "notes", "settings", "deep")
     assert [json.loads(b) for b in blobs] == [{"settings": {"deep": {"a": 1}}}]
+
+
+def test_a_subtarget_subscriber_gets_the_whole_value_less_its_exclusion() -> None:
+    w = _world(("b", "subtarget", "settings", ""))
+    sent = _notify(w, "properties", "settings", "deep")
+    assert sent["subtarget"] == {"theme": "x", "deep": {"a": 1}}
+
+
+def test_a_plain_notification_passes_no_whole() -> None:
+    """An application's override of ``register_diffs`` with the signature
+    from before 3.16 keeps working for every call that needs no whole value."""
+    w = _world()
+    actor = Actor(aid(w.a), config=w.config)
+    with mock.patch.object(Actor, "register_diffs", autospec=True) as register:
+        ActorInterface(actor).subscriptions.notify_subscribers(
+            "properties", {"color": "red"}
+        )
+        ActorInterface(actor).subscriptions.notify_subscribers(
+            "properties", {"a": 1}, subtarget="settings", resource="deep"
+        )
+    assert "whole" not in register.call_args_list[0].kwargs
+    assert callable(register.call_args_list[1].kwargs["whole"])

@@ -428,3 +428,64 @@ def test_demo_webhooks_refuse_an_authenticated_caller_without_the_secret(monkeyp
     )
     assert result is False
     assert actor.written == {}
+
+
+def test_the_demo_trust_templates_render() -> None:
+    """The demo ships its own trust list and dashboard: they show what both
+    sides of a trust have done, the notice, and a link to the new-trust
+    form, as the library's templates do (3.16)."""
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(
+        loader=FileSystemLoader(str(DEMO_DIR / "templates")), autoescape=True
+    )
+    labels = [
+        "Active",
+        "Waiting for peer",
+        "Awaiting your approval",
+        "Awaiting both",
+        "Unverified",
+    ]
+    rows = [
+        {
+            "peerid": f"peer{index}",
+            "relationship": "friend",
+            "type": "urn:test",
+            "desc": "",
+            "approved": label in ("Active", "Waiting for peer"),
+            "verified": label != "Unverified",
+            "status_label": label,
+            "approveuri": "/x/trust/friend/p",
+        }
+        for index, label in enumerate(labels)
+    ]
+    # An OAuth2 client's row has no side of its own: the old badges.
+    rows.append(
+        {
+            "peerid": "oauth2_client:c",
+            "relationship": "mcp_client",
+            "approved": True,
+            "verified": True,
+            "status_label": None,
+        }
+    )
+    context = {
+        "id": "a1",
+        "url": "https://demo.example/a1/",
+        "actor_root": "https://demo.example/a1",
+        "actor_www": "https://demo.example/a1/www",
+    }
+    page = env.get_template("aw-actor-www-trust.html").render(
+        trusts=rows, notice="<b>A trust with that peer already exists</b>", **context
+    )
+    table = page[page.index("<tbody>") : page.index("</tbody>")]
+    for label in labels:
+        assert f">{label}</span>" in table, label
+    assert ">Approved</span>" in table and ">Verified</span>" in table
+    assert 'href="https://demo.example/a1/www/trust/new"' in page
+    assert 'role="status"' in page
+    assert "&lt;b&gt;A trust with that peer already exists" in page  # escaped
+    plain = env.get_template("aw-actor-www-trust.html").render(trusts=[], **context)
+    assert 'role="status"' not in plain
+    dashboard = env.get_template("aw-actor-www-root.html").render(**context)
+    assert 'href="https://demo.example/a1/www/trust/new"' in dashboard

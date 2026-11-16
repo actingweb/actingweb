@@ -112,9 +112,11 @@ class CallbackProcessor:
     # A delivery that recorded its sequence takes the callbacks queued behind
     # its claim (``_drain``), one claim and one sequence write per callback:
     # always the first, then at most this many in all and none once this
-    # much time has passed since the drain started (the publisher is waiting
-    # for the delivery's answer; its read timeout for a diff is 10 seconds).
-    # What is left stays queued for the next delivery.
+    # much time has passed since the drain started. The publisher is waiting
+    # for the delivery's answer (its read timeout for a diff is 10 seconds):
+    # a slow handler plus the drain can pass it, and the publisher then
+    # counts a callback that was applied as missed, which a duplicate
+    # answers later. What is left stays queued for the next delivery.
     DRAIN_MAX_CALLBACKS = 20
     DRAIN_SECONDS = 5.0
     # Tries of the queue row's compare-and-swap before it is a fault.
@@ -1092,7 +1094,9 @@ class CallbackProcessor:
                     peer_id, subscription_id, callback_data, after_seq=last_seq
                 ):
                     logger.warning(
-                        f"Pending queue full for {peer_id}:{subscription_id}"
+                        f"Callback seq={sequence} for {peer_id}:{subscription_id} not "
+                        "queued: the pending queue is full, or the callback was "
+                        "refused"
                     )
                     return ProcessResult.REJECTED
 
@@ -1549,7 +1553,9 @@ class CallbackProcessor:
                     peer_id, subscription_id, callback_data, after_seq=last_seq
                 ):
                     logger.warning(
-                        f"Pending queue full for {peer_id}:{subscription_id}"
+                        f"Callback seq={sequence} for {peer_id}:{subscription_id} not "
+                        "queued: the pending queue is full, or the callback was "
+                        "refused"
                     )
                     return ProcessResult.REJECTED
 

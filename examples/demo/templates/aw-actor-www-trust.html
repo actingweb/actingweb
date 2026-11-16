@@ -29,6 +29,13 @@
                 <p class="text-muted">Manage connections with other actors</p>
             </div>
 
+            {% if notice %}
+            <div class="card mb-md" role="status"><div class="card-body text-sm">{{ notice }}</div></div>
+            {% endif %}
+            <div class="flex gap-sm mb-md">
+                <a href="{{ actor_www|default('') }}/trust/new" class="btn btn-secondary">New trust</a>
+            </div>
+
             {% if trusts and trusts|length > 0 %}
             <div class="card mb-lg">
                 <div class="card-body p-sm" style="overflow-x: auto;">
@@ -54,6 +61,10 @@
                                 <td class="text-sm text-muted">{{ trust.desc }}</td>
                                 <td>
                                     <div class="flex flex-col gap-xs">
+                                        {% if trust.status_label %}
+                                        {# Both sides of the trust: this actor's approval and the peer's. #}
+                                        <span class="badge {% if trust.status_label == 'Active' %}badge-success{% elif trust.status_label == 'Unverified' %}badge-danger{% else %}badge-warning{% endif %}">{{ trust.status_label }}</span>
+                                        {% else %}
                                         {% if trust.approved %}
                                         <span class="badge badge-success">Approved</span>
                                         {% else %}
@@ -63,6 +74,7 @@
                                         <span class="badge badge-success">Verified</span>
                                         {% elif not trust.approved %}
                                         <span class="badge badge-danger">Unverified</span>
+                                        {% endif %}
                                         {% endif %}
                                     </div>
                                 </td>
@@ -123,10 +135,12 @@
                         <div>
                             <h4 class="text-sm font-semibold mb-xs">Status Indicators</h4>
                             <ul class="text-sm text-muted" style="margin-left: 1rem; list-style-type: disc;">
-                                <li><span class="badge badge-success">Approved</span> - You've approved this relationship</li>
-                                <li><span class="badge badge-warning">Pending</span> - Awaiting your approval</li>
-                                <li><span class="badge badge-success">Verified</span> - Cryptographically verified</li>
+                                <li><span class="badge badge-success">Active</span> - Both sides have approved</li>
+                                <li><span class="badge badge-warning">Waiting for peer</span> - You approved; the peer has not yet</li>
+                                <li><span class="badge badge-warning">Awaiting your approval</span> - The peer approved; you have not yet</li>
+                                <li><span class="badge badge-warning">Awaiting both</span> - Neither side has approved</li>
                                 <li><span class="badge badge-danger">Unverified</span> - The request did not verify, so it cannot be approved: create the trust toward the peer's URL to pair</li>
+                                <li><span class="badge badge-success">Approved</span> / <span class="badge badge-warning">Pending</span> - An OAuth2 or MCP client's row, which has no approval of its own</li>
                             </ul>
                         </div>
                         <div>

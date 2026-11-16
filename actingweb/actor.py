@@ -4354,7 +4354,7 @@ class Actor:
                     )
                 )
             ):
-                # A list's diff (or its full state) passes whole once the
+                # A list's diff passes whole once the
                 # list may be read (3.16): decided by what the name is, its
                 # keys are not property paths an exclusion could name.
                 return as_text
@@ -4687,8 +4687,8 @@ class Actor:
         call) is recorded, and the next ``request_resync()`` or
         ``resume_subscriptions()`` for the same target re-sends to it; an
         asynchronous send counts as sent once scheduled, so nothing is
-        recorded for it. A peer without resync support receives the full
-        state as a ``clear`` and then an ``extend`` for each list.
+        recorded for it. Every subscriber is sent a resync, whatever
+        option tags it advertises (3.16).
 
         Returns:
             The number of resync callbacks sent

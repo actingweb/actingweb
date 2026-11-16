@@ -181,7 +181,6 @@ class TestVerification2:
         trust = mock.Mock()
         trust.get.return_value = {"baseuri": "https://peer.example/p1", "secret": "s"}
         caps = mock.Mock()
-        caps.supports_resync_callbacks_cached.return_value = True
         actor.config.sync_subscription_callbacks = True
         with (
             mock.patch("actingweb.trust.Trust", return_value=trust),

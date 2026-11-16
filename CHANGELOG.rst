@@ -925,6 +925,14 @@ REMOVED
   ``docs/migration/v3.16.rst``, "Callback delivery". **Breaking:** remove the
   import or setting.
 
+- **``CallbackOauthHandler``** (``actingweb.handlers.callback_oauth``). It
+  was exported and documented but routed by neither integration, and
+  specification 1.5 no longer defines the per-actor ``/oauth`` path it
+  redirected to. Importing the module raises ``ImportError`` naming
+  ``docs/migration/v3.16.rst``, "Removed: CallbackOauthHandler".
+  **Breaking:** remove the import; the OAuth2 callback is served at
+  ``/oauth/callback``.
+
 - **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
   sequence number back after a diff could not be stored, which could hand
   the number to a second change. A number whose diff is not stored now stays
@@ -1288,6 +1296,31 @@ CHANGED
   503 (the batch is committed). **Check:** with
   synchronous callbacks the request waits for each reading subscriber's
   resync in turn.
+
+- **Behavior change: the default OAuth2 ``redirect_uri`` is
+  ``/oauth/callback``.** ``with_oauth()`` and ``Config`` defaulted it to
+  ``<proto><fqdn>/oauth``, which neither integration serves, and a provider
+  configured through ``with_oauth()`` without a ``redirect_uri`` sent it:
+  the provider's redirect back reached nothing. The default is now the
+  served path. **Check:** register ``<proto><fqdn>/oauth/callback`` with
+  the provider where ``/oauth`` was registered. A ``redirect_uri`` passed to
+  ``with_oauth()`` still wins, so an application that passed
+  ``/oauth/callback`` itself sees no change.
+
+- **Behavior change: the web UI's new-trust form answers every outcome with
+  a redirect, and the trust list shows both sides.** ``POST
+  /<actor_id>/www/trust/new`` answered a failure with a bare 400 page (or a
+  500 carrying the exception's text). It now redirects to the form with
+  ``?error=<code>``, and the form shows the library's fixed text for the
+  code: nothing from a request is rendered, the form is not prefilled, and
+  every failure on the peer's side has one message. A submit for a peer
+  that already has a trust redirects to the list with a notice and changes
+  nothing (it looked like a new trust). The trust list's status reads from
+  both sides (``Active``, ``Waiting for peer``, ``Awaiting your approval``,
+  ``Awaiting both``, ``Unverified``); it showed this actor's approval only.
+  The dashboard links to the form. Template variables: ``status_label`` on
+  each trust row and ``notice`` on the list. **Check:** a client that read
+  the 400's text or status.
 
 - **Behavior change: a resume always sends a resync callback.** After
   ``resume_subscriptions()`` (and for ``Actor.request_resync()``), a

@@ -1406,9 +1406,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                         items = list_prop.to_list_from_rows(all_rows)
                     except ListItemSpanError as e:
                         # One broken span must not fail the whole response:
-                        # that list is reported with an error marker, the
-                        # way the subscription full-state read skips a
-                        # corrupted list.
+                        # that list is reported with an error marker.
                         logger.error(f"List '{list_name}' has a broken span: {e}")
                         pair[list_name] = {
                             "_list": True,

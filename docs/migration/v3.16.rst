@@ -17,7 +17,7 @@ database enforces, binds every peer to its own paths, and adds ``prompt``
 to the SPA sign-in. It also conforms to specification 1.5, which changes
 what subscribers are told and several answers, sends a write's callbacks
 concurrently, and removes ``FanOutManager``. Most applications need to check
-only the first three items, item 11, item 18 and items 26 to 31; an
+only the first three items, item 11, item 18 and items 26 to 32; an
 application with ``with_email_as_creator`` also item 25.
 
 .. warning::
@@ -42,6 +42,8 @@ application with ``with_email_as_creator`` also item 25.
    ``with_subscription_processing()``, or imports ``FanOutManager`` or
    ``FanOutResult``, does not start**: the setting raises ``RuntimeError`` and
    the import ``ImportError``, both naming `Callback delivery`_. Remove them.
+   **An application that imports ``actingweb.handlers.callback_oauth`` does
+   not start either** (see `Removed: CallbackOauthHandler`_).
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -222,6 +224,10 @@ application with ``with_email_as_creator`` also item 25.
     polls`_): make the data hook safe to call with the same baseline more
     than once; check a subscriber older than 3.10 or not this library; write
     a property before ``notify_subscribers(resource=...)``.
+32. **``CallbackOauthHandler`` is removed, the default OAuth2
+    ``redirect_uri`` is ``/oauth/callback``, and the web UI's new-trust form
+    answers a failure with a redirect** (see `Removed:
+    CallbackOauthHandler`_ and `The web UI's trust pages`_).
 
 
 What changed and why
@@ -2316,6 +2322,42 @@ fetches a baseline each time, so a data hook is called with the same
 baseline repeatedly: make it idempotent, and compare before doing expensive
 work.
 
+Removed: CallbackOauthHandler
+-----------------------------
+
+``actingweb.handlers.callback_oauth.CallbackOauthHandler`` redirected an
+OAuth2 ``code`` to a per-actor ``/<actor id>/oauth`` path. Neither
+integration routed it, and specification 1.5 no longer defines that path.
+The class is removed; importing the module raises ``ImportError`` naming
+this section. *What to check:* remove the import. The OAuth2 callback is
+served at ``/oauth/callback`` by ``integrate_flask`` and
+``integrate_fastapi``.
+
+**The default ``redirect_uri`` is ``/oauth/callback``.** ``with_oauth()``
+and ``Config`` defaulted ``redirect_uri`` to ``<proto><fqdn>/oauth``, a path
+neither integration serves. An application that called ``with_oauth()``
+without a ``redirect_uri`` sent its provider that URI, so the provider's
+redirect back reached nothing; one that passed ``/oauth/callback`` itself
+was not affected. The default is now ``<proto><fqdn>/oauth/callback``.
+*What to check:* register ``<proto><fqdn>/oauth/callback`` with the
+provider if ``/oauth`` was registered; nothing changes for an application
+that passes its own ``redirect_uri``, which still wins.
+
+The web UI's trust pages
+------------------------
+
+The trust list's status now covers both sides (``Active``, ``Waiting for
+peer``, ``Awaiting your approval``, ``Awaiting both``, ``Unverified``); it
+showed this actor's approval only. The dashboard links to the new-trust
+form. ``POST /<actor_id>/www/trust/new`` answers every outcome with a 302:
+a failure was a bare 400 or 500 page with text, and is now a redirect to
+the form with ``?error=<code>``; a submit for a peer that already has a
+trust goes to the list with ``?notice=trust_exists`` and changes nothing.
+*What to check:* a client that read the 400's text; an application with its
+own ``aw-actor-www-trust.html`` can show ``trust.status_label`` and
+``notice`` (see :doc:`../guides/web-ui`), and one with its own
+``aw-actor-www-trust-new.html`` already receives ``error``.
+
 Specification 1.5
 -----------------
 
@@ -2390,6 +2432,11 @@ affected and the section that says what to check:
        ``False`` or ``None``)
      - 200 ``False``
      - 404
+     - browser
+     - :doc:`../guides/web-ui`
+   * - ``POST /www/trust/new`` that fails
+     - 400 with text (500 with the exception's text)
+     - 302 to the form with ``?error=<code>``
      - browser
      - :doc:`../guides/web-ui`
    * - ``GET /<actor_id>`` as a peer

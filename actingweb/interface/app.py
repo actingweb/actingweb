@@ -339,7 +339,7 @@ class ActingWebApp:
         oauth_cfg: dict[str, Any] = {
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": f"{self.proto}{self.fqdn}/oauth",
+            "redirect_uri": f"{self.proto}{self.fqdn}/oauth/callback",
             "scope": scope,
             "auth_uri": auth_uri or "https://api.actingweb.net/v1/authorize",
             "token_uri": token_uri or "https://api.actingweb.net/v1/access_token",

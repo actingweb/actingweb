@@ -103,6 +103,8 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 - **`supports_resync_callbacks()` stays** - it is documented consumer API
   (`docs/guides/subscriptions.rst:419`); only what the resume alone used
   goes.
+- **The default OAuth2 `redirect_uri` becomes `/oauth/callback`** (owner,
+  2026-11-16, during Phase 3) - nothing served the old default `/oauth`.
 - **The concurrency test follows the run's backend** through a
   `database=` keyword on `make_config`, whose other 55 importers keep
   DynamoDB.
@@ -218,12 +220,12 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 | AC-8 | 2 | `tests/test_replica_rebuild.py::test_a_poll_that_replaced_the_replica_tells_the_data_hooks` (parametrised: owed, marker, out of step, no diffs, none applied; sync and async) | Passing |
 | AC-9 | 2 | `tests/test_replica_rebuild.py::test_a_polled_rebuild_that_did_not_settle_tells_no_hook` | Passing |
 | AC-10 | 2 | `tests/test_replica_rebuild.py::test_the_async_poll_runs_a_coroutine_hook_on_its_loop` (the hook records its running loop; the test drains the task and compares by identity) | Passing |
-| AC-11 | 3 | `tests/test_subscription_processing.py::test_the_removed_callback_oauth_module_raises_its_pointer` | Not run |
-| AC-12 | 3 | `tests/integration/test_www_trust_pages.py::test_the_trust_list_shows_both_sides` (one row per state of the matrix); browser walk | Not run |
-| AC-13 | 3 | `tests/integration/test_www_trust_pages.py::test_the_new_trust_form_is_linked`; `tests/test_demo_example.py::test_the_demo_trust_templates_render` | Not run |
-| AC-14 | 3 | `tests/integration/test_www_trust_pages.py::test_a_failed_new_trust_returns_to_the_form` (parametrised per code, Flask and FastAPI); browser walk | Not run |
-| AC-15 | 3 | `tests/integration/test_www_trust_pages.py::test_an_existing_trust_returns_a_notice` | Not run |
-| AC-16 | 3 | `tests/integration/test_www_trust_pages.py::test_nothing_from_the_query_string_is_rendered` (unknown code; `peer_url`, `trust_type` and markup as parameters) | Not run |
+| AC-11 | 3 | `tests/test_subscription_processing.py::test_the_removed_callback_oauth_module_raises_its_pointer` | Passing |
+| AC-12 | 3 | `tests/test_www_trust_pages.py::test_the_trust_list_shows_both_sides` (one row per state of the matrix); browser walk | Passing |
+| AC-13 | 3 | `tests/test_www_trust_pages.py::test_the_new_trust_form_is_linked`; `tests/test_demo_example.py::test_the_demo_trust_templates_render` | Passing |
+| AC-14 | 3 | `tests/test_www_trust_pages.py::test_a_failed_new_trust_returns_to_the_form`, `::test_a_peer_side_failure_has_one_message`, `::test_an_unexpected_error_shows_nothing_of_itself` (Flask and FastAPI); browser walk | Passing |
+| AC-15 | 3 | `tests/test_www_trust_pages.py::test_an_existing_trust_returns_a_notice` | Passing |
+| AC-16 | 3 | `tests/test_www_trust_pages.py::test_nothing_from_the_query_string_is_rendered` (unknown code; `peer_url`, `trust_type` and markup as parameters) | Passing |
 
 ## Spec Delta
 
@@ -672,7 +674,75 @@ tombstone test; `from actingweb.handlers import *` does not raise.
       (the page body does not scroll sideways); console read after each step
 - [ ] Emm's suite on the branch (gate 2), recorded in the verification
 
-### Implementation Status: Not Started
+### Notes from implementation (2026-11-16)
+
+- **Red first** for the handler tests (a 400 where a 302 is expected, the
+  missing labels, the missing dashboard link). The demo template test was
+  written after the templates changed (no red run); the tombstone test
+  failed on the module importing cleanly.
+- **The default `redirect_uri` is now `/oauth/callback`** (owner,
+  2026-11-16, after the check the plan asked for): nothing served `/oauth`;
+  `config.py` and `app.py` defaulted to it. The wire rows `WG15` and `WG16`
+  showed what that meant: a provider configured through `with_oauth()`
+  without a `redirect_uri` was sent `<root>/oauth` (the provider classes
+  ignore `config.oauth`'s default only when no provider entry exists), so
+  the default was not dead, it was broken. Both rows re-recorded (ownership
+  commit first); both defaults, the pinning test, `configuration.rst`,
+  `routing-overview.rst`, the changelog and the migration guide follow.
+- **The tombstone says `/oauth/callback`**, not "under /oauth" as the plan
+  drafted: it is the path that is served.
+- **`from actingweb.handlers import *` never worked** (the package lists
+  lazily loaded names it does not import; it raises `AttributeError` on
+  `master` too), so the planned wildcard test asserts that `__all__` no
+  longer lists the module instead.
+- **The status label is computed in the handler** (`trust_status_label`,
+  set as `status_label` on each row) rather than in each template, so the
+  library's template and the demo's cannot disagree. A row whose peer has no
+  endpoint (`_has_peer_endpoint`: an OAuth2 or MCP client) gets `None` and
+  keeps the approved and verified badges; `peer_approved` is false on those
+  rows (they are created without it), which would have read "Waiting for
+  peer".
+- **"Already has a trust" means a row this actor has approved** with the
+  submitted base URI. A row waiting for this actor's approval is not that:
+  creating toward its peer is how it is approved, and an existing test
+  (`test_trust_re_pair.py::TestTheCreateRoutesAfterReverify5::test_the_web_form`)
+  pins it.
+- **The tests are `tests/test_www_trust_pages.py`**, in process on Flask and
+  FastAPI with the library's templates and the real store, not under
+  `tests/integration/` (no server fixture is needed, and the Flask
+  integration has none there).
+- A minor: a default changes, a module is removed, two template variables
+  and a handler's answers change.
+
+### Review of the Phase 2 commit (codex `gpt-5.6-sol` and a fresh-context reviewer, 2026-11-16)
+
+Nothing High. Fixed in the Phase 3 commit unless noted:
+
+- **A baseline that was skipped or had an entry that could not be stored
+  was told to the hooks** (Low to Medium): told only when all of it was
+  applied; the docstring says an empty whole-target baseline with nothing to
+  fetch tells nothing.
+- **`notify_subscribers` passed `whole=None` on every call**, which broke an
+  application's `register_diffs` override with the older signature (Medium,
+  not peer-reachable): passed only when set.
+- **A `ValueError` from the lazy read** (a `list:` name) escaped the
+  per-subscriber fold (Low): answered as "nothing stored".
+- **Stale text** in `request_resync`, `callback_sender` and the properties
+  handler; the drain's comment about the publisher's timeout; the log line
+  for a refused callback.
+- Tests: a subtarget subscriber with an exclusion; no `whole` on a plain
+  notification; a skipped and a partly stored baseline; a dead mock line.
+- **Not fixed, filed**: a `list:`-named key inside a stored property passes
+  a subtarget subscriber unfiltered (the reviewer's Medium; predates the
+  plan, needs an owner-stored `list:` key with an exclusion beneath it):
+  `thoughts/todo/subtarget-diff-list-key-exclusion.md`. A queued callback
+  whose handler faults every time blocks its queue until a poll or a resync
+  (Low): in the fault-hardening todo.
+- Accepted: the ordered-unit machinery in `callback_sender` has no
+  multi-send caller left; it stays (small, tested, and a resync plus a diff
+  may use it).
+
+### Implementation Status: In Progress (browser walk, Full tier, Emm's suite)
 
 ---
 

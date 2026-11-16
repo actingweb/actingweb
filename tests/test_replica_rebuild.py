@@ -883,3 +883,20 @@ class TestAPollTellsTheDataHooks:
             _poll(env, _hooked(seen), diffs, loop=False)
         assert [call[-1] for call in seen] == ["diff"]
         assert env.processor.rebuild_state(PEER, SUB)["owed"] is False  # it ran
+
+    @pytest.mark.parametrize("outcome", ["skipped", "failed"])
+    def test_a_baseline_that_was_not_applied_whole_is_not_told(
+        self, env: _Env, outcome: str
+    ) -> None:
+        """Skipped (another subscription covers the replica) or with an
+        entry that could not be stored: the hook would hear of data the
+        replica does not hold."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = MagicMock(
+            skipped=outcome == "skipped",
+            failed=["status"] if outcome == "failed" else [],
+        )
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
+            assert _poll(env, _hooked(seen), [], loop=False).success
+        assert seen == []

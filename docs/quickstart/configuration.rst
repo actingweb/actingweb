@@ -113,7 +113,7 @@ Configured by ``with_oauth(...)``. Common fields:
 
 - ``provider``: Provider name (``"google"`` or ``"github"``). Multiple calls with different providers configure multiple providers simultaneously.
 - ``client_id``, ``client_secret``: Provider credentials.
-- ``redirect_uri``: Defaults to ``{proto}{fqdn}/oauth``.
+- ``redirect_uri``: Defaults to ``{proto}{fqdn}/oauth/callback``, the path both integrations serve (3.16; the default was ``{proto}{fqdn}/oauth``, which nothing served).
 - ``auth_uri``, ``token_uri``: Authorization and token endpoints.
 - ``scope``: Provider-specific scopes.
 

@@ -221,8 +221,8 @@ application with ``with_email_as_creator`` also item 25.
 31. **A subscription data hook is called with a whole baseline from a
     poll, a resume always sends a resync, and a resource notification sends
     the whole value** (see `Subscribers: resume, resource notifications and
-    polls`_): make the data hook safe to call with the same baseline more
-    than once; check a subscriber older than 3.10 or not this library; write
+    polls`_): make the data hook safe to be given a whole baseline by a
+    poll; check a subscriber older than 3.10 or not this library; write
     a property before ``notify_subscribers(resource=...)``.
 32. **``CallbackOauthHandler`` is removed, the default OAuth2
     ``redirect_uri`` is ``/oauth/callback``, and the web UI's new-trust form
@@ -2309,18 +2309,18 @@ what is stored, filtered by the subscriber's grant only. For a target other
 than ``properties`` the library has no store to read: pass the subtarget's
 whole value without ``resource``.
 
-**A poll calls the data hooks when it replaced the replica.** With
-``auto_storage``, ``sync_subscription()`` replaces the replica from a
+**A poll calls the data hooks when it rebuilt the replica.** With
+``auto_storage``, ``sync_subscription()`` rebuilds the replica from a
 baseline when a rebuild is owed, a resync marker is polled, a diff could not
-be applied, there is nothing to fetch, or everything fetched was applied
-already. A subscription data hook was told nothing; it is now called once
-with the baseline, the sequence recorded and ``"resync"``. A rebuild that
-did not settle tells nothing, and neither does a rebuild after a list diff
-the same poll already told. The legacy ``subscription`` callback hook is
-told on the callback path only, as before. *What to check:* a quiet poll
-fetches a baseline each time, so a data hook is called with the same
-baseline repeatedly: make it idempotent, and compare before doing expensive
-work.
+be applied, or everything fetched was applied already. A subscription data
+hook was told nothing; it is now called once with the baseline, the
+sequence recorded and ``"resync"``. A quiet poll (nothing to fetch) tells
+nothing: its refresh of the replica is the state the hook already heard
+about. Neither does a rebuild that did not settle, a baseline that was
+skipped or partly stored, or a rebuild after a list diff the same poll
+already told. The legacy ``subscription`` callback hook is told on the
+callback path only, as before. *What to check:* a data hook can now receive
+a whole baseline from a poll; make it safe to be given state it has seen.
 
 Removed: CallbackOauthHandler
 -----------------------------
@@ -2334,11 +2334,13 @@ served at ``/oauth/callback`` by ``integrate_flask`` and
 ``integrate_fastapi``.
 
 **The default ``redirect_uri`` is ``/oauth/callback``.** ``with_oauth()``
-and ``Config`` defaulted ``redirect_uri`` to ``<proto><fqdn>/oauth``, a path
-neither integration serves. An application that called ``with_oauth()``
-without a ``redirect_uri`` sent its provider that URI, so the provider's
-redirect back reached nothing; one that passed ``/oauth/callback`` itself
-was not affected. The default is now ``<proto><fqdn>/oauth/callback``.
+and ``Config`` defaulted ``redirect_uri`` to ``<proto><fqdn>/oauth``, which
+is not the callback on either integration: a request there is answered as
+an unauthenticated browser's, with a redirect to the provider. An
+application that called ``with_oauth()`` without a ``redirect_uri`` sent
+its provider that URI, so the provider's redirect back, with its ``code``,
+started the sign-in again instead of finishing it; one that passed
+``/oauth/callback`` itself was not affected. The default is now ``<proto><fqdn>/oauth/callback``.
 *What to check:* register ``<proto><fqdn>/oauth/callback`` with the
 provider if ``/oauth`` was registered; nothing changes for an application
 that passes its own ``redirect_uri``, which still wins.
@@ -2351,8 +2353,10 @@ peer``, ``Awaiting your approval``, ``Awaiting both``, ``Unverified``); it
 showed this actor's approval only. The dashboard links to the new-trust
 form. ``POST /<actor_id>/www/trust/new`` answers every outcome with a 302:
 a failure was a bare 400 or 500 page with text, and is now a redirect to
-the form with ``?error=<code>``; a submit for a peer that already has a
-trust goes to the list with ``?notice=trust_exists`` and changes nothing.
+the form with ``?error=<code>``; a submit for a peer this actor already
+approved a trust with goes to the list with a notice: ``trust_repaired``
+when the relationship is the same (it is paired again with a new secret, as
+before) and ``trust_exists`` when it is another (nothing is changed).
 *What to check:* a client that read the 400's text; an application with its
 own ``aw-actor-www-trust.html`` can show ``trust.status_label`` and
 ``notice`` (see :doc:`../guides/web-ui`), and one with its own

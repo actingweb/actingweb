@@ -71,10 +71,11 @@ baseline's failures by name and nothing else:
 
 - `3-16-pre-validation-fixes` (environment 9, on `d62021b`,
   `creator-to-email` first: nothing to move): the same six failures by name
-  as the `spec-1-5` run, nothing new. Emm's `properties` data hook sends
-  its UI a full-sync notification on `"resync"`; since this plan a quiet
-  poll with `auto_storage` calls it each time (an adoption item on Emm's
-  side: compare before notifying, or accept the refresh).
+  as the `spec-1-5` run, nothing new. Not re-run for the commit after it
+  (the owner's two decisions and the Phase 3 review fixes); the release
+  validation's run covers it. Emm's `properties` data hook sends its UI a
+  full-sync notification on `"resync"`: since this plan a poll that rebuilt
+  the replica calls it (a quiet poll does not).
 
 Still to run: `3-16-release-validation` (the last; it deletes
 this file). A run now starts with `creator-to-email` (dry run, then

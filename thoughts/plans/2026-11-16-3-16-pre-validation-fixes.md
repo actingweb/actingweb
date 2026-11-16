@@ -84,9 +84,12 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
   (owner, 2026-11-16, after the security review) - the redirect carries a
   code only; nothing from a request is rendered, so a link from another
   site cannot prefill the form.
-- **A poll that replaced the replica from a baseline tells the data hooks
-  once, as `"resync"`** - one rule for every poll path that does it (owed,
-  marker, out of step, no diffs, diffs fetched and none applied); the
+- **A poll that rebuilt the replica from a baseline tells the data hooks
+  once, as `"resync"`** - [Updated 2026-11-16, owner, after implementation:
+  not a quiet poll. With nothing to fetch the poll refreshes the replica
+  from a baseline every time, and a consumer's hook that notifies its UI on
+  `"resync"` would do so on every poll.] One rule for the poll paths that
+  rebuild (owed, marker, out of step, diffs fetched and none applied); the
   exception is a rebuild after a list diff the same poll already told, as on
   the pushed path. The poll tells the legacy `subscription` hook nothing
   today, and this plan does not start.
@@ -104,7 +107,8 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
   (`docs/guides/subscriptions.rst:419`); only what the resume alone used
   goes.
 - **The default OAuth2 `redirect_uri` becomes `/oauth/callback`** (owner,
-  2026-11-16, during Phase 3) - nothing served the old default `/oauth`.
+  2026-11-16, during Phase 3) - the old default `/oauth` does not handle
+  the callback (it starts the sign-in again).
 - **The concurrency test follows the run's backend** through a
   `database=` keyword on `make_config`, whose other 55 importers keep
   DynamoDB.
@@ -184,6 +188,8 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
   stored value of `s`, less what its grant excludes.
 - **AC-8** - A poll that replaced the replica from a baseline calls the
   data hooks once with the baseline, the recorded sequence and `"resync"`.
+  [Updated 2026-11-16, owner: a poll that rebuilt it; a quiet poll, with
+  nothing to fetch, calls no hook.]
 - **AC-9** - A poll whose rebuild did not settle calls no data hook.
 - **AC-10** - On the async poll, a coroutine data hook is scheduled on the
   caller's loop and runs there.
@@ -197,7 +203,10 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 - **AC-14** - A new-trust submit that fails returns to the form (a 302, on
   both integrations) with the message for its code.
 - **AC-15** - A new-trust submit for a peer that already has a trust returns
-  to the list with a notice saying so.
+  to the list with a notice saying so. [Updated 2026-11-16: "already has"
+  is a trust this actor approved; with the same relationship it is paired
+  again, as before the plan, and the notice says that; with another,
+  nothing changes and the notice says that.]
 - **AC-16** - Nothing from the query string is rendered on the form or the
   list: a known code shows the library's fixed text, an unknown code shows
   nothing, and any other parameter is ignored.
@@ -217,14 +226,14 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 | AC-5 | 2 | `tests/test_resume_always_resyncs.py::test_a_peer_cached_without_resync_is_sent_a_resync`; wire row `WD12` (`test_wd12_resume_to_a_peer_cached_without_resync`) | Passing |
 | AC-6 | 2 | `tests/test_resume_always_resyncs.py::test_a_single_property_subscription_resumes` | Passing |
 | AC-7 | 2 | `tests/test_notify_subscribers_whole_value.py::test_a_resource_notification_sends_the_whole_stored_value` (real store; target-level and subtarget-level subscribers; a grant that excludes a sibling key) | Passing |
-| AC-8 | 2 | `tests/test_replica_rebuild.py::test_a_poll_that_replaced_the_replica_tells_the_data_hooks` (parametrised: owed, marker, out of step, no diffs, none applied; sync and async) | Passing |
+| AC-8 | 2 | `tests/test_replica_rebuild.py::test_a_poll_that_replaced_the_replica_tells_the_data_hooks` (parametrised: owed, marker, out of step, none applied; sync and async); `::test_a_quiet_poll_tells_no_hook` | Passing |
 | AC-9 | 2 | `tests/test_replica_rebuild.py::test_a_polled_rebuild_that_did_not_settle_tells_no_hook` | Passing |
 | AC-10 | 2 | `tests/test_replica_rebuild.py::test_the_async_poll_runs_a_coroutine_hook_on_its_loop` (the hook records its running loop; the test drains the task and compares by identity) | Passing |
 | AC-11 | 3 | `tests/test_subscription_processing.py::test_the_removed_callback_oauth_module_raises_its_pointer` | Passing |
 | AC-12 | 3 | `tests/test_www_trust_pages.py::test_the_trust_list_shows_both_sides` (one row per state of the matrix); browser walk | Passing |
 | AC-13 | 3 | `tests/test_www_trust_pages.py::test_the_new_trust_form_is_linked`; `tests/test_demo_example.py::test_the_demo_trust_templates_render` | Passing |
 | AC-14 | 3 | `tests/test_www_trust_pages.py::test_a_failed_new_trust_returns_to_the_form`, `::test_a_peer_side_failure_has_one_message`, `::test_an_unexpected_error_shows_nothing_of_itself` (Flask and FastAPI); browser walk | Passing |
-| AC-15 | 3 | `tests/test_www_trust_pages.py::test_an_existing_trust_returns_a_notice` | Passing |
+| AC-15 | 3 | `tests/test_www_trust_pages.py::test_an_existing_trust_is_paired_again_and_says_so`, `::test_an_existing_trust_with_another_relationship_returns_a_notice` | Passing |
 | AC-16 | 3 | `tests/test_www_trust_pages.py::test_nothing_from_the_query_string_is_rendered` (unknown code; `peer_url`, `trust_type` and markup as parameters) | Passing |
 
 ## Spec Delta
@@ -681,7 +690,15 @@ tombstone test; `from actingweb.handlers import *` does not raise.
   written after the templates changed (no red run); the tombstone test
   failed on the module importing cleanly.
 - **The default `redirect_uri` is now `/oauth/callback`** (owner,
-  2026-11-16, after the check the plan asked for): nothing served `/oauth`;
+  2026-11-16, after the check the plan asked for): `/oauth` is not the
+  callback. Checked afterwards with a request on both integrations with
+  OAuth configured: `GET /oauth?code=x&state=y` answers 302 to the
+  provider's authorize URL (the path is taken for an actor id and an
+  unauthenticated browser is sent to sign in), while `/oauth/callback`
+  attempts the token exchange. So a provider redirecting to the old default
+  looped back to itself; "nothing served it", as first reported to the
+  owner, was a reading of the route table, and the texts now say what the
+  request showed;
   `config.py` and `app.py` defaulted to it. The wire rows `WG15` and `WG16`
   showed what that meant: a provider configured through `with_oauth()`
   without a `redirect_uri` was sent `<root>/oauth` (the provider classes
@@ -812,13 +829,52 @@ poll's `"resync"` hook call there.
   the provider entry, so only an application that passed its own
   `redirect_uri` had a working callback. The wire rows showed it.
 - A quiet poll with `auto_storage` fetches and applies a whole baseline
-  every time; telling the hook there is the most visible effect of this
-  plan for a polling application.
+  every time; telling the hook there would have been the most visible
+  effect of this plan for a polling application, and is why it does not.
+
+### After the implementation: two owner decisions and the Phase 3 review (2026-11-16)
+
+In one commit after `40f33f0`:
+
+- **A quiet poll tells no hook** (owner). AC-8's "no diffs" case became
+  `test_a_quiet_poll_tells_no_hook`; the baseline is still applied.
+- **The `list:` key finding is fixed, not filed** (owner; the Phase 2
+  reviewer's Medium): beneath a subtarget a `list:<x>` key passes whole only
+  when its value is a list diff; anything else is filtered at its path
+  (`tests/test_grant_stored_text.py::TestListDiffObjects::test_a_stored_value_under_a_list_key_is_filtered_beneath_it`).
+  A first attempt removed the exemption outright and broke two tests from
+  earlier verifications that pin it for list diffs. Residual: a stored
+  object under such a key that itself has `list` and `operation` keys is
+  still read as a list diff.
+- **The `/oauth` premise was checked with a request** (see Phase 3's
+  notes); the texts were corrected.
+- **From the review of `d62021b`** (codex `gpt-5.6-sol` and a fresh-context
+  reviewer; nothing High):
+  - *The "trust exists" check had removed the form's re-pair* (Medium):
+    before this plan a submit for an approved peer with the same
+    relationship rotated the secret. It does again, to the stored base URI,
+    and the list says so (`trust_repaired`); another relationship changes
+    nothing and says so (`trust_exists`; it was a bare failure). The base
+    URI is matched without host case, a default port or a trailing slash.
+  - *"Active" for a row both approved but not verified*: now "Waiting for
+    peer"; the matrix test has that row and an OAuth2 client's row.
+  - `_stored_property` folds `ValueError` only; a stale comment in
+    `oauth2.py`; the docstring says a refused key is in the baseline the
+    hook gets.
+  - Tests: the three untested "applied whole" guards (the reapply path, on
+    both twins); the hostile `peer_url` now reaches the create and the
+    exception path.
+  - Accepted: a link from another site can show one of the fixed messages
+    on a signed-in owner's page (fixed text, no state change).
+- **Stale evidence corrected**: the two-write test was re-run on the tree
+  with one callback per claim, 5 of 5 on each backend; the drain tests run
+  on PostgreSQL in a PostgreSQL run (19 passed, none skipped).
+- **A final Full tier passed on `40f33f0`'s code** before this commit
+  (DynamoDB 7,966 passed, PostgreSQL 7,738, docs clean), and again after it
+  (recorded in the commit message).
 
 ### Open after this plan
 
-- `thoughts/todo/subtarget-diff-list-key-exclusion.md` (a reviewer's
-  Medium, predates the plan).
 - `thoughts/todo/demo-qa-mode-basic-auth-challenge.md`.
 - Three lines in `subscription-subscriber-fault-hardening.md` and one in
   `subscriber-hooks-and-resource-diffs-after-1-5.md`.

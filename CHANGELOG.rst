@@ -1299,10 +1299,12 @@ CHANGED
 
 - **Behavior change: the default OAuth2 ``redirect_uri`` is
   ``/oauth/callback``.** ``with_oauth()`` and ``Config`` defaulted it to
-  ``<proto><fqdn>/oauth``, which neither integration serves, and a provider
-  configured through ``with_oauth()`` without a ``redirect_uri`` sent it:
-  the provider's redirect back reached nothing. The default is now the
-  served path. **Check:** register ``<proto><fqdn>/oauth/callback`` with
+  ``<proto><fqdn>/oauth``, which is not the callback on either integration
+  (a request there is answered as an unauthenticated browser's: a redirect
+  to the provider), and a provider configured through ``with_oauth()``
+  without a ``redirect_uri`` sent it: the provider's redirect back, with
+  its ``code``, started the sign-in again instead of finishing it. The
+  default is now the path that handles the callback. **Check:** register ``<proto><fqdn>/oauth/callback`` with
   the provider where ``/oauth`` was registered. A ``redirect_uri`` passed to
   ``with_oauth()`` still wins, so an application that passed
   ``/oauth/callback`` itself sees no change.
@@ -1314,8 +1316,12 @@ CHANGED
   ``?error=<code>``, and the form shows the library's fixed text for the
   code: nothing from a request is rendered, the form is not prefilled, and
   every failure on the peer's side has one message. A submit for a peer
-  that already has a trust redirects to the list with a notice and changes
-  nothing (it looked like a new trust). The trust list's status reads from
+  this actor already approved a trust with redirects to the list with a
+  notice: with the same relationship it is paired again with a new secret,
+  as before, and the notice says so (it looked like a new trust); with
+  another relationship nothing is changed (it was a bare failure). The
+  stored base URI is matched without regard to host case, a default port
+  or a trailing slash. The trust list's status reads from
   both sides (``Active``, ``Waiting for peer``, ``Awaiting your approval``,
   ``Awaiting both``, ``Unverified``); it showed this actor's approval only.
   The dashboard links to the form. Template variables: ``status_label`` on
@@ -1356,18 +1362,20 @@ CHANGED
   whole value without ``resource``.
 
 - **Behavior change: a poll calls the data hooks with ``"resync"`` when it
-  replaced the replica.** ``sync_subscription()`` (and its async form, and
-  ``sync_peer``) with ``auto_storage`` replaces the replica from a baseline
+  rebuilt the replica.** ``sync_subscription()`` (and its async form, and
+  ``sync_peer``) with ``auto_storage`` rebuilds the replica from a baseline
   when a rebuild is owed, a resync marker is polled, a diff could not be
-  applied, there is nothing to fetch, or everything fetched was applied
-  already. The subscription data hooks heard nothing of it; they are now
-  called once with the baseline, the sequence recorded and ``"resync"``
-  (the result's ``baseline``, ``target`` and ``subtarget`` carry the same).
-  A rebuild that did not settle, and a rebuild after a list diff the same
-  poll already told, tell nothing. The legacy ``subscription`` callback
-  hook is not told by a poll, as before. **Check:** a data hook must take a
-  whole baseline more than once (a quiet poll fetches one each time); a
-  hook that does expensive work per call should compare before it acts.
+  applied, or everything fetched was applied already. The subscription
+  data hooks heard nothing of it; they are now called once with the
+  baseline, the sequence recorded and ``"resync"`` (the result's
+  ``baseline``, ``target`` and ``subtarget`` carry the same). Not told: a
+  quiet poll (nothing to fetch: its refresh of the replica is the state the
+  hooks already heard about), a baseline that was skipped or had an entry
+  that failed to store, a rebuild that did not settle, and a rebuild after
+  a list diff the same poll already told. The legacy ``subscription``
+  callback hook is not told by a poll, as before. **Check:** a data hook
+  can now be called with a whole baseline from a poll; make it safe to
+  receive the same state it has seen.
 
 - **Behavior change: the receiver refuses some list names and ``list:``
   scalars.** A list a diff would create whose name has a control
@@ -2796,6 +2804,16 @@ FIXED
   takes it: its handler error is logged, and a database fault leaves it
   queued, without changing that request's own answer. The cost is one more
   read of the queue per callback received in order.
+
+- **A subscriber to one property could be sent a part its grant excludes
+  beneath a key named ``list:<x>``.** A subscription to a single property
+  is sent the property's whole stored value when something inside it
+  changes. A key in that value whose name starts with ``list:`` passed
+  whole once the bare name could be read, also when the grant excluded a
+  path beneath it (``settings/list:notes/private``); a subscription to the
+  whole target and a direct read filtered it. Such a key now passes whole
+  only when its value is a list diff; anything else is filtered at its
+  path, as every other key is.
 
 - **A queued callback could be lost when two deliveries wrote the queue at
   the same moment** (one adding, one removing what it had processed: the

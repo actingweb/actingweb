@@ -792,9 +792,7 @@ class TestAPollTellsTheDataHooks:
     with it, as ``"resync"``, whichever path fetched the baseline."""
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
-    @pytest.mark.parametrize(
-        "path", ["owed", "marker", "out of step", "no diffs", "none applied"]
-    )
+    @pytest.mark.parametrize("path", ["owed", "marker", "out of step", "none applied"])
     def test_a_poll_that_replaced_the_replica_tells_the_data_hooks(
         self, env: _Env, path: str, loop: bool
     ) -> None:
@@ -884,19 +882,35 @@ class TestAPollTellsTheDataHooks:
         assert [call[-1] for call in seen] == ["diff"]
         assert env.processor.rebuild_state(PEER, SUB)["owed"] is False  # it ran
 
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_quiet_poll_tells_no_hook(self, env: _Env, loop: bool) -> None:
+        """Nothing to fetch: the replica is refreshed from a baseline, which
+        is the state the hooks already heard about (owner, 2026-11-16)."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = _poll(env, _hooked(seen), [], loop=loop)
+        assert result.success and result.baseline is None
+        assert env.replica.get_value("status") is not None  # still applied
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
     @pytest.mark.parametrize("outcome", ["skipped", "failed"])
     def test_a_baseline_that_was_not_applied_whole_is_not_told(
-        self, env: _Env, outcome: str
+        self, env: _Env, outcome: str, loop: bool
     ) -> None:
         """Skipped (another subscription covers the replica) or with an
         entry that could not be stored: the hook would hear of data the
         replica does not hold."""
         seen: list[Any] = []
         env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5
         result = MagicMock(
             skipped=outcome == "skipped",
             failed=["status"] if outcome == "failed" else [],
         )
         with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
-            assert _poll(env, _hooked(seen), [], loop=False).success
+            polled = _poll(
+                env, _hooked(seen), [{"sequence": 3, "data": {"old": 1}}], loop=loop
+            )
+        assert polled.success and polled.baseline is None
         assert seen == []

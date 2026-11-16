@@ -4371,10 +4371,11 @@ class Actor:
             if resource:
                 kept_value = self._diff_part(rules, path, parsed)
             else:
-                # A resource-level write arrives as ``{resource: value}``:
-                # the value is the property's, kept whole except the parts
-                # the grant excludes, at their paths under the subtarget. A
-                # ``list:<name>`` key is a list, decided by its bare name.
+                # A resource-level write arrives as the property's value
+                # (whole since 3.16, or ``{resource: value}``): kept whole
+                # except the parts the grant excludes, at their paths under
+                # the subtarget. A ``list:<name>`` key is a list, decided by
+                # its bare name.
                 lists = {
                     k: v
                     for k, v in parsed.items()
@@ -4385,12 +4386,19 @@ class Actor:
                     subtarget,
                     {k: v for k, v in parsed.items() if not k.startswith("list:")},
                 )
-                if lists:
+                for key, value in lists.items():
                     # A list's diff object passes whole once its name may be
-                    # read (3.16): its keys are not property paths.
+                    # read (3.16): its keys are not property paths. Anything
+                    # else under such a key is part of the stored object (the
+                    # whole value is sent since 3.16) and loses what the
+                    # grant excludes beneath it, as any other key does.
+                    if not (isinstance(value, dict) and _list_diff_shaped(value)):
+                        value = self._diff_part(rules, f"{subtarget}/{key}", value)
+                        if value is _EMPTIED:
+                            continue
                     kept_value = {
                         **({} if kept_value is _EMPTIED else kept_value),
-                        **lists,
+                        key: value,
                     }
         except DbError:
             raise

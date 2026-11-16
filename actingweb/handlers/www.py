@@ -40,8 +40,34 @@ TRUST_FORM_MESSAGES = {
     ),
 }
 TRUST_LIST_NOTICES = {
-    "trust_exists": "A trust with that peer already exists; nothing was changed.",
+    "trust_repaired": (
+        "A trust with that peer already existed. It was paired again with a "
+        "new secret; nothing else was changed."
+    ),
+    "trust_exists": (
+        "A trust with that peer already exists with another relationship; "
+        "nothing was changed. Delete it first to pair with a new one."
+    ),
 }
+
+
+def _same_peer_url(left: str, right: str) -> bool:
+    """Whether two base URIs name one peer address: scheme and host compared
+    without case, a default port and a trailing slash ignored."""
+    from urllib.parse import urlsplit
+
+    def key(url: str) -> tuple[str, str, int | None, str]:
+        parts = urlsplit(url.strip())
+        scheme = parts.scheme.lower()
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        if port == {"http": 80, "https": 443}.get(scheme):
+            port = None
+        return scheme, (parts.hostname or "").lower(), port, parts.path.rstrip("/")
+
+    return bool(left) and bool(right) and key(left) == key(right)
 
 
 def trust_status_label(row: dict[str, Any], actor_id: str | None) -> str | None:
@@ -57,7 +83,8 @@ def trust_status_label(row: dict[str, Any], actor_id: str | None) -> str | None:
     peer_approved = bool(as_flag(row.get("peer_approved")))
     verified = bool(as_flag(row.get("verified")))
     if approved:
-        return "Active" if peer_approved else "Waiting for peer"
+        # Active only when the peer both approved and verified this actor.
+        return "Active" if peer_approved and verified else "Waiting for peer"
     if not verified:
         # Anyone can send a request under this id; it cannot be approved.
         return "Unverified"
@@ -1069,21 +1096,32 @@ class WwwHandler(base_handler.BaseHandler):
             return
 
         try:
-            # A peer this actor already approved a trust with: creating
-            # again answers with the row there is, which looked like a new
-            # one. Say so. A row waiting for this actor's approval is not
-            # that: creating toward its peer is how it is approved.
-            if any(
-                str(row.get("baseuri") or "").rstrip("/") == peer_url
-                and str(row.get("approved")).lower() == "true"
-                for row in (myself.get_trust_relationships() or [])
-                if isinstance(row, dict)
-            ):
+            # A peer this actor already approved a trust with. Creating
+            # again is a re-pair (a new secret, sent to the stored base URI)
+            # when the relationship is the same, and is refused when it is
+            # not; either way the answer looked like a new trust. Say which.
+            # A row waiting for this actor's approval is neither: creating
+            # toward its peer is how it is approved.
+            existing = next(
+                (
+                    row
+                    for row in (myself.get_trust_relationships() or [])
+                    if isinstance(row, dict)
+                    and str(row.get("approved")).lower() == "true"
+                    and _same_peer_url(str(row.get("baseuri") or ""), peer_url)
+                ),
+                None,
+            )
+            if existing and (existing.get("relationship") or "") != trust_type:
                 self.response.set_status(302, "Found")
                 self.response.set_redirect(
                     self._www_path(actor_id, "/trust?notice=trust_exists")
                 )
                 return
+            if existing:
+                # The re-pair goes to the stored base URI only, compared as
+                # text: send the stored form, not what was typed.
+                peer_url = str(existing.get("baseuri") or "").rstrip("/")
 
             # Create reciprocal trust relationship
             # The 'relationship' parameter in create_reciprocal_trust is the trust type requested from peer
@@ -1111,7 +1149,12 @@ class WwwHandler(base_handler.BaseHandler):
             if new_trust:
                 # Success - redirect back to trust page
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(self._www_path(actor_id, "/trust"))
+                self.response.set_redirect(
+                    self._www_path(
+                        actor_id,
+                        "/trust?notice=trust_repaired" if existing else "/trust",
+                    )
+                )
             else:
                 self._trust_form_failed(actor_id, "create_failed")
 

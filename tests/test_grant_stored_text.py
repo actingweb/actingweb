@@ -200,6 +200,40 @@ class TestListDiffObjects:
         )
         assert out is not None and json.loads(out) == blob
 
+    def test_a_stored_value_under_a_list_key_is_filtered_beneath_it(
+        self, actor
+    ) -> None:
+        """A subscriber to one property is sent its whole stored value
+        (3.16). A key named ``list:<x>`` in it that is not a list diff is
+        part of that object: an exclusion beneath it holds (it passed
+        whole)."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["*"],
+                    "operations": ["read"],
+                    "excluded_patterns": ["settings/list:notes/private"],
+                }
+            },
+        )
+        blob = {"theme": "x", "list:notes": {"private": 1, "open": 2}}
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "settings"},
+            json.dumps(blob),
+            snapshot=grant,
+        )
+        assert out is not None
+        assert json.loads(out) == {"theme": "x", "list:notes": {"open": 2}}
+
     def test_an_excluded_list_is_still_dropped(self, actor) -> None:
         blob = {"list:secret": self.DIFF, "list:notes": self.DIFF}
         out = actor.filter_subscription_blob(

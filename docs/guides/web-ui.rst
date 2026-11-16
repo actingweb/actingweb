@@ -115,8 +115,10 @@ The trust interface (``/<actor_id>/www/trust``) allows users to:
 - Creates reciprocal trust relationships
 - Linked from the dashboard and from the trust list
 - Every submit answers with a redirect (3.16): to the trust list when the
-  trust was created, to the trust list with a notice when the peer already
-  has one, and back to the form with a message when it failed. The redirect
+  trust was created, to the trust list with a notice when this actor
+  already approved a trust with the peer (paired again with a new secret
+  for the same relationship; nothing changed for another), and back to the
+  form with a message when it failed. The redirect
   carries a code (``?error=<code>`` or ``?notice=<code>``); the page shows
   the library's fixed text for a code it knows and nothing otherwise, and
   the form is not prefilled, so nothing from a request is rendered. Every
@@ -273,7 +275,7 @@ Available Templates
     - ``url``: Base URL for navigation
     - ``id``: Actor ID
     - ``trusts``: List of trust relationship objects; each has ``status_label`` (3.16: ``Active``, ``Waiting for peer``, ``Awaiting your approval``, ``Awaiting both`` or ``Unverified``; ``None`` for a row whose peer has no side of its own)
-    - ``notice``: A message to show above the list (after a new-trust submit for a peer that already has a trust), or ``None``
+    - ``notice``: A message to show above the list (after a new-trust submit for a peer this actor already approved a trust with), or ``None``
     - ``trust_connections``: Connection metadata for each trust with ``peerid``, ``established_via``, ``created_at``, ``last_connected_at``, and ``last_connected_via``
 
 **aw-actor-www-trust-new.html**

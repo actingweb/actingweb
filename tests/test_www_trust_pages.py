@@ -148,12 +148,32 @@ def test_the_trust_list_shows_both_sides(site: _Site) -> None:
     }
     for index, flags in enumerate(rows.values()):
         site.trust(f"peer{index}", **flags)
+    # Both approved, but the peer has not verified this actor: not Active.
+    site.trust("peer5", approved=True, peer_approved=True, verified=False)
+    labels = [*rows, "Waiting for peer"]
+    # A row whose peer has no side of its own keeps the two badges.
+    assert Trust(
+        actor_id=site.id, peerid="oauth2_client:c1", config=site.config
+    ).create(
+        baseuri="",
+        peer_type="mcp",
+        relationship="mcp_client",
+        secret=uuid.uuid4().hex,
+        desc="",
+        approved=True,
+        verified=True,
+        established_via="oauth2_client",
+    )
     status, _, page = site.get(f"{site.www}/trust")
     assert status == 200
-    for index, label in enumerate(rows):
+    for index, label in enumerate(labels):
         row = page[page.index(f"<code>peer{index}</code>") :]
         row = row[: row.index("</tr>")]
         assert f">{label}<" in row, (label, row)
+    client = page[page.index("<code>oauth2_client:c1</code>") :]
+    client = client[: client.index("</tr>")]
+    assert ">approved<" in client and ">verified<" in client
+    assert not any(f">{label}<" in client for label in labels)
 
 
 def test_the_new_trust_form_is_linked(site: _Site) -> None:
@@ -205,10 +225,29 @@ def test_an_unexpected_error_shows_nothing_of_itself(site: _Site) -> None:
     assert "db-host-17" not in page
 
 
-def test_an_existing_trust_returns_a_notice(site: _Site) -> None:
+def test_an_existing_trust_is_paired_again_and_says_so(site: _Site) -> None:
+    """A submit for a peer this actor already approved, with the same
+    relationship, is a re-pair (a new secret), as before; the list now says
+    so instead of looking like a new trust. The request goes to the stored
+    base URI, however the URL was typed."""
+    baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
+    typed = baseuri.replace("peer1.example.test", "Peer1.Example.Test:443")
+    with mock.patch.object(
+        TrustManager, "create_relationship", return_value=mock.Mock()
+    ) as create:
+        status, location = site.submit(peer_url=typed + "/", trust_type="friend")
+    assert create.call_args.kwargs["peer_url"] == baseuri
+    assert status == 302
+    assert location == f"{site.www}/trust?notice=trust_repaired"
+    assert _shown(TRUST_LIST_NOTICES["trust_repaired"]) in site.get(location)[2]
+
+
+def test_an_existing_trust_with_another_relationship_returns_a_notice(
+    site: _Site,
+) -> None:
     baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
     with mock.patch.object(TrustManager, "create_relationship") as create:
-        status, location = site.submit(peer_url=baseuri + "/", trust_type="friend")
+        status, location = site.submit(peer_url=baseuri, trust_type="admin")
     create.assert_not_called()
     assert status == 302
     assert location == f"{site.www}/trust?notice=trust_exists"
@@ -233,9 +272,20 @@ def test_nothing_from_the_query_string_is_rendered(site: _Site) -> None:
     assert "alert(1)" not in listing and 'class="aw-notice"' not in listing
 
 
-def test_a_submitted_value_never_reaches_the_redirect(site: _Site) -> None:
-    status, location = site.submit(
-        peer_url="//evil.example/x\r\nX-Injected: 1", trust_type=""
+@pytest.mark.parametrize("outcome", ["refused", "raises"])
+def test_a_submitted_value_never_reaches_the_redirect(
+    site: _Site, outcome: str
+) -> None:
+    hostile = "//evil.example/x\r\nX-Injected: 1"
+    answer: dict[str, Any] = (
+        {"return_value": None}
+        if outcome == "refused"
+        else {"side_effect": RuntimeError(hostile)}
     )
+    with mock.patch.object(TrustManager, "create_relationship", **answer):
+        status, location = site.submit(
+            peer_url=hostile, trust_type="friend", description=hostile
+        )
+    code = "create_failed" if outcome == "refused" else "server_error"
     assert status == 302
-    assert location == f"{site.www}/trust/new?error=trust_type_required"
+    assert location == f"{site.www}/trust/new?error={code}"

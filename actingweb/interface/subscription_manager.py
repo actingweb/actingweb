@@ -749,7 +749,7 @@ class SubscriptionManager:
             value = store[name] if store is not None else None
         except DbError:
             raise
-        except Exception:  # a name the store does not key (``list:...``)
+        except ValueError:  # a name the store does not key (``list:...``)
             return None
         return value if isinstance(value, str) and value != "" else None
 
@@ -1213,14 +1213,15 @@ class SubscriptionManager:
 
         The application's subscription data hooks are called for each diff
         the poll applies, and once with ``"resync"`` and the whole baseline
-        when the poll replaced the replica from one (an owed rebuild, a
-        resync marker, a diff that could not be applied, no diffs to fetch,
-        or diffs that were all applied already); the result's ``baseline``
-        is that value. Only a baseline that was applied, all of it: one that
-        was skipped (another subscription covers the replica), had an entry
-        that could not be stored, or was empty for a whole target with
-        nothing to fetch, tells nothing. A rebuild after a list diff the same
-        poll told tells nothing more.
+        when the poll rebuilt the replica from one (an owed rebuild, a
+        resync marker, a diff that could not be applied, or diffs that were
+        all applied already); the result's ``baseline`` is that value. Not
+        told: a quiet poll (nothing to fetch; with ``auto_storage`` it
+        refreshes the replica from a baseline, which is the state the hooks
+        already heard about), a baseline that was skipped (another
+        subscription covers the replica) or had an entry that failed to
+        store, and a rebuild after a list diff the same poll told. A key the
+        replica refuses (a reserved name) is in the baseline the hook gets.
 
         Args:
             peer_id: ID of the peer actor we subscribed to
@@ -1354,7 +1355,6 @@ class SubscriptionManager:
                     error=f"The baseline of {sub.subtarget!r} could not be fetched",
                     error_code=502,
                 )
-            stored_baseline: Any = None
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -1368,17 +1368,13 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                applied = store.apply_resync_data(
+                store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                # Told to the hooks only when it was applied, all of it
-                # (not skipped for a covering subscription, no entry failed).
-                if not applied.skipped and not applied.failed:
-                    stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -1405,9 +1401,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                baseline=stored_baseline,
-                target=sub.target,
-                subtarget=sub.subtarget or None,
+                # No baseline for the hooks: nothing was fetched because
+                # nothing changed, and this refresh is the replica they
+                # already heard about (owner, 2026-11-16).
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
@@ -2364,7 +2360,6 @@ class SubscriptionManager:
                     error=f"The baseline of {sub.subtarget!r} could not be fetched",
                     error_code=502,
                 )
-            stored_baseline: Any = None
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -2378,17 +2373,13 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                applied = store.apply_resync_data(
+                store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                # Told to the hooks only when it was applied, all of it
-                # (not skipped for a covering subscription, no entry failed).
-                if not applied.skipped and not applied.failed:
-                    stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -2415,9 +2406,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                baseline=stored_baseline,
-                target=sub.target,
-                subtarget=sub.subtarget or None,
+                # No baseline for the hooks: nothing was fetched because
+                # nothing changed, and this refresh is the replica they
+                # already heard about (owner, 2026-11-16).
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case

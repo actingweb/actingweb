@@ -17,7 +17,7 @@ database enforces, binds every peer to its own paths, and adds ``prompt``
 to the SPA sign-in. It also conforms to specification 1.5, which changes
 what subscribers are told and several answers, sends a write's callbacks
 concurrently, and removes ``FanOutManager``. Most applications need to check
-only the first three items, item 11, item 18 and items 26 to 30; an
+only the first three items, item 11, item 18 and items 26 to 31; an
 application with ``with_email_as_creator`` also item 25.
 
 .. warning::
@@ -216,6 +216,12 @@ application with ``with_email_as_creator`` also item 25.
     size a FastAPI handler pool for it; behind a gateway with a response
     limit set ``with_callback_delivery(callback_delivery_budget_seconds=...)``.
     The protocol changes are tabled in `Specification 1.5`_.
+31. **A subscription data hook is called with a whole baseline from a
+    poll, a resume always sends a resync, and a resource notification sends
+    the whole value** (see `Subscribers: resume, resource notifications and
+    polls`_): make the data hook safe to call with the same baseline more
+    than once; check a subscriber older than 3.10 or not this library; write
+    a property before ``notify_subscribers(resource=...)``.
 
 
 What changed and why
@@ -1993,9 +1999,11 @@ v2 list: updates by ascending index, appends, a run of them as one
 the batch (``Actor.request_resync``: the list's for a subscription to it,
 the whole target's for a subscription to the whole target). A REST or
 web-UI delete is ``delete`` by index with ``old_item``: the replica deletes
-the one equal item, or the one at the index among equal ones. A peer without resync support receives a list's
-full state as a ``clear`` and then an ``extend``, under consecutive sequence
-numbers. A list diff is filtered as a unit: it reaches a subscriber that may
+the one equal item, or the one at the index among equal ones. A resume
+sends every subscriber a resync callback, whatever tags it advertises: the
+full state as ordinary diffs, which a peer cached without
+``subscriptionresync`` was sent, is gone (see "Subscribers: resume, resource
+notifications and polls" below). A list diff is filtered as a unit: it reaches a subscriber that may
 read the list's name, whole.
 
 **The receiver.** A list diff applies only to the key it arrived under. A
@@ -2260,6 +2268,53 @@ fetch its baseline is recorded. Before, that happened only with
 held the last subscriber's answer, overwritten by each); trust and peer calls
 still set it. *What to check:* code that read it after a write to learn how a
 callback went.
+
+Subscribers: resume, resource notifications and polls
+-----------------------------------------------------
+
+**A resume always sends a resync callback.** After
+``resume_subscriptions()`` the publisher read each subscriber's cached option
+tags and, for one cached without ``subscriptionresync``, sent the full
+subscribed state as ordinary diffs. That path stored scalars as text, kept
+properties that had been deleted, and raised for a subscription to a single
+property, so it is removed: every subscriber with a callback endpoint gets a
+callback of type ``resync`` and fetches the baseline under its own grant (a
+``none`` subscription and a peer without an endpoint still get the marker
+they poll). Every version of this library since 3.10 advertises the tag and
+already received a resync whenever its tags were not cached. *What to
+check:* a subscriber on a version before 3.10, or an implementation that
+does not know ``type: "resync"``, gets no state as diffs after a resume and
+re-reads on its own schedule. ``PeerCapabilities
+.supports_resync_callbacks_cached()`` and
+``actingweb.property_list.fit_full_state`` are removed;
+``supports_resync_callbacks()`` stays.
+
+**``notify_subscribers(resource=...)`` sends the whole stored value above
+the resource.** ``actor.subscriptions.notify_subscribers("properties", data,
+subtarget=s, resource=r)`` sent a subscriber at target or subtarget level
+``{r: data}``. A receiver applies a value at those levels whole, so its
+replica lost the other keys of ``s``. Such a subscriber is now sent the
+value of ``s`` as the store holds it when the call is made, less what its
+grant excludes; a subscriber at resource level is sent ``data``, as before.
+*What to check:* write the property before notifying; a subscriber that
+relied on the partial ``{r: data}`` receives the whole value; a publisher
+that passed data its store does not hold (redacted or computed) now sends
+what is stored, filtered by the subscriber's grant only. For a target other
+than ``properties`` the library has no store to read: pass the subtarget's
+whole value without ``resource``.
+
+**A poll calls the data hooks when it replaced the replica.** With
+``auto_storage``, ``sync_subscription()`` replaces the replica from a
+baseline when a rebuild is owed, a resync marker is polled, a diff could not
+be applied, there is nothing to fetch, or everything fetched was applied
+already. A subscription data hook was told nothing; it is now called once
+with the baseline, the sequence recorded and ``"resync"``. A rebuild that
+did not settle tells nothing, and neither does a rebuild after a list diff
+the same poll already told. The legacy ``subscription`` callback hook is
+told on the callback path only, as before. *What to check:* a quiet poll
+fetches a baseline each time, so a data hook is called with the same
+baseline repeatedly: make it idempotent, and compare before doing expensive
+work.
 
 Specification 1.5
 -----------------

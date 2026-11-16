@@ -508,66 +508,6 @@ class TestM8AndL4ActorLevelSweep:
         assert "still had rows" in caplog.text
 
 
-class TestM5FullStateFitsTheDiffRow:
-    def test_merged_lists_under_the_threshold_each_still_fit_together(self) -> None:
-        from actingweb.property_list import fit_full_state
-
-        cfg = Config(database="dynamodb")  # 390,000
-        state = {
-            "title": "a scalar",
-            "odd": {"list": "not a list diff", "items": ["kept"]},
-            **{
-                f"l{i}": {
-                    "list": f"l{i}",
-                    "operation": "extend",
-                    "items": ["x" * 150_000],
-                }
-                for i in range(3)
-            },
-        }
-        out = fit_full_state(state, cfg)
-        assert len(json.dumps(out)) <= 390_000
-        assert out["title"] == "a scalar"
-        assert out["odd"] == state["odd"]
-        refs = [k for k in ("l0", "l1", "l2") if out[k].get("spanned")]
-        assert refs and all("items" not in out[k] for k in refs)
-        kept = [k for k in ("l0", "l1", "l2") if not out[k].get("spanned")]
-        assert all(out[k]["items"] == ["x" * 150_000] for k in kept)
-
-    def test_no_threshold_leaves_the_state_alone(self) -> None:
-        from actingweb.property_list import fit_full_state
-
-        state = {"l": {"list": "l", "operation": "extend", "items": ["x" * 500_000]}}
-        assert fit_full_state(state, Config(database="postgresql")) == state
-
-    def test_a_spanned_list_becomes_a_reference_without_reading_bodies(
-        self, config: Config, store: dict[Any, Any], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from actingweb.actor import Actor
-
-        lst = _lst(config)
-        lst.extend(["a", big("b")])
-        calls: list[Any] = []
-        _use(monkeypatch, lambda c: RecordingDb(store, calls))
-        actor = Actor(config=config)
-        ref, pairs = actor._list_state_reference(NAME, lst)
-        assert pairs is None
-        assert ref is not None and ref["spanned"] is True
-        assert ref["bytes"] == len(json.dumps("a")) + len(json.dumps(big("b")))
-        assert not [c for c in calls if c[0] == "get_prefix" and c[1] == AUX]
-
-    def test_a_small_list_is_read_as_before(
-        self, config: Config, store: dict[Any, Any]
-    ) -> None:
-        from actingweb.actor import Actor
-
-        lst = _lst(config)
-        lst.extend(["a", "b"])
-        ref, pairs = Actor(config=config)._list_state_reference(NAME, lst)
-        assert ref is None
-        assert pairs is not None and [i for _, i in pairs] == ["a", "b"]
-
-
 class TestV1PreReleaseItemsAreNeverSwept:
     """Second verification, V1: a user item stored before 3.16 that merely
     starts like an envelope is an item, read as such and never removed."""
@@ -796,41 +736,6 @@ class TestW14InFlightMarkIsPerThread:
         t.join()
         assert seen == [False]
         assert lst._head_write_in_flight is True
-
-
-class TestW4SingleListResyncSurvivesDamageAndDeletes:
-    def test_a_malformed_head_is_sized_from_its_raw_value(
-        self, config: Config, store: dict[Any, Any]
-    ) -> None:
-        from actingweb.actor import Actor
-
-        lst = _lst(config)
-        lst.extend(["a", "b"])
-        name = sorted(heads(store))[1]
-        store[(ACTOR, name)] = MALFORMED
-        ref, pairs = Actor(config=config)._list_state_reference(NAME, lst)
-        assert ref is None and pairs is not None
-
-    def test_an_item_deleted_mid_resolve_is_dropped(
-        self, config: Config, store: dict[Any, Any]
-    ) -> None:
-        from actingweb.actor import Actor
-
-        lst = _lst(config)
-        lst.extend(["a", big("b")])
-        pairs = lst.items_with_handles(resolve=False)
-        assert lst.delete_by_handle(pairs[1][0])  # deleted after the read
-        assert Actor._resolve_list_heads(lst, pairs) == ["a"]
-
-    def test_a_spanned_item_resolves(
-        self, config: Config, store: dict[Any, Any]
-    ) -> None:
-        from actingweb.actor import Actor
-
-        lst = _lst(config)
-        lst.extend(["a", big("b")])
-        pairs = lst.items_with_handles(resolve=False)
-        assert Actor._resolve_list_heads(lst, pairs) == ["a", big("b")]
 
 
 class TestX6RemovedMalformedHeadsKeepTheirBodiesOneRun:

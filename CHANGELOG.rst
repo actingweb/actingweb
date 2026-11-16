@@ -982,8 +982,7 @@ CHANGED
   resync that was refused, timed out or answered other than 2xx is recorded
   and sent on the next resume whenever the write waited for its callbacks
   (before, only with ``with_sync_callbacks()``; any 2xx now counts as
-  delivered, where 200 and 204 did). The full state of the fallback for a
-  peer without resync is not sent when its clear was not delivered.
+  delivered, where 200 and 204 did).
 - **Callback sends no longer set ``Actor.last_response_code``**; trust and
   peer calls still do. **Behavior change:** code that read it after a write.
 
@@ -1290,12 +1289,52 @@ CHANGED
   synchronous callbacks the request waits for each reading subscriber's
   resync in turn.
 
-- **Behavior change: a peer without resync support receives ``clear`` then
-  ``extend``.** The full-state fallback sent each list as an ``extend``,
-  which a subscriber already holding the list appended to its copy. Each
-  list still carrying its items is now cleared under one sequence number and
-  the full state follows under the next. **Check:** a subscriber that loses
-  the second callback holds an empty list until the next change.
+- **Behavior change: a resume always sends a resync callback.** After
+  ``resume_subscriptions()`` (and for ``Actor.request_resync()``), a
+  subscriber whose cached option tags lacked ``subscriptionresync`` was
+  sent the full subscribed state as ordinary diffs instead. That path
+  doubled a replica's lists, stored scalars as text, kept deleted
+  properties, and raised for a subscription to a single property, losing
+  the resume. It is removed: every subscriber with a callback endpoint is
+  sent a callback of type ``resync`` and fetches the baseline under its own
+  grant, and the resume no longer reads the peer's capabilities. Every
+  version of this library since 3.10 advertises ``subscriptionresync`` and
+  already received a resync whenever its tags were not cached. **Check:**
+  a subscriber on a version before 3.10, or one that is not this library
+  and does not know ``type: "resync"``, no longer receives the state as
+  diffs after a resume: it re-reads the subscribed state on its own
+  schedule (specification 1.5 says so). ``PeerCapabilities
+  .supports_resync_callbacks()`` stays;
+  ``supports_resync_callbacks_cached()`` and
+  ``actingweb.property_list.fit_full_state`` are removed.
+
+- **Behavior change: ``notify_subscribers(resource=...)`` sends the whole
+  stored value above the resource.** ``actor.subscriptions
+  .notify_subscribers("properties", data, subtarget=s, resource=r)`` sent a
+  subscriber at target or subtarget level ``{r: data}``, which a receiver
+  applies as the whole value of ``s``: its replica lost the other keys. It
+  is now sent the value of ``s`` as stored when the call is made, less what
+  its grant excludes (the REST handlers already did this). The store is
+  read only when such a subscriber exists; a subscriber at resource level
+  is sent ``data`` as before. **Check:** write the property before
+  notifying; an application that relied on the partial shape, or that
+  passed data its store does not hold, sees the stored value instead. For
+  a target other than ``properties`` nothing changes: pass the subtarget's
+  whole value without ``resource``.
+
+- **Behavior change: a poll calls the data hooks with ``"resync"`` when it
+  replaced the replica.** ``sync_subscription()`` (and its async form, and
+  ``sync_peer``) with ``auto_storage`` replaces the replica from a baseline
+  when a rebuild is owed, a resync marker is polled, a diff could not be
+  applied, there is nothing to fetch, or everything fetched was applied
+  already. The subscription data hooks heard nothing of it; they are now
+  called once with the baseline, the sequence recorded and ``"resync"``
+  (the result's ``baseline``, ``target`` and ``subtarget`` carry the same).
+  A rebuild that did not settle, and a rebuild after a list diff the same
+  poll already told, tell nothing. The legacy ``subscription`` callback
+  hook is not told by a poll, as before. **Check:** a data hook must take a
+  whole baseline more than once (a quiet poll fetches one each time); a
+  hook that does expensive work per call should compare before it acts.
 
 - **Behavior change: the receiver refuses some list names and ``list:``
   scalars.** A list a diff would create whose name has a control
@@ -1303,8 +1342,8 @@ CHANGED
   refused (logged with ``%r``); a stored list of any name can still be
   changed and deleted. A scalar key starting ``list:`` is refused.
 
-- **Behavior change: a list diff is filtered as a unit.** A list's diff (and
-  its full state) passes whole when the subscriber may read the list's name,
+- **Behavior change: a list diff is filtered as a unit.** A list's diff
+  passes whole when the subscriber may read the list's name,
   or not at all; an exclusion never removes ``operation`` or a key inside an
   item. A list is recognised by what its name is, so a scalar shaped like a
   list diff is filtered as any object.
@@ -2095,12 +2134,11 @@ CHANGED
   is sent as a reference.** A ``SubscriptionDiff`` row has the same row cap
   as a list item, and an ``update`` diff carries two values, so a diff over
   ``list_item_span_threshold`` (390,000 bytes on DynamoDB; off on
-  PostgreSQL) used to be lost or fail the full-state fallback. Such a diff
+  PostgreSQL) used to be lost. Such a diff
   now has its value fields (``item``, ``old_item``, ``value``, ``items``)
   removed and top-level ``"spanned": true`` and ``"bytes"`` added; this
   covers a spanned item, a large ``update``, an ``extend`` of many items,
-  the REST handlers' single-item diffs and the full-state fallback for a
-  peer without resync. The library's receiver does not apply a reference: it
+  and the REST handlers' single-item diffs. The library's receiver does not apply a reference: it
   logs a WARNING and answers ``{"success": false, "spanned": true}``; the
   subscriber re-reads the list. **Behavior change:** a pre-3.16 subscriber
   answers ``unknown operation`` to a reference and stores nothing; a
@@ -2716,10 +2754,12 @@ FIXED
   ``gap_timeout_seconds`` (as a resync) or on the next poll, so a quiet
   subscription could hold a stale replica indefinitely. Two writes at the
   same moment were enough. Now the delivery that recorded N takes what was
-  queued behind it (at most 20 callbacks, and none once 5 seconds have
-  passed since the delivery started; the rest is taken by the next
-  delivery), and a delivery that queued its callback looks once more after
-  its write. A callback taken from the queue is run by the request that
+  queued behind it, one callback at a time (always the first; then at most
+  20 in all, and none once 5 seconds have passed since it began; the rest
+  is taken by the next delivery), and a delivery that queued its callback
+  looks once more after its write. A callback left at the head of the queue
+  is not a gap: it no longer triggers the gap resync, which cleared the
+  queue. A callback taken from the queue is run by the request that
   takes it: its handler error is logged, and a database fault leaves it
   queued, without changing that request's own answer. The cost is one more
   read of the queue per callback received in order.
@@ -2727,8 +2767,10 @@ FIXED
 - **A queued callback could be lost when two deliveries wrote the queue at
   the same moment** (one adding, one removing what it had processed: the
   queue was read, changed and written back). The queue is now written by
-  compare-and-swap, and a queue write that cannot be made answers 503
-  instead of 204, so the publisher keeps the diff.
+  compare-and-swap, a sequence is queued once, and a queue write that
+  cannot be made answers 503 instead of 204, so the publisher keeps the
+  diff. A callback carrying a number that is not finite (``NaN``) is
+  refused (400) instead of queued.
 
 - **A publisher's property read fault wiped its subscribers' replicas.**
   ``GET /properties`` answered a read error other than a database fault
@@ -2784,8 +2826,9 @@ FIXED
 
 - **``pop`` with a negative index was not applied by the replica.**
 
-- **A full state doubled a replica's list.** See the ``clear`` then
-  ``extend`` entry under CHANGED.
+- **A full state sent in place of a resync doubled a replica's list.** The
+  path is removed; see "a resume always sends a resync callback" under
+  CHANGED.
 
 - **List edits over REST reached a replica as scalars,** and a diff for a
   subtarget-level subscription was stored as top-level scalars. See the

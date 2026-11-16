@@ -240,9 +240,11 @@ def test_wd10_import(wire_pair):
 
 
 @pytest.mark.parametrize("topology", TOPOLOGIES)
-def test_wd12_full_state_fallback(wire_pair, topology):
+def test_wd12_resume_to_a_peer_cached_without_resync(wire_pair, topology):
     """WD12: as WD10, with A's trust row for B lacking ``subscriptionresync``
-    (freshly stamped, so no refresh) and B already holding a list."""
+    (freshly stamped, so no refresh) and B already holding a list. Since
+    3.16 the resume sends a resync all the same (it sent the full state as
+    ordinary diffs)."""
     from actingweb.trust import Trust
 
     s = wire_pair(topology, grant=["*"])
@@ -272,8 +274,9 @@ def test_wd12_full_state_fallback(wire_pair, topology):
     s.step(
         "resume",
         lambda: a.interface().subscriptions.resume("properties"),
-        # Sent from the test thread and answered synchronously: what B does
-        # with the fallback is nested in the callback, so nothing to wait for.
+        settle=_replica_settles(
+            s, lambda r: r["scalars"].get("y") == {"v": 2} and "x" not in r["scalars"]
+        ),
     )
     check("WD12", s.recording(), variant=topology)
 

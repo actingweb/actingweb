@@ -718,3 +718,168 @@ class TestVerification2026_11_16:
         env.baselines = [{"status": "paid"}]
         assert env.rebuild(config=config, force=True).success
         assert seen == []
+
+
+# -- a poll that replaced the replica tells the data hooks (3.16) ------------
+
+
+def _hooked(seen: list[Any], **kwargs: Any) -> Any:
+    from actingweb.subscription_config import SubscriptionProcessingConfig
+
+    return SubscriptionProcessingConfig(
+        enabled=True,
+        subscription_data_hooks={"*": [lambda *a: seen.append(a[1:])]},
+        **kwargs,
+    )
+
+
+def _poll(env: _Env, config: Any, diffs: list[dict[str, Any]], *, loop: bool) -> Any:
+    """``sync_subscription`` (or its async twin) against ``env``: the
+    publisher answers ``diffs`` at sequence 5, baselines come from
+    ``env.baselines``."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    def answer(path: str = "") -> dict[str, Any]:
+        seq = env.sequences.pop(0) if len(env.sequences) > 1 else env.sequences[0]
+        return {"sequence": seq, "data": list(diffs)}
+
+    env.proxy.get_resource.side_effect = answer
+    env.proxy.get_resource_async = AsyncMock(side_effect=answer)
+    env.proxy.change_resource_async = AsyncMock(return_value={})
+
+    def subscription(**_: Any) -> Any:
+        sub_obj = MagicMock()
+        snapshot = dict(env.recorded)
+        sub_obj.get.side_effect = lambda: dict(snapshot)
+        sub_obj.handle.modify.side_effect = lambda seqnr: env.recorded.update(
+            sequence=seqnr
+        )
+        return sub_obj
+
+    with (
+        patch.object(env.manager, "get_callback_subscription", return_value=env.sub),
+        patch.object(env.manager, "_get_peer_proxy", return_value=env.proxy),
+        patch.object(
+            env.manager, "_fetch_and_transform_baseline", side_effect=env._baseline
+        ),
+        patch.object(
+            env.manager,
+            "_fetch_and_transform_baseline_async",
+            AsyncMock(side_effect=env._baseline),
+        ),
+        patch("actingweb.subscription.Subscription", side_effect=subscription),
+    ):
+        if not loop:
+            return env.manager.sync_subscription(PEER, SUB, config=config)
+
+        async def run() -> Any:
+            from actingweb.handlers import callbacks
+
+            result = await env.manager.sync_subscription_async(PEER, SUB, config=config)
+            await asyncio.gather(*list(callbacks._HOOK_TASKS))
+            return result
+
+        return asyncio.run(run())
+
+
+_OUT_OF_STEP = MagicMock(out_of_step={"list": "notes", "operation": "insert"})
+
+
+class TestAPollTellsTheDataHooks:
+    """thoughts/plans/2026-11-16-3-16-pre-validation-fixes.md, Phase 2: a
+    poll that replaced the replica from a baseline calls the data hooks once
+    with it, as ``"resync"``, whichever path fetched the baseline."""
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    @pytest.mark.parametrize(
+        "path", ["owed", "marker", "out of step", "no diffs", "none applied"]
+    )
+    def test_a_poll_that_replaced_the_replica_tells_the_data_hooks(
+        self, env: _Env, path: str, loop: bool
+    ) -> None:
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        diffs: list[dict[str, Any]] = []
+        config = _hooked(seen)
+        if path == "owed":
+            env.owe(["notes"])
+        elif path == "marker":
+            diffs = [{"sequence": 5, "type": "resync", "url": "https://p/x"}]
+        elif path == "out of step":
+            # No sequence tracking: the diff that could not be applied told
+            # no hook, so the baseline is the first the application hears.
+            config = _hooked(seen, auto_sequence=False)
+            diffs = [{"sequence": 5, "data": {"notes": {"operation": "insert"}}}]
+        elif path == "none applied":
+            env.recorded["sequence"] = 5
+            diffs = [{"sequence": 3, "data": {"old": 1}}]
+        with patch.object(
+            RemotePeerStore, "apply_callback_data", return_value=_OUT_OF_STEP
+        ):
+            result = _poll(env, config, diffs, loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    def test_a_polled_rebuild_that_did_not_settle_tells_no_hook(
+        self, env: _Env
+    ) -> None:
+        seen: list[Any] = []
+        env.owe(["notes"])
+        env.sequences = [5, 6, 7, 8, 9, 10]  # keeps moving: stays owed
+        env.baselines = [{"status": "paid"}]
+        result = _poll(env, _hooked(seen), [], loop=False)
+        assert not result.success
+        assert seen == []
+
+    def test_the_async_poll_runs_a_coroutine_hook_on_its_loop(self, env: _Env) -> None:
+        import asyncio
+
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        loops: list[Any] = []
+        types: list[str] = []
+
+        async def hook(*args: Any) -> None:
+            loops.append(asyncio.get_running_loop())
+            types.append(args[-1])
+
+        config = SubscriptionProcessingConfig(
+            enabled=True, subscription_data_hooks={"properties": [hook]}
+        )
+        env.owe(["notes"])
+        env.baselines = [{"status": "paid"}]
+        callers: list[Any] = []
+        real_run = asyncio.run
+
+        def run(coro: Any) -> Any:
+            async def wrapped() -> Any:
+                callers.append(asyncio.get_running_loop())
+                return await coro
+
+            return real_run(wrapped())
+
+        with patch("asyncio.run", run):
+            _poll(env, config, [], loop=True)
+        assert types == ["resync"]
+        assert loops == callers[:1]  # the caller's loop, not a worker thread's
+
+    def test_a_settled_empty_baseline_is_told(self, env: _Env) -> None:
+        seen: list[Any] = []
+        env.owe(["notes"])
+        env.baselines = [{}]
+        assert _poll(env, _hooked(seen), [], loop=False).success
+        assert seen == [(PEER, "properties", {}, 5, "resync")]
+
+    def test_a_rebuild_after_a_list_diff_the_poll_told_tells_no_second_hook(
+        self, env: _Env
+    ) -> None:
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        diffs = [{"sequence": 1, "data": {"notes": {"operation": "insert"}}}]
+        with patch.object(
+            RemotePeerStore, "apply_callback_data", return_value=_OUT_OF_STEP
+        ):
+            _poll(env, _hooked(seen), diffs, loop=False)
+        assert [call[-1] for call in seen] == ["diff"]
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is False  # it ran

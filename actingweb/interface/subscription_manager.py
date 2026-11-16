@@ -8,8 +8,9 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from ..actor import Actor as CoreActor
@@ -320,6 +321,9 @@ class SubscriptionSyncResult:
     # A rebuild that settled: the baseline it applied, for a caller that
     # tells the application's hooks (3.16, verification B1).
     baseline: Any = None
+    # The subscription's target and subtarget, set with ``baseline``.
+    target: str | None = None
+    subtarget: str | None = None
 
 
 @dataclass
@@ -703,17 +707,41 @@ class SubscriptionManager:
         Notify all subscribers of changes to the specified target.
 
         This will trigger callbacks to all actors subscribed to this target.
+
+        With ``resource``, ``data`` is that resource's whole value. A
+        subscriber at resource level is sent it. A subscriber above it
+        applies what it is sent as the subtarget's whole value, so for
+        ``target="properties"`` it is sent the subtarget's value as stored
+        when this is called (3.16; less what its grant excludes): write the
+        property first, then notify. The store is read only when such a
+        subscriber exists; a subtarget it does not hold (a list's name
+        included) sends ``{resource: data}``, as before. For another target
+        the library has no store to read: pass the subtarget's whole value
+        without ``resource``, or a subscriber above the resource keeps only
+        ``{resource: data}``. For a large value consider
+        ``Actor.request_resync()``, which sends no data.
         """
         import json
 
         blob = json.dumps(data) if isinstance(data, dict) else str(data)
+        whole: Callable[[], str | None] | None = None
+        if target == "properties" and subtarget and resource:
+            whole = functools.partial(self._stored_property, subtarget)
 
         self._core_actor.register_diffs(
             target=target,
             subtarget=subtarget or None,
             resource=resource or None,
             blob=blob,
+            whole=whole,
         )
+
+    def _stored_property(self, name: str) -> str | None:
+        """A property's stored value (JSON text), or None when the store
+        holds none under the name."""
+        store = self._core_actor.property
+        value = store[name] if store is not None else None
+        return value if isinstance(value, str) and value != "" else None
 
     def get_subscription(
         self, peer_id: str, subscription_id: str
@@ -1128,6 +1156,39 @@ class SubscriptionManager:
         }
         return AwProxy(peer_target=peer_target, config=config)
 
+    def _tell_polled_baseline(
+        self,
+        peer_id: str,
+        config: "SubscriptionProcessingConfig | None",
+        result: SubscriptionSyncResult,
+    ) -> None:
+        """A poll that replaced the replica from a baseline tells the
+        application's data hooks once, with the baseline, the sequence
+        recorded and ``"resync"`` (3.16). Called where the poll returns, on
+        the caller's thread and loop: a coroutine hook of the async poll is
+        scheduled there, as for a polled diff. Not the legacy
+        ``subscription`` callback hook, which no poll path tells."""
+        if not result.success or result.baseline is None or not result.target:
+            return
+        if (
+            result.target == "properties"
+            and not result.subtarget
+            and not isinstance(result.baseline, dict)
+        ):
+            return
+        from ..handlers.callbacks import run_subscription_data_hooks
+        from .actor_interface import ActorInterface
+
+        run_subscription_data_hooks(
+            config,
+            ActorInterface(self._core_actor),
+            peer_id,
+            result.target,
+            result.baseline,
+            result.final_sequence,
+            "resync",
+        )
+
     def sync_subscription(
         self,
         peer_id: str,
@@ -1139,6 +1200,14 @@ class SubscriptionManager:
 
         This is a pull-based sync that fetches diffs from the peer actor that
         we subscribed to, processes them, and clears them on the peer.
+
+        The application's subscription data hooks are called for each diff
+        the poll applies, and once with ``"resync"`` and the whole baseline
+        when the poll replaced the replica from one (an owed rebuild, a
+        resync marker, a diff that could not be applied, no diffs to fetch,
+        or diffs that were all applied already); the result's ``baseline``
+        is that value. A rebuild after a list diff the same poll told tells
+        nothing more.
 
         Args:
             peer_id: ID of the peer actor we subscribed to
@@ -1158,6 +1227,17 @@ class SubscriptionManager:
             else:
                 print(f"Sync failed: {result.error}")
         """
+        result = self._poll_subscription(peer_id, subscription_id, config)
+        self._tell_polled_baseline(peer_id, config, result)
+        return result
+
+    def _poll_subscription(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> SubscriptionSyncResult:
+        """:meth:`sync_subscription` without the baseline's hook call."""
         from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
         from ..remote_storage import RemotePeerStore
         from ..subscription_config import SubscriptionProcessingConfig
@@ -1261,6 +1341,7 @@ class SubscriptionManager:
                     error=f"The baseline of {sub.subtarget!r} could not be fetched",
                     error_code=502,
                 )
+            stored_baseline: Any = None
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -1281,6 +1362,7 @@ class SubscriptionManager:
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
+                stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -1307,6 +1389,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
+                baseline=stored_baseline,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
@@ -1349,6 +1434,7 @@ class SubscriptionManager:
         diffs_processed = 0
         in_flight = False
         rebuild_needed = False
+        rebuild_told = False
         marker_seen = False
         max_sequence = 0
 
@@ -1443,7 +1529,9 @@ class SubscriptionManager:
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
                     # the rest of its batch: stop, the rebuild replaces it.
+                    # The diff was told to the hooks; the baseline is not.
                     rebuild_needed = True
+                    rebuild_told = True
                     break
 
                 if result == ProcessResult.PROCESSED:
@@ -1497,7 +1585,8 @@ class SubscriptionManager:
         if marker_seen:
             return self._rebuild_for_marker(peer_id, subscription_id, config)
         if rebuild_needed:
-            return self.rebuild_subscription(peer_id, subscription_id, config=config)
+            rebuilt = self.rebuild_subscription(peer_id, subscription_id, config=config)
+            return replace(rebuilt, baseline=None) if rebuild_told else rebuilt
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
@@ -1593,6 +1682,9 @@ class SubscriptionManager:
                     diffs_fetched=diffs_fetched,
                     diffs_processed=1,  # Count baseline as 1 processed
                     final_sequence=response.get("sequence", 0),
+                    baseline=transformed_data,
+                    target=sub.target,
+                    subtarget=sub.subtarget or None,
                 )
 
         # Clear processed diffs on peer
@@ -2136,6 +2228,19 @@ class SubscriptionManager:
                 subscription_id="sub456"
             )
         """
+        result = await self._poll_subscription_async(peer_id, subscription_id, config)
+        # After the await, on the caller's loop: a rebuild runs in a worker
+        # thread, and a coroutine hook must not be run from there.
+        self._tell_polled_baseline(peer_id, config, result)
+        return result
+
+    async def _poll_subscription_async(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        config: "SubscriptionProcessingConfig | None" = None,
+    ) -> SubscriptionSyncResult:
+        """:meth:`sync_subscription_async` without the baseline's hook call."""
         from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
         from ..remote_storage import RemotePeerStore
         from ..subscription_config import SubscriptionProcessingConfig
@@ -2238,6 +2343,7 @@ class SubscriptionManager:
                     error=f"The baseline of {sub.subtarget!r} could not be fetched",
                     error_code=502,
                 )
+            stored_baseline: Any = None
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
                 # value, 3.16)
@@ -2258,6 +2364,7 @@ class SubscriptionManager:
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
+                stored_baseline = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -2284,6 +2391,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
+                baseline=stored_baseline,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
@@ -2323,6 +2433,7 @@ class SubscriptionManager:
         diffs_processed = 0
         in_flight = False
         rebuild_needed = False
+        rebuild_told = False
         marker_seen = False
         max_sequence = 0
 
@@ -2416,7 +2527,9 @@ class SubscriptionManager:
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
                     # the rest of its batch: stop, the rebuild replaces it.
+                    # The diff was told to the hooks; the baseline is not.
                     rebuild_needed = True
+                    rebuild_told = True
                     break
 
                 if result == ProcessResult.PROCESSED:
@@ -2473,9 +2586,10 @@ class SubscriptionManager:
                 self._rebuild_for_marker, peer_id, subscription_id, config
             )
         if rebuild_needed:
-            return await self.rebuild_subscription_async(
+            rebuilt = await self.rebuild_subscription_async(
                 peer_id, subscription_id, config=config
             )
+            return replace(rebuilt, baseline=None) if rebuild_told else rebuilt
 
         # If we fetched diffs but processed none (all duplicates/rejected),
         # fetch baseline to ensure we're in sync
@@ -2570,6 +2684,9 @@ class SubscriptionManager:
                     diffs_fetched=diffs_fetched,
                     diffs_processed=1,  # Count baseline as 1 processed
                     final_sequence=response.get("sequence", 0),
+                    baseline=transformed_data,
+                    target=sub.target,
+                    subtarget=sub.subtarget or None,
                 )
 
         # Clear processed diffs on peer (async)
@@ -2850,6 +2967,8 @@ class SubscriptionManager:
             final_sequence=sequence,
             error=None if settled else "The rebuild stays owed",
             baseline=baseline if settled else None,
+            target=sub.target,
+            subtarget=sub.subtarget or None,
         )
 
     def _rebuild_owed_and_due(

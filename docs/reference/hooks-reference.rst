@@ -226,6 +226,14 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   resync's poll included, 3.16; it ran for none), once per sequence, with
   ``callback_type`` ``"diff"`` or ``"resync"``. ``data`` never carries a
   ``timestamp`` key the publisher did not send.
+- A poll that replaced the replica from a baseline (an owed rebuild, a
+  polled resync marker, a diff that could not be applied, nothing to fetch,
+  or diffs that were all applied already) calls the hook once with the
+  baseline, the sequence recorded and ``"resync"`` (3.16; it was told
+  nothing). A quiet poll fetches a baseline each time, so the hook must
+  take the same baseline more than once. A coroutine hook of the async poll
+  is scheduled on the caller's loop. A poll tells the data hooks only: the
+  legacy ``subscription`` callback hook is told on the callback path.
 - After a resync the replica no longer holds what the baseline lacks; the
   hook gets the baseline, not the names removed.
 - A callback that arrives while a rebuild of the replica is owed (after a

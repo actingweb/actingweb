@@ -50,6 +50,7 @@
 "subs-list-cache-lifetime" = ["WM2-WM9"]
 "email-as-creator-at-write-time" = ["WE1-WE9"]
 "grant-enforcement-per-route" = ["WG1-WG19"]
+"3-16-pre-validation-fixes" = []
 
 # ---------------------------------------------------------------------------
 # peer-authorisation-fixes, Phase 0: the flows over the paths the fix changes
@@ -153,15 +154,16 @@ reason = [
 ]
 
 [rows."WD12"]
-test = "test_wire_peer_paths.py::test_wd12_full_state_fallback"
+test = "test_wire_peer_paths.py::test_wd12_resume_to_a_peer_cached_without_resync"
 topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:4", "spec-1-5:3", "3-16-pre-validation-fixes:2"]
 exposure = false
-expected = "A believes B lacks subscriptionresync: resume sends a clear for each list still carrying its items and then the full state (each list an extend with length), two low-granularity callbacks under consecutive sequences; B fetches and acknowledges both and holds the list once. Known wrong: the object y is stored as a JSON string wrapped in value, and a property deleted while suspended is not mentioned (thoughts/todo/full-state-fallback-replica.md)."
+expected = "A's cached option tags for B lack subscriptionresync: resume still sends one callback of type resync (no capability is read); B fetches the baseline under its grant, stores y as an object and no longer holds x, and holds the list once."
 reason = [
   "2026-11-07 first recording (peer-authorisation-fixes:0)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
   "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)",
+  "2026-11-16 the full-state fallback is removed: a resume always sends a resync (3-16-pre-validation-fixes:2)",
 ]
 
 [rows."WQ1"]

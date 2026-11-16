@@ -212,12 +212,12 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 | AC-3 | 1 | `tests/integration/test_callback_delivery_shapes.py::test_two_simultaneous_low_granularity_writes_reach_every_replica` (the `xfail` removed) | Passing |
 | AC-4 | 1 | `tests/integration/test_callback_processor_concurrency.py::test_two_concurrent_deliveries_run_the_handler_once` (event-gated, run's backend) | Passing |
 | AC-17 | 1 | `tests/test_callback_pending_drain.py::test_a_queue_write_during_a_prune_is_kept` | Passing |
-| AC-5 | 2 | `tests/test_resume_always_resyncs.py::test_a_peer_cached_without_resync_is_sent_a_resync`; wire row `WD12` | Not run |
-| AC-6 | 2 | `tests/test_resume_always_resyncs.py::test_a_single_property_subscription_resumes` | Not run |
-| AC-7 | 2 | `tests/test_notify_subscribers_whole_value.py::test_a_resource_notification_sends_the_whole_stored_value` (real store; target-level and subtarget-level subscribers; a grant that excludes a sibling key) | Not run |
-| AC-8 | 2 | `tests/test_replica_rebuild.py::test_a_poll_that_replaced_the_replica_tells_the_data_hooks` (parametrised: owed, marker, out of step, no diffs, none applied; sync and async) | Not run |
-| AC-9 | 2 | `tests/test_replica_rebuild.py::test_a_polled_rebuild_that_did_not_settle_tells_no_hook` | Not run |
-| AC-10 | 2 | `tests/test_replica_rebuild.py::test_the_async_poll_runs_a_coroutine_hook_on_its_loop` (the hook records its running loop; the test drains the task and compares by identity) | Not run |
+| AC-5 | 2 | `tests/test_resume_always_resyncs.py::test_a_peer_cached_without_resync_is_sent_a_resync`; wire row `WD12` (`test_wd12_resume_to_a_peer_cached_without_resync`) | Passing |
+| AC-6 | 2 | `tests/test_resume_always_resyncs.py::test_a_single_property_subscription_resumes` | Passing |
+| AC-7 | 2 | `tests/test_notify_subscribers_whole_value.py::test_a_resource_notification_sends_the_whole_stored_value` (real store; target-level and subtarget-level subscribers; a grant that excludes a sibling key) | Passing |
+| AC-8 | 2 | `tests/test_replica_rebuild.py::test_a_poll_that_replaced_the_replica_tells_the_data_hooks` (parametrised: owed, marker, out of step, no diffs, none applied; sync and async) | Passing |
+| AC-9 | 2 | `tests/test_replica_rebuild.py::test_a_polled_rebuild_that_did_not_settle_tells_no_hook` | Passing |
+| AC-10 | 2 | `tests/test_replica_rebuild.py::test_the_async_poll_runs_a_coroutine_hook_on_its_loop` (the hook records its running loop; the test drains the task and compares by identity) | Passing |
 | AC-11 | 3 | `tests/test_subscription_processing.py::test_the_removed_callback_oauth_module_raises_its_pointer` | Not run |
 | AC-12 | 3 | `tests/integration/test_www_trust_pages.py::test_the_trust_list_shows_both_sides` (one row per state of the matrix); browser walk | Not run |
 | AC-13 | 3 | `tests/integration/test_www_trust_pages.py::test_the_new_trust_form_is_linked`; `tests/test_demo_example.py::test_the_demo_trust_templates_render` | Not run |
@@ -378,6 +378,40 @@ The concurrency test as changed - AC-4.
 - A minor: no route, hook name, kwarg, response field or option changes in
   this phase.
 
+### Review of the phase commit (codex `gpt-5.6-sol` and a fresh-context reviewer, 2026-11-16)
+
+Eleven findings on `6d30934`; fixed in the commit after it unless noted:
+
+- **A handler of 5 seconds or more left the drain no round** (High): the
+  clock started with the delivery. The first queued callback is now always
+  taken; the bounds apply after it, from the drain's start.
+- **One claim covered up to 20 callbacks under one 60-second lease, with
+  the sequence written after the batch** (High): the drain claims one
+  callback per round and records its sequence before the next. A fault
+  midway no longer re-runs callbacks that succeeded (Low, same fix), and
+  the time bound is checked between callbacks (Medium, same fix).
+- **A callback left at the head of the queue made the next delivery trigger
+  the gap resync**, which clears the queue (Medium): the gap timeout is not
+  checked while the next callback in line is itself queued; the drain takes
+  it. The 21st callback behind one delivery, with no traffic after it, still
+  waits for the next delivery or poll (rule 4, accepted).
+- **The drain read the queue before the state row** (Low): row, sequence,
+  then queue, as the in-order path.
+- **A queued `NaN` made every later queue swap lose on DynamoDB** (Low,
+  peer-reachable): a callback with a non-finite number is refused.
+- **A queue write that landed but was reported lost queued a second copy**
+  (Low): a sequence is queued once. No back-off between the five tries:
+  accepted, the row is per subscription.
+- **An in-order delivery whose own sequence was queued left the entry**
+  (Low): pruned.
+- **Tests that passed with the behaviour removed** (Medium): the once-only
+  test races at the claim; two queue writes at once; the time bound; the
+  head-of-queue case with the gap timeout passed; the fault, error and
+  rebuild cases on both twins.
+- Accepted: a `DbError` on the drain's claim write is logged and may leave
+  a claim live for its lease with nobody running it (the in-order path
+  raises there; the drain must not change the first callback's answer).
+
 ### Implementation Status: Complete
 
 ---
@@ -494,7 +528,54 @@ The concurrency test as changed - AC-4.
       specification
 - [ ] Docs build with `-W`
 
-### Implementation Status: Not Started
+### Notes from implementation (2026-11-16)
+
+- **Red first**: 12 poll-hook cases, 5 resume cases and the whole-value
+  case failed on the behaviour before the change (the resume cases by
+  taking the removed path).
+- **The poll tells at its return through a wrapper**: `sync_subscription`
+  and `sync_subscription_async` call `_poll_subscription[_async]` (the
+  former bodies) and then `_tell_polled_baseline`. `SubscriptionSyncResult`
+  gains `target` and `subtarget`, set with `baseline`.
+- **A quiet poll tells the hook every time** (the no-diffs path fetches a
+  baseline on each poll with `auto_storage`). This is what the plan's rule
+  says; it is the path a polling application will notice most. The
+  changelog, the hooks reference and the migration guide's item 31 say so.
+  Raised with the owner in the hand-off as the one choice worth a second
+  look.
+- **Removed with the fallback**, beyond the plan's list:
+  `Actor._resolve_list_heads` and `Actor._list_state_reference` (only the
+  full state used them), with their tests
+  (`test_property_list_span_iterations.py`, `TestW4...` and `TestM5...`).
+- **Not re-pinned, against the plan**:
+  - *a value too deep for the grant filter is left out, not `null`*: the
+    baseline read already has this test
+    (`tests/integration/test_property_grants_flow.py::test_a_value_too_deep_to_filter_is_withheld_not_null`);
+    the fallback's copy is deleted.
+  - *a publisher with a holed list*: `TestResyncSkipsCorruptedListsOnly`
+    tested the removed function directly and is deleted without a
+    replacement. What the baseline read does there is existing behaviour
+    this plan does not change (the list's read answers 409 and the
+    subscriber counts the list as failed, so the rebuild stays owed), but
+    no test in this plan pins the two together. Open for the verification.
+- **`WD12`** re-recorded as a resync (ownership commit `2fd8e3f` first);
+  the test is `test_wd12_resume_to_a_peer_cached_without_resync` and now
+  waits for the replica to settle. The subscriber ends with `y` as an
+  object, no `x`, and the list once: the three defects the row recorded
+  are gone.
+- **Specification**: three more passages than the plan listed said
+  "SHOULD send only to a subscriber that advertises" (`:60`, the tag's
+  definition at `:853`, the recovery list at `:4395`); reworded with the
+  rest.
+- **`docs/sdk/actor-interface.rst`** needed no change (its
+  `notify_subscribers` sample has no `resource`).
+- A minor: `SubscriptionSyncResult` gains two fields;
+  `supports_resync_callbacks_cached` and `fit_full_state` are removed.
+- **A new todo line**: `notify_subscribers(resource=...)` reads the stored
+  value apart from the application's write (in
+  `subscriber-hooks-and-resource-diffs-after-1-5.md`).
+
+### Implementation Status: Complete
 
 ---
 

@@ -155,7 +155,7 @@ reason = [
 [rows."WD12"]
 test = "test_wire_peer_paths.py::test_wd12_full_state_fallback"
 topologies = ["same_host", "two_hosts"]
-owners = ["attribute-list-v2-port:4", "spec-1-5:3"]
+owners = ["attribute-list-v2-port:4", "spec-1-5:3", "3-16-pre-validation-fixes:2"]
 exposure = false
 expected = "A believes B lacks subscriptionresync: resume sends a clear for each list still carrying its items and then the full state (each list an extend with length), two low-granularity callbacks under consecutive sequences; B fetches and acknowledges both and holds the list once. Known wrong: the object y is stored as a JSON string wrapped in value, and a property deleted while suspended is not mentioned (thoughts/todo/full-state-fallback-replica.md)."
 reason = [

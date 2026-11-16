@@ -13,3 +13,15 @@ Issues 6 and 7 stay where the verification put them.
 4. **[Verification fix] A URL that is no peer address matches no stored trust** — `_same_peer_url` answers no match for a port that is not a number, userinfo, a query or a fragment; it read a bad port as the default one (`actingweb/handlers/www.py`). Why: Issue 4: such a URL matched the stored peer and rotated its secret. Test: `::test_which_typed_urls_name_the_stored_peer` (11 cases, 4 red first). AC: none. Spec: none.
 5. **[Verification fix] Tests for the weak criteria** — AC-15: a row waiting for approval is not an existing trust (`::test_a_row_waiting_for_approval_is_not_an_existing_trust`, fails without the approved condition); AC-16: a known code with other parameters shows only its text, the trust type in the URL is not selected, and a form's code means nothing to the list (`::test_nothing_from_the_query_string_is_rendered`). Not changed, accepted: AC-3 stays a timing test whose evidence is the measured rate (forcing the overlap is what `tests/test_callback_pending_drain.py` does); AC-6's "records it" stays the return value (the caller's bookkeeping is `request_resync`'s, tested in `tests/test_list_diff_resync_and_filter.py::test_a_missed_subscriber_is_recorded`). AC: none. Spec: none.
 6. **[Verification fix] Hygiene** — the demo's dashboard template has its CRLF line endings back (the phase commit had rewritten the file; the change is three lines again); `.oss-scanner/threat_model.md` no longer lists the removed handler; both trust templates' legend says "Waiting for peer" also covers a peer that has not verified; three lines of the plan that its later section superseded now say so. Why: Issues 8 and 9. AC: none. Spec: none.
+
+**After the batch:** Full tier on the batch's tree: DynamoDB 8,004 passed,
+PostgreSQL 7,776 passed, docs clean; committed as `3fb93ab`. The re-pair
+notices checked against a real second actor on the demo (first create: no
+notice; the same again: `trust_repaired`; a differently typed host: the
+same; another relationship: `trust_exists`; a port that is not a number:
+back on the form). The consumer's suite on `3fb93ab`, environment 9:
+PostgreSQL 3 failed, 7,405 passed, 14 skipped, 179 deselected; DynamoDB lane
+3 failed, 54 passed; the same six failures by name as on `d62021b` and
+`2f1a891`, nothing new (logs
+`../actingweb_mcp/.claude/worktrees/emm9-{pg,dyn}-3fb93ab.log`). Not
+re-verified: the next `/verify_implementation` reports on this batch.

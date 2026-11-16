@@ -275,3 +275,78 @@ def test_a_publisher_whose_bulk_read_faults_answers_500_not_an_empty_listing() -
         handler.listall(myself, mock.Mock())
     assert handler.response.status_code == 500
     assert handler.response.body in (None, "", b"")
+
+
+def _rebuild_on_the_callback(result: Any) -> tuple[Any, list[Any], list[Any]]:
+    """A diff arrives while a rebuild is owed and due; the rebuild returns
+    ``result``. The data hook's and the legacy hook's calls are recorded."""
+    from actingweb.interface.hooks import HookRegistry
+
+    config, actor = _setup()
+    seen: list[Any] = []
+    config._subscription_config.subscription_data_hooks = {  # type: ignore[attr-defined]
+        "properties": [lambda a, p, t, d, s, k: seen.append((p, t, d, s, k))]
+    }
+    legacy: list[Any] = []
+    hooks = HookRegistry()
+    hooks.register_callback_hook(
+        "subscription", lambda a, n, d: legacy.append((d["data"], d["type"])) or True
+    )
+    webobj = AWWebObj(
+        url="https://test.example.com/x",
+        body=json.dumps({"sequence": 6, "data": {"status": "paid"}}),
+    )
+    handler = CallbacksHandler(webobj, config, hooks=hooks)
+    check = mock.Mock()
+    check.check_authorisation.return_value = True
+    check.response = {"code": 200, "text": "Ok", "headers": {}}
+    check.acl = {"authenticated": True, "peerid": "peer1", "relationship": "friend"}
+    handler._authenticate_dual_context = mock.Mock(  # type: ignore[method-assign]
+        return_value=mock.Mock(actor=actor, auth_obj=check)
+    )
+    with (
+        mock.patch.object(
+            SubscriptionManager, "_rebuild_owed_and_due", return_value=True
+        ),
+        mock.patch.object(
+            SubscriptionManager, "rebuild_subscription", return_value=result
+        ),
+    ):
+        handler.post(aid(actor), "subscriptions/peer1/sub1")
+    return webobj, seen, legacy
+
+
+def test_a_rebuild_run_on_a_callback_tells_both_hooks_its_baseline() -> None:
+    """Verification 2026-11-16-3 (B1): the callback that ran a due rebuild
+    answered 204 and no hook, data or legacy, saw its change."""
+    from actingweb.interface.subscription_manager import SubscriptionSyncResult
+
+    settled = SubscriptionSyncResult(
+        subscription_id="sub1",
+        success=True,
+        diffs_fetched=0,
+        diffs_processed=1,
+        final_sequence=6,
+        baseline={"status": "paid", "x": 1},
+    )
+    webobj, seen, legacy = _rebuild_on_the_callback(settled)
+    assert webobj.response.status_code == 204
+    assert seen == [("peer1", "properties", {"status": "paid", "x": 1}, 6, "resync")]
+    assert legacy == [({"status": "paid", "x": 1}, "resync")]
+
+
+def test_a_rebuild_that_did_not_settle_tells_no_hook() -> None:
+    """Its callback answers 503 and is sent again: told then, once."""
+    from actingweb.interface.subscription_manager import SubscriptionSyncResult
+
+    unsettled = SubscriptionSyncResult(
+        subscription_id="sub1",
+        success=False,
+        diffs_fetched=0,
+        diffs_processed=1,
+        final_sequence=6,
+        error="The rebuild stays owed",
+    )
+    webobj, seen, legacy = _rebuild_on_the_callback(unsettled)
+    assert webobj.response.status_code == 503
+    assert seen == [] and legacy == []

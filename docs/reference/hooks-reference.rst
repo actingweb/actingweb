@@ -162,9 +162,10 @@ The template will receive:
 
 This allows applications to add custom web UI pages without modifying the core library.
 
-A dict without ``template`` is answered as JSON. ``False`` or ``None``
-answers 404 (3.16). Any other result, a string included, is answered as
-the text ``True``: return a template dict to show a page.
+A template dict renders on a ``GET`` only; on a ``POST``, and without
+``template``, a dict is answered as JSON. ``False`` or ``None`` answers 404
+(3.16). Any other result, a string included, is answered as the text
+``True``: return a template dict to show a page.
 
 Application Callback Hooks
 ==========================
@@ -227,10 +228,12 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   ``timestamp`` key the publisher did not send.
 - After a resync the replica no longer holds what the baseline lacks; the
   hook gets the baseline, not the names removed.
-- A rebuild of the replica from a baseline (owed after a failed resync
-  fetch or a list the replica could not apply, or asked for by a polled
-  marker) calls the hook once with the baseline and ``"resync"`` (3.16), as
-  a pushed resync does.
+- A callback that arrives while a rebuild of the replica is owed (after a
+  resync whose fetch failed) runs the rebuild instead of being applied.
+  When the rebuild settles, the hook, and the legacy ``subscription``
+  callback hook, is told the baseline once with ``"resync"`` (3.16): the
+  callback's change is in it. A rebuild that does not settle tells no hook;
+  the callback answers 503 and is told when it is sent again.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

@@ -317,6 +317,9 @@ class SubscriptionSyncResult:
     # handling: it neither cleared nor recorded past it, and a later poll
     # picks the rest up.
     in_flight: bool = False
+    # A rebuild that settled: the baseline it applied, for a caller that
+    # tells the application's hooks (3.16, verification B1).
+    baseline: Any = None
 
 
 @dataclass
@@ -2799,26 +2802,6 @@ class SubscriptionManager:
                 applied=applied,
                 owed=owed,
             )
-        # The application's data hooks are told the baseline as a resync, as
-        # a pushed resync tells them, with or without auto_storage (3.16,
-        # verification B1: a rebuild an incoming callback ran answered for
-        # that callback and no hook saw its change).
-        if not (
-            sub.target == "properties"
-            and not sub.subtarget
-            and not isinstance(baseline, dict)
-        ):
-            from ..handlers.callbacks import run_subscription_data_hooks
-
-            run_subscription_data_hooks(
-                config,
-                actor_interface,
-                peer_id,
-                sub.target,
-                baseline,
-                sequence,
-                "resync",
-            )
         # Read afresh: a Subscription serves its first read from a cache, and
         # the check below must see what a callback recorded meanwhile.
         sub_obj = Subscription(
@@ -2866,6 +2849,7 @@ class SubscriptionManager:
             diffs_processed=1,
             final_sequence=sequence,
             error=None if settled else "The rebuild stays owed",
+            baseline=baseline if settled else None,
         )
 
     def _rebuild_owed_and_due(

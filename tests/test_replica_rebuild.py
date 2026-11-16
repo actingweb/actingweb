@@ -689,31 +689,25 @@ class TestIteration27OutsideVoice:
 
 
 class TestVerification2026_11_16:
-    """thoughts/verifications/2026-11-16-spec-1-5-3.md (B1): a rebuild, the
-    one an incoming callback runs included, told the application's data
-    hooks nothing, so a change folded into its baseline reached no hook."""
+    """thoughts/verifications/2026-11-16-spec-1-5-3.md (B1): a rebuild that
+    settled returns the baseline it applied, for the callback that ran it to
+    tell the hooks; one that did not settle returns none, and the rebuild
+    itself tells no hook (every path would, before it knows it settled)."""
 
-    def test_a_rebuild_tells_the_data_hooks_its_baseline_as_a_resync(
-        self, env: _Env
-    ) -> None:
-        from actingweb.subscription_config import SubscriptionProcessingConfig
-
-        seen: list[tuple[Any, ...]] = []
-        config = SubscriptionProcessingConfig(
-            enabled=True,
-            subscription_data_hooks={
-                "properties": [
-                    lambda actor, peer, target, data, seq, kind: seen.append(
-                        (peer, target, data, seq, kind)
-                    )
-                ]
-            },
-        )
+    def test_a_settled_rebuild_returns_its_baseline(self, env: _Env) -> None:
         env.baselines = [{"status": "paid"}]
-        assert env.rebuild(config=config, force=True).success
-        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+        result = env.rebuild(force=True)
+        assert result.success
+        assert result.baseline == {"status": "paid"}
 
-    def test_a_failed_rebuild_tells_the_hooks_nothing(self, env: _Env) -> None:
+    def test_an_unsettled_rebuild_returns_no_baseline(self, env: _Env) -> None:
+        env.sequences = [5, 6, 7, 8, 9, 10]  # keeps moving: stays owed
+        env.baselines = [{"status": "paid"}]
+        result = env.rebuild(force=True)
+        assert not result.success
+        assert result.baseline is None
+
+    def test_the_rebuild_itself_tells_no_hook(self, env: _Env) -> None:
         from actingweb.subscription_config import SubscriptionProcessingConfig
 
         seen: list[Any] = []
@@ -721,6 +715,6 @@ class TestVerification2026_11_16:
             enabled=True,
             subscription_data_hooks={"*": [lambda *a: seen.append(a)]},
         )
-        env.baselines = [None]
-        assert not env.rebuild(config=config, force=True).success
+        env.baselines = [{"status": "paid"}]
+        assert env.rebuild(config=config, force=True).success
         assert seen == []

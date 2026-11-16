@@ -1027,12 +1027,16 @@ CHANGED
   and ``sync_subscription`` acts on a marker as a resync (a rebuild). The
   poll runs the application's data hooks for each diff it processes when
   given the configuration, which the gap resync now passes, with or without
-  ``auto_storage``. A rebuild (the one the next callback runs when a rebuild
-  is owed, a polled marker's, a list fault's) tells the data hooks its
-  baseline once, with ``callback_type`` ``"resync"``, as a pushed resync
-  does; a rebuild run on a callback answered for it and no hook saw its
-  change. **Behavior change:** a data hook is called with ``"resync"`` and
-  the whole baseline after every rebuild.
+  ``auto_storage``. **Behavior change.**
+- **A callback that ran an owed rebuild reached no hook.** After a resync
+  whose fetch failed, the next callback rebuilds the replica from a
+  baseline and answers for itself; neither the subscription data hooks nor
+  the legacy ``subscription`` callback hook saw its change. When that
+  rebuild settles, both are told the baseline once, with ``"resync"``; a
+  rebuild that does not settle tells neither, and the callback (answered
+  503) is told when it is sent again. **Behavior change:** a data hook can
+  be called with ``"resync"`` and the whole baseline in place of the diff
+  that arrived.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
   nothing (it cleared the queue); a callback with ``data`` and no integer
   ``sequence`` answers 400 (it was dropped with 204); a granularity other

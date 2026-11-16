@@ -848,6 +848,20 @@
          "status": 200
         },
         {
+         "auth": "bearer:trust:A-B",
+         "children": [],
+         "headers": {},
+         "host": "wire_app",
+         "method": "PUT",
+         "path": "/<A>/subscriptions/<B>/<sub1>",
+         "query": "",
+         "request": {
+          "sequence": 2
+         },
+         "response": null,
+         "status": 204
+        },
+        {
          "actor": "<B>",
          "data": {
           "x": {
@@ -862,20 +876,6 @@
          "sequence": 2,
          "target": "properties",
          "type": "resync"
-        },
-        {
-         "auth": "bearer:trust:A-B",
-         "children": [],
-         "headers": {},
-         "host": "wire_app",
-         "method": "PUT",
-         "path": "/<A>/subscriptions/<B>/<sub1>",
-         "query": "",
-         "request": {
-          "sequence": 2
-         },
-         "response": null,
-         "status": 204
         }
        ],
        "headers": {},

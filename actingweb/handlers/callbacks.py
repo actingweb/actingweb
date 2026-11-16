@@ -968,6 +968,62 @@ class CallbacksHandler(base_handler.BaseHandler):
             return None, "Timestamp in the future"
         return parsed.isoformat(), ""
 
+    def _tell_subscription_hooks(
+        self,
+        config: "SubscriptionProcessingConfig",
+        actor_interface: Any,
+        peer_id: str,
+        subscription_id: str,
+        subscription: dict[str, Any],
+        data: Any,
+        sequence: int,
+        callback_type: str,
+    ) -> bool:
+        """Tell the application's hooks one applied change: the
+        subscription data hooks, then the legacy ``subscription`` callback
+        hook. False, and no hook told, for a whole properties target whose
+        data is not an object (malformed; not stored either)."""
+        target = subscription.get("target", "properties")
+        if (
+            target == "properties"
+            and not subscription.get("subtarget")
+            and not isinstance(data, dict)
+        ):
+            # A whole properties target's callback is a set of keys: a
+            # malformed one is not stored (see RemotePeerStore) and reaches
+            # none of the hooks (target, wildcard or legacy), which read it
+            # as an object. Another target's hooks get what the publisher
+            # sent.
+            logger.warning(
+                f"Callback from {peer_id} for {subscription_id}: the data of a "
+                "whole properties target is not an object; not passed to the "
+                "hooks"
+            )
+            return False
+        run_subscription_data_hooks(
+            config,
+            actor_interface,
+            peer_id,
+            target,
+            data,
+            sequence,
+            callback_type,
+        )
+        # Legacy callback hooks (for backward compatibility)
+        if self.hooks:
+            self.hooks.execute_callback_hooks(
+                "subscription",
+                actor_interface,
+                {
+                    "peerid": peer_id,
+                    "subscription": subscription,
+                    "data": data,
+                    "sequence": sequence,
+                    "type": callback_type,
+                },
+            )
+        return True
+
     def _process_subscription_callback_internal(
         self,
         actor_interface: "ActorInterface",
@@ -1045,6 +1101,19 @@ class CallbacksHandler(base_handler.BaseHandler):
                     peer_id, subscription_id, config=config
                 )
                 if rebuilt.success:
+                    # The hooks are told the baseline that answered for this
+                    # callback, as a resync, once the rebuild settled (3.16,
+                    # verification B1: no hook saw this callback's change).
+                    self._tell_subscription_hooks(
+                        config,
+                        actor_interface,
+                        peer_id,
+                        subscription_id,
+                        subscription,
+                        rebuilt.baseline,
+                        rebuilt.final_sequence,
+                        "resync",
+                    )
                     return True
                 self._callback_retry_later = True
                 return False
@@ -1291,47 +1360,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                         applied = store.apply_callback_data(cb.data, **level)
                         out_of_step = applied.out_of_step
 
-                # Invoke subscription_data_hooks (from app.subscription_data_hook decorator)
-                target = subscription.get("target", "properties")
-                if (
-                    target == "properties"
-                    and not subscription.get("subtarget")
-                    and not isinstance(cb.data, dict)
-                ):
-                    # A whole properties target's callback is a set of keys:
-                    # a malformed one is not stored (see RemotePeerStore) and
-                    # reaches none of the hooks (target, wildcard or legacy),
-                    # which read it as an object. Another target's hooks get
-                    # what the publisher sent.
-                    logger.warning(
-                        f"Callback from {peer_id} for {subscription_id}: the "
-                        "data of a whole properties target is not an object; "
-                        "not passed to the hooks"
-                    )
-                    cb.out_of_step = out_of_step
-                    return
-                run_subscription_data_hooks(
+                if not self._tell_subscription_hooks(
                     config,
                     actor_interface,
                     peer_id,
-                    target,
+                    subscription_id,
+                    subscription,
                     cb.data,
                     cb.sequence,
                     cb.callback_type.value,
-                )
-
-                # Invoke legacy callback hooks (for backward compatibility)
-                if self.hooks:
-                    hook_data = {
-                        "peerid": peer_id,
-                        "subscription": subscription,
-                        "data": cb.data,
-                        "sequence": cb.sequence,
-                        "type": cb.callback_type.value,
-                    }
-                    self.hooks.execute_callback_hooks(
-                        "subscription", actor_interface, hook_data
-                    )
+                ):
+                    cb.out_of_step = out_of_step
+                    return
 
                 cb.out_of_step = out_of_step
 

@@ -88,6 +88,8 @@ class CallbackProcessor:
     - Duplicate filtering
     - Resync callback processing
     - Back-pressure via pending queue limits
+    - Callbacks queued behind a delivery in progress: the delivery that
+      records its sequence takes them (``_drain``)
 
     Storage: Uses actor's internal attributes (bucket: _callback_state).
     """
@@ -106,6 +108,15 @@ class CallbackProcessor:
     REBUILD_INTERVAL_SECONDS = 60.0
     # State-row fields a resync's reset keeps.
     _REBUILD_FIELDS = ("rebuild_owed", "rebuild_lists", "rebuilt_at")
+    # A delivery that recorded its sequence takes the callbacks queued behind
+    # its claim (``_drain``): at most this many, and none once this much time
+    # has passed since the delivery started (the publisher is waiting for its
+    # answer; its read timeout for a diff is 10 seconds). What is left stays
+    # queued for the next delivery.
+    DRAIN_MAX_CALLBACKS = 20
+    DRAIN_SECONDS = 5.0
+    # Tries of the queue row's compare-and-swap before it is a fault.
+    _PENDING_SWAP_TRIES = 5
 
     def __init__(
         self,
@@ -575,8 +586,9 @@ class CallbackProcessor:
                 f"resync faulted: {e}"
             )
 
-    def _get_pending(self, peer_id: str, subscription_id: str) -> list[dict[str, Any]]:
-        """Get pending callbacks from storage."""
+    def _read_pending_row(self, peer_id: str, subscription_id: str) -> Any:
+        """The queue row's data exactly as stored (a deep copy), or ``None``
+        when there is no row. The compare-and-swap compares against this."""
         from .attribute import Attributes
 
         db = Attributes(
@@ -585,13 +597,18 @@ class CallbackProcessor:
             config=self._actor.config,
         )
         attr = db.get_attr(name=self._get_pending_key(peer_id, subscription_id))
-        pending = attr.get("data") if attr else None
-        return pending.get("callbacks", []) if pending else []
+        return copy.deepcopy(attr.get("data")) if attr else None
+
+    def _get_pending(self, peer_id: str, subscription_id: str) -> list[dict[str, Any]]:
+        """Get pending callbacks from storage."""
+        row = self._read_pending_row(peer_id, subscription_id)
+        return (row.get("callbacks") or []) if isinstance(row, dict) else []
 
     def _set_pending(
         self, peer_id: str, subscription_id: str, callbacks: list[dict[str, Any]]
     ) -> None:
-        """Set pending callbacks in storage."""
+        """Replace the queue unconditionally (a resync clears it). A change
+        to a queue that is in use goes through :meth:`_swap_pending`."""
         from .attribute import Attributes
 
         db = Attributes(
@@ -604,6 +621,40 @@ class CallbackProcessor:
             data={"callbacks": callbacks},
         )
 
+    def _swap_pending(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        change: Callable[[list[dict[str, Any]]], list[dict[str, Any]] | None],
+    ) -> None:
+        """Change the queue by compare-and-swap. ``change`` gets the stored
+        callbacks and returns the new list, or ``None`` to leave the row as
+        it is; it is called again on a fresh read when another delivery
+        wrote the row first (one delivery queues while another prunes).
+        Raises ``DbError`` when the write keeps losing or faults."""
+        from .attribute import Attributes
+
+        name = self._get_pending_key(peer_id, subscription_id)
+        for _ in range(self._PENDING_SWAP_TRIES):
+            row = self._read_pending_row(peer_id, subscription_id)
+            stored = (row.get("callbacks") or []) if isinstance(row, dict) else []
+            callbacks = change(list(stored))
+            if callbacks is None:
+                return
+            db = Attributes(
+                actor_id=self._actor.id,
+                bucket=self._state_bucket,
+                config=self._actor.config,
+            )
+            written = {"callbacks": callbacks}
+            if row is None:
+                # Raises DbError on a fault; False when a row exists now.
+                if db.create_attr_if_absent(name=name, data=written):
+                    return
+            elif db.conditional_update_attr(name=name, old_data=row, new_data=written):
+                return
+        raise DbError("callback pending queue", self._actor.id)
+
     def _add_pending(
         self,
         peer_id: str,
@@ -615,31 +666,37 @@ class CallbackProcessor:
 
         ``after_seq``: the last processed sequence; entries at or below it are
         processed leftovers and neither count toward the limit nor stay.
+        Raises ``DbError`` when the write could not be made.
         """
-        pending = self._get_pending(peer_id, subscription_id)
-        if after_seq is not None:
-            pending = [c for c in pending if (c.get("sequence") or 0) > after_seq]
-
-        if len(pending) >= self._max_pending:
-            return False  # Back-pressure
-
         # Add with timestamp for gap timeout detection
         callback["_received_at"] = time.time()
-        pending.append(callback)
-        pending.sort(key=lambda c: c.get("sequence", 0))
+        full = False
 
-        self._set_pending(peer_id, subscription_id, pending)
-        return True
+        def add(pending: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+            nonlocal full
+            if after_seq is not None:
+                pending = [c for c in pending if (c.get("sequence") or 0) > after_seq]
+            full = len(pending) >= self._max_pending
+            if full:
+                return None  # Back-pressure
+            pending.append(callback)
+            pending.sort(key=lambda c: c.get("sequence", 0))
+            return pending
+
+        self._swap_pending(peer_id, subscription_id, add)
+        return not full
 
     def _prune_pending(
         self, peer_id: str, subscription_id: str, through_seq: int
     ) -> None:
         """Remove every pending callback at or below ``through_seq`` in one
         write: they are processed, and the sequence record says so."""
-        pending = self._get_pending(peer_id, subscription_id)
-        kept = [c for c in pending if (c.get("sequence") or 0) > through_seq]
-        if len(kept) != len(pending):
-            self._set_pending(peer_id, subscription_id, kept)
+
+        def prune(pending: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+            kept = [c for c in pending if (c.get("sequence") or 0) > through_seq]
+            return kept if len(kept) != len(pending) else None
+
+        self._swap_pending(peer_id, subscription_id, prune)
 
     def _clear_pending(self, peer_id: str, subscription_id: str) -> None:
         """Clear all pending callbacks."""
@@ -652,6 +709,261 @@ class CallbackProcessor:
 
         oldest = min(c.get("_received_at", time.time()) for c in pending)
         return (time.time() - oldest) > self._gap_timeout
+
+    def _claim_queued(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        after_seq: int | None,
+        limit: int,
+    ) -> tuple[list[ProcessedCallback], dict[str, Any], int] | None:
+        """Claim the callbacks queued next in line, at most ``limit``:
+        ``(batch, claimed row, last sequence)``, or ``None`` when nothing is
+        next, another delivery holds a live claim, or the claim was lost (the
+        other delivery has them). ``after_seq`` is the sequence the caller
+        just recorded: with nothing queued right after it, the queue is the
+        only read. The claim itself is always made on a state row and a
+        sequence read here, never on what the caller read earlier. A
+        ``DbError`` is logged and answers ``None``."""
+        try:
+            pending = self._get_pending(peer_id, subscription_id)
+            by_seq = {c.get("sequence"): c for c in pending}
+            if after_seq is not None and after_seq + 1 not in by_seq:
+                return None
+            row = self._read_state_row(peer_id, subscription_id)
+            last_seq = self._get_last_seq(peer_id, subscription_id)
+            if self._live_claim(dict(row or {}), last_seq):
+                return None
+            batch: list[ProcessedCallback] = []
+            next_seq = last_seq + 1
+            while next_seq in by_seq and len(batch) < limit:
+                data = by_seq[next_seq].get("data")
+                batch.append(
+                    ProcessedCallback(
+                        peer_id=peer_id,
+                        subscription_id=subscription_id,
+                        sequence=next_seq,
+                        callback_type=CallbackType.DIFF,
+                        data=data,
+                        timestamp=data.get("timestamp", "")
+                        if isinstance(data, dict)
+                        else "",
+                    )
+                )
+                next_seq += 1
+            if not batch:
+                return None
+            claimed_row = self._claim(peer_id, subscription_id, row, batch[-1].sequence)
+        except DbError as e:  # folds DbError: the queue waits for the next delivery
+            logger.error(
+                f"Reading the queued callbacks of {peer_id}:{subscription_id} "
+                f"faulted: {e}"
+            )
+            return None
+        if claimed_row is None:
+            return None
+        return batch, claimed_row, last_seq
+
+    def _finish_batch(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        batch: list[ProcessedCallback],
+        claimed_row: dict[str, Any],
+        out_of_step_lists: list[str],
+        stop_at: int | None,
+        *,
+        prune: bool,
+    ) -> tuple[ProcessResult, bool]:
+        """After a claimed batch's handlers ran: record the sequence, prune
+        the queue (``prune``: the batch took callbacks from it) and settle
+        what was out of step. Returns the result, and whether the delivery
+        may go on to the queue: the sequence write landed, the batch ran
+        through and no rebuild is due."""
+        # Update sequence in subscription record AFTER successful processing
+        # This prevents duplicate detection on retry and ensures sequence only
+        # advances after the callback has been fully processed. A batch
+        # stopped for a rebuild advances through the callback that stopped
+        # it; the rest of it is pruned (the rebuild supersedes it).
+        new_last_seq = stop_at if stop_at is not None else batch[-1].sequence
+        written = False
+        try:
+            recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
+            written = recorded
+        except DbError as e:  # folds DbError: at-most-once: handlers already ran
+            # The handlers have run: a 503 now would leave the diff
+            # uncleared, and the next poll or resync would run them again.
+            # Keep at-most-once delivery: log it and answer PROCESSED. The
+            # stale sequence makes the next callback look like a gap, which
+            # the gap timeout resyncs; a subscription with no next callback
+            # waits until one arrives.
+            logger.error(
+                f"Sequence write to {new_last_seq} faulted after processing: {e}"
+            )
+            recorded = True
+        if recorded:
+            # The callbacks taken from the queue are processed: they leave it
+            # in one write, best effort. A later read skips them only if the
+            # sequence write above landed; if both faulted they can run again
+            # (filed in the subscriber hardening todo).
+            if prune:
+                try:
+                    # Through the whole batch: a batch stopped for a rebuild
+                    # drops the rest (the rebuild supersedes it; a rebuild
+                    # that fails leaves a gap the gap timeout resyncs, as
+                    # kept entries would wait for it too).
+                    self._prune_pending(peer_id, subscription_id, batch[-1].sequence)
+                except DbError as e:  # folds DbError: best-effort prune
+                    logger.error(f"Pruning processed callbacks faulted: {e}")
+        else:
+            # Failed to update subscription - this is critical but we've already
+            # processed the callback, so log error but don't retry. The claim
+            # stays (at-most-once, as for a fault above): until its lease runs
+            # out a redelivery is answered as in progress instead of running
+            # the handlers again.
+            logger.error(
+                f"Failed to update sequence to {new_last_seq} after processing - "
+                f"the batch may run again once its claim expires"
+            )
+
+        if stop_at is not None and self._whole_target(peer_id, subscription_id):
+            # The rest of the batch is dropped (the rebuild supersedes it):
+            # what it deleted is owed too, so the rebuild deletes it even
+            # where it cannot sweep the bucket. Target-level data only: below
+            # it, a diff's keys are not replica names.
+            for dropped in batch:
+                if dropped.sequence > stop_at:
+                    out_of_step_lists.extend(_deleted_names(dropped.data))
+        if out_of_step_lists:
+            if self._mark_or_owe(
+                peer_id,
+                subscription_id,
+                claimed_row,
+                new_last_seq,
+                out_of_step_lists,
+            ):
+                return ProcessResult.REBUILD, False
+        elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
+            # Owed from an out-of-step diff inside the interval: the next
+            # callback after it rebuilds.
+            return ProcessResult.REBUILD, False
+
+        return ProcessResult.PROCESSED, written and stop_at is None
+
+    async def _run_handlers(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        batch: list[ProcessedCallback],
+        claimed_row: dict[str, Any],
+        last_seq: int,
+        handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
+    ) -> tuple[list[str], int | None]:
+        """Invoke the handler for a claimed batch, in order. Returns the
+        lists that were out of step, and the sequence the batch stopped at
+        because a rebuild is due (``None``: it ran through; the rebuild
+        supersedes the rest). A ``DbError`` hands the claim back to
+        ``last_seq`` and is raised."""
+        out_of_step_lists: list[str] = []
+        if not handler:
+            return out_of_step_lists, None
+        for cb in batch:
+            try:
+                await handler(cb)
+            except DbError:
+                self._release_claim(peer_id, subscription_id, claimed_row, last_seq)
+                # The library's own storage write (auto-storage in the
+                # handler) faulted, and the sequence has not advanced. The
+                # 503 leaves the diff uncleared on the publisher, which does
+                # not retry (the protocol's at-most-once rule): it comes back
+                # through a poll or a gap resync, which runs the handler
+                # again, so data the handler wrote before the fault can be
+                # applied twice. The consumer data hooks inside the handler
+                # fold their own errors; a legacy callback hook's DbError
+                # arrives here too and aborts the rest of the batch.
+                raise
+            except Exception as e:  # folds DbError: handled by the clause above
+                # Log with full traceback for debugging, but continue
+                # processing - at-most-once semantics means we don't retry
+                logger.error(f"Handler error for seq={cb.sequence}: {e}", exc_info=True)
+                continue
+            if not cb.out_of_step:
+                continue
+            # A callback whose list diff the replica could not apply marks
+            # the rebuild owed.
+            out_of_step_lists.append(str(cb.out_of_step.get("list") or ""))
+            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
+                return out_of_step_lists, cb.sequence
+            logger.warning(
+                f"Out-of-step diff seq={cb.sequence} for "
+                f"{peer_id}:{subscription_id} inside the "
+                "rebuild interval: the rebuild stays owed"
+            )
+        return out_of_step_lists, None
+
+    async def _drain(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
+        after_seq: int | None,
+        started: float,
+    ) -> tuple[bool, int]:
+        """Process the callbacks queued next in line, for a delivery that
+        has done its own work: one that recorded its sequence (a callback
+        that met its live claim was queued behind it), or one that queued
+        its callback (the delivery it waited for may have finished between
+        this one's read and its write).
+
+        Each round claims on a fresh state row and sequence
+        (:meth:`_claim_queued`), so a callback another delivery took is not
+        run again. Bounded by ``DRAIN_MAX_CALLBACKS`` and ``DRAIN_SECONDS``
+        since ``started``; the rest stays queued. Nothing here raises: a
+        ``DbError`` from a handler leaves that callback queued with its claim
+        handed back, and ends the drain (the caller's own callback is done
+        and is answered so).
+
+        Returns ``(rebuild, through)``: whether a rebuild is due, and the
+        last sequence processed here (0: nothing was)."""
+        taken = 0
+        through = 0
+        while (
+            taken < self.DRAIN_MAX_CALLBACKS
+            and time.monotonic() - started < self.DRAIN_SECONDS
+        ):
+            step = self._claim_queued(
+                peer_id, subscription_id, after_seq, self.DRAIN_MAX_CALLBACKS - taken
+            )
+            if step is None:
+                break
+            batch, claimed_row, last_seq = step
+            try:
+                out_of_step_lists, stop_at = await self._run_handlers(
+                    peer_id, subscription_id, batch, claimed_row, last_seq, handler
+                )
+            except DbError as e:  # folds DbError: the callback stays queued
+                logger.error(
+                    f"Queued callback of {peer_id}:{subscription_id} after "
+                    f"seq={last_seq} faulted and stays queued: {e}"
+                )
+                break
+            result, more = self._finish_batch(
+                peer_id,
+                subscription_id,
+                batch,
+                claimed_row,
+                out_of_step_lists,
+                stop_at,
+                prune=True,
+            )
+            taken += len(batch)
+            through = batch[-1].sequence
+            if result == ProcessResult.REBUILD:
+                return True, through
+            if not more:
+                break
+            after_seq = through
+        return False, through
 
     async def process_callback(
         self,
@@ -686,6 +998,7 @@ class CallbackProcessor:
         if callback_type == "permission":
             return await self._handle_permission(peer_id, data, handler)
 
+        started = time.monotonic()
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
@@ -759,6 +1072,17 @@ class CallbackProcessor:
                     f"Gap detected: seq={sequence}, last_seq={last_seq}, "
                     f"added to pending"
                 )
+                # The delivery this one waited for may have recorded its
+                # sequence between this delivery's read and its write to the
+                # queue, and has then looked at the queue already: look once
+                # at what is next in line now.
+                rebuild, through = await self._drain(
+                    peer_id, subscription_id, handler, None, started
+                )
+                if rebuild:
+                    return ProcessResult.REBUILD
+                if through >= sequence:
+                    return ProcessResult.PROCESSED
                 return ProcessResult.PENDING
 
             # Sequence is correct (last_seq + 1)
@@ -818,124 +1142,36 @@ class CallbackProcessor:
                 await asyncio.sleep(self._retry_backoff * (2**attempt))
                 continue
 
-            # Invoke handler for all callbacks in order. A callback whose
-            # list diff the replica could not apply marks the rebuild owed;
-            # when one is due the batch stops there (the rebuild supersedes
-            # the rest).
-            out_of_step_lists: list[str] = []
-            stop_at: int | None = None
-            if handler:
-                for cb in callbacks_to_process:
-                    try:
-                        await handler(cb)
-                        if cb.out_of_step:
-                            out_of_step_lists.append(
-                                str(cb.out_of_step.get("list") or "")
-                            )
-                            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
-                                stop_at = cb.sequence
-                                break
-                            logger.warning(
-                                f"Out-of-step diff seq={cb.sequence} for "
-                                f"{peer_id}:{subscription_id} inside the "
-                                "rebuild interval: the rebuild stays owed"
-                            )
-                    except DbError:
-                        self._release_claim(
-                            peer_id, subscription_id, claimed_row, last_seq
-                        )
-                        # The library's own storage write (auto-storage in the
-                        # handler) faulted, and the sequence has not advanced.
-                        # The 503 leaves the diff uncleared on the publisher,
-                        # which does not retry (the protocol's at-most-once
-                        # rule): it comes back through a poll or a gap resync,
-                        # which runs the handler again, so data the handler
-                        # wrote before the fault can be applied twice. The
-                        # consumer data hooks inside the handler fold their own
-                        # errors; a legacy callback hook's DbError arrives
-                        # here too and aborts the rest of the batch.
-                        raise
-                    except Exception as e:  # folds DbError: handled by the clause above
-                        # Log with full traceback for debugging, but continue
-                        # processing - at-most-once semantics means we don't retry
-                        logger.error(
-                            f"Handler error for seq={cb.sequence}: {e}", exc_info=True
-                        )
-
-            # Update sequence in subscription record AFTER successful processing
-            # This prevents duplicate detection on retry and ensures sequence only
-            # advances after the callback has been fully processed. A batch
-            # stopped for a rebuild advances through the callback that
-            # stopped it; the rest of it is pruned (the rebuild supersedes
-            # it).
-            new_last_seq = (
-                stop_at if stop_at is not None else callbacks_to_process[-1].sequence
+            out_of_step_lists, stop_at = await self._run_handlers(
+                peer_id,
+                subscription_id,
+                callbacks_to_process,
+                claimed_row,
+                last_seq,
+                handler,
             )
-            try:
-                recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
-            except DbError as e:  # folds DbError: at-most-once: handlers already ran
-                # The handlers have run: a 503 now would leave the diff
-                # uncleared, and the next poll or resync would run them again.
-                # Keep at-most-once delivery: log it and answer PROCESSED. The
-                # stale sequence makes the next callback look like a gap,
-                # which the gap timeout resyncs; a subscription with no next
-                # callback waits until one arrives.
-                logger.error(
-                    f"Sequence write to {new_last_seq} faulted after processing: {e}"
-                )
-                recorded = True
-            if recorded:
-                # The drained callbacks are processed: they leave pending in
-                # one write, best effort. A later read skips them only if the
-                # sequence write above landed; if both faulted they can run
-                # again (filed in the subscriber hardening todo).
-                if drained:
-                    try:
-                        # Through the whole batch: a batch stopped for a
-                        # rebuild drops the rest (the rebuild supersedes it;
-                        # a rebuild that fails leaves a gap the gap timeout
-                        # resyncs, as kept entries would wait for it too).
-                        self._prune_pending(
-                            peer_id,
-                            subscription_id,
-                            callbacks_to_process[-1].sequence,
-                        )
-                    except DbError as e:  # folds DbError: best-effort prune
-                        logger.error(f"Pruning processed callbacks faulted: {e}")
-            else:
-                # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry. The
-                # claim stays (at-most-once, as for a fault above): until its
-                # lease runs out a redelivery is answered as in progress
-                # instead of running the handlers again.
-                logger.error(
-                    f"Failed to update sequence to {new_last_seq} after processing - "
-                    f"the batch may run again once its claim expires"
-                )
-
-            if stop_at is not None and self._whole_target(peer_id, subscription_id):
-                # The rest of the batch is dropped (the rebuild supersedes
-                # it): what it deleted is owed too, so the rebuild deletes it
-                # even where it cannot sweep the bucket. Target-level data
-                # only: below it, a diff's keys are not replica names.
-                for dropped in callbacks_to_process:
-                    if dropped.sequence > stop_at:
-                        out_of_step_lists.extend(_deleted_names(dropped.data))
-            if out_of_step_lists:
-                if self._mark_or_owe(
+            result, more = self._finish_batch(
+                peer_id,
+                subscription_id,
+                callbacks_to_process,
+                claimed_row,
+                out_of_step_lists,
+                stop_at,
+                prune=bool(drained),
+            )
+            if more:
+                # A callback that arrived while this one was being processed
+                # met its claim and was queued: nothing else takes it.
+                rebuild, _through = await self._drain(
                     peer_id,
                     subscription_id,
-                    claimed_row,
-                    new_last_seq,
-                    out_of_step_lists,
-                ):
+                    handler,
+                    callbacks_to_process[-1].sequence,
+                    started,
+                )
+                if rebuild:
                     return ProcessResult.REBUILD
-            elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
-                # Owed from an out-of-step diff inside the interval: the next
-                # callback after it rebuilds.
-                return ProcessResult.REBUILD
-
-            return ProcessResult.PROCESSED
+            return result
 
         # Exhausted retries
         logger.error(f"Failed to process callback after {self._max_retries} retries")
@@ -1088,6 +1324,106 @@ class CallbackProcessor:
             if sep and head in (f"state:{peer_id}", f"pending:{peer_id}"):
                 db.delete_attr(name=attr_name)
 
+    def _run_handlers_sync(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        batch: list[ProcessedCallback],
+        claimed_row: dict[str, Any],
+        last_seq: int,
+        handler: Callable[[ProcessedCallback], None] | None,
+    ) -> tuple[list[str], int | None]:
+        """Invoke the handler for a claimed batch, in order. Returns the
+        lists that were out of step, and the sequence the batch stopped at
+        because a rebuild is due (``None``: it ran through; the rebuild
+        supersedes the rest). A ``DbError`` hands the claim back to
+        ``last_seq`` and is raised."""
+        out_of_step_lists: list[str] = []
+        if not handler:
+            return out_of_step_lists, None
+        for cb in batch:
+            try:
+                handler(cb)
+            except DbError:
+                self._release_claim(peer_id, subscription_id, claimed_row, last_seq)
+                # The library's own storage write (auto-storage in the
+                # handler) faulted, and the sequence has not advanced. The
+                # 503 leaves the diff uncleared on the publisher, which does
+                # not retry (the protocol's at-most-once rule): it comes back
+                # through a poll or a gap resync, which runs the handler
+                # again, so data the handler wrote before the fault can be
+                # applied twice. The consumer data hooks inside the handler
+                # fold their own errors; a legacy callback hook's DbError
+                # arrives here too and aborts the rest of the batch.
+                raise
+            except Exception as e:  # folds DbError: handled by the clause above
+                # Log with full traceback for debugging, but continue
+                # processing - at-most-once semantics means we don't retry
+                logger.error(f"Handler error for seq={cb.sequence}: {e}", exc_info=True)
+                continue
+            if not cb.out_of_step:
+                continue
+            # A callback whose list diff the replica could not apply marks
+            # the rebuild owed.
+            out_of_step_lists.append(str(cb.out_of_step.get("list") or ""))
+            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
+                return out_of_step_lists, cb.sequence
+            logger.warning(
+                f"Out-of-step diff seq={cb.sequence} for "
+                f"{peer_id}:{subscription_id} inside the "
+                "rebuild interval: the rebuild stays owed"
+            )
+        return out_of_step_lists, None
+
+    def _drain_sync(
+        self,
+        peer_id: str,
+        subscription_id: str,
+        handler: Callable[[ProcessedCallback], None] | None,
+        after_seq: int | None,
+        started: float,
+    ) -> tuple[bool, int]:
+        """:meth:`_drain` for a synchronous handler."""
+        taken = 0
+        through = 0
+        while (
+            taken < self.DRAIN_MAX_CALLBACKS
+            and time.monotonic() - started < self.DRAIN_SECONDS
+        ):
+            step = self._claim_queued(
+                peer_id, subscription_id, after_seq, self.DRAIN_MAX_CALLBACKS - taken
+            )
+            if step is None:
+                break
+            batch, claimed_row, last_seq = step
+            try:
+                out_of_step_lists, stop_at = self._run_handlers_sync(
+                    peer_id, subscription_id, batch, claimed_row, last_seq, handler
+                )
+            except DbError as e:  # folds DbError: the callback stays queued
+                logger.error(
+                    f"Queued callback of {peer_id}:{subscription_id} after "
+                    f"seq={last_seq} faulted and stays queued: {e}"
+                )
+                break
+            result, more = self._finish_batch(
+                peer_id,
+                subscription_id,
+                batch,
+                claimed_row,
+                out_of_step_lists,
+                stop_at,
+                prune=True,
+            )
+            taken += len(batch)
+            through = batch[-1].sequence
+            if result == ProcessResult.REBUILD:
+                return True, through
+            if not more:
+                break
+            after_seq = through
+        return False, through
+
     def process_callback_sync(
         self,
         peer_id: str,
@@ -1121,6 +1457,7 @@ class CallbackProcessor:
         if callback_type == "permission":
             return self._handle_permission_sync(peer_id, data, handler)
 
+        started = time.monotonic()
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
@@ -1194,6 +1531,17 @@ class CallbackProcessor:
                     f"Gap detected: seq={sequence}, last_seq={last_seq}, "
                     f"added to pending"
                 )
+                # The delivery this one waited for may have recorded its
+                # sequence between this delivery's read and its write to the
+                # queue, and has then looked at the queue already: look once
+                # at what is next in line now.
+                rebuild, through = self._drain_sync(
+                    peer_id, subscription_id, handler, None, started
+                )
+                if rebuild:
+                    return ProcessResult.REBUILD
+                if through >= sequence:
+                    return ProcessResult.PROCESSED
                 return ProcessResult.PENDING
 
             # Sequence is correct (last_seq + 1)
@@ -1253,124 +1601,36 @@ class CallbackProcessor:
                 time.sleep(self._retry_backoff * (2**attempt))
                 continue
 
-            # Invoke handler for all callbacks in order. A callback whose
-            # list diff the replica could not apply marks the rebuild owed;
-            # when one is due the batch stops there (the rebuild supersedes
-            # the rest).
-            out_of_step_lists: list[str] = []
-            stop_at: int | None = None
-            if handler:
-                for cb in callbacks_to_process:
-                    try:
-                        handler(cb)
-                        if cb.out_of_step:
-                            out_of_step_lists.append(
-                                str(cb.out_of_step.get("list") or "")
-                            )
-                            if self._rebuild_due({**claimed_row, "rebuild_owed": True}):
-                                stop_at = cb.sequence
-                                break
-                            logger.warning(
-                                f"Out-of-step diff seq={cb.sequence} for "
-                                f"{peer_id}:{subscription_id} inside the "
-                                "rebuild interval: the rebuild stays owed"
-                            )
-                    except DbError:
-                        self._release_claim(
-                            peer_id, subscription_id, claimed_row, last_seq
-                        )
-                        # The library's own storage write (auto-storage in the
-                        # handler) faulted, and the sequence has not advanced.
-                        # The 503 leaves the diff uncleared on the publisher,
-                        # which does not retry (the protocol's at-most-once
-                        # rule): it comes back through a poll or a gap resync,
-                        # which runs the handler again, so data the handler
-                        # wrote before the fault can be applied twice. The
-                        # consumer data hooks inside the handler fold their own
-                        # errors; a legacy callback hook's DbError arrives
-                        # here too and aborts the rest of the batch.
-                        raise
-                    except Exception as e:  # folds DbError: handled by the clause above
-                        # Log with full traceback for debugging, but continue
-                        # processing - at-most-once semantics means we don't retry
-                        logger.error(
-                            f"Handler error for seq={cb.sequence}: {e}", exc_info=True
-                        )
-
-            # Update sequence in subscription record AFTER successful processing
-            # This prevents duplicate detection on retry and ensures sequence only
-            # advances after the callback has been fully processed. A batch
-            # stopped for a rebuild advances through the callback that
-            # stopped it; the rest of it is pruned (the rebuild supersedes
-            # it).
-            new_last_seq = (
-                stop_at if stop_at is not None else callbacks_to_process[-1].sequence
+            out_of_step_lists, stop_at = self._run_handlers_sync(
+                peer_id,
+                subscription_id,
+                callbacks_to_process,
+                claimed_row,
+                last_seq,
+                handler,
             )
-            try:
-                recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
-            except DbError as e:  # folds DbError: at-most-once: handlers already ran
-                # The handlers have run: a 503 now would leave the diff
-                # uncleared, and the next poll or resync would run them again.
-                # Keep at-most-once delivery: log it and answer PROCESSED. The
-                # stale sequence makes the next callback look like a gap,
-                # which the gap timeout resyncs; a subscription with no next
-                # callback waits until one arrives.
-                logger.error(
-                    f"Sequence write to {new_last_seq} faulted after processing: {e}"
-                )
-                recorded = True
-            if recorded:
-                # The drained callbacks are processed: they leave pending in
-                # one write, best effort. A later read skips them only if the
-                # sequence write above landed; if both faulted they can run
-                # again (filed in the subscriber hardening todo).
-                if drained:
-                    try:
-                        # Through the whole batch: a batch stopped for a
-                        # rebuild drops the rest (the rebuild supersedes it;
-                        # a rebuild that fails leaves a gap the gap timeout
-                        # resyncs, as kept entries would wait for it too).
-                        self._prune_pending(
-                            peer_id,
-                            subscription_id,
-                            callbacks_to_process[-1].sequence,
-                        )
-                    except DbError as e:  # folds DbError: best-effort prune
-                        logger.error(f"Pruning processed callbacks faulted: {e}")
-            else:
-                # Failed to update subscription - this is critical but we've already
-                # processed the callback, so log error but don't retry. The
-                # claim stays (at-most-once, as for a fault above): until its
-                # lease runs out a redelivery is answered as in progress
-                # instead of running the handlers again.
-                logger.error(
-                    f"Failed to update sequence to {new_last_seq} after processing - "
-                    f"the batch may run again once its claim expires"
-                )
-
-            if stop_at is not None and self._whole_target(peer_id, subscription_id):
-                # The rest of the batch is dropped (the rebuild supersedes
-                # it): what it deleted is owed too, so the rebuild deletes it
-                # even where it cannot sweep the bucket. Target-level data
-                # only: below it, a diff's keys are not replica names.
-                for dropped in callbacks_to_process:
-                    if dropped.sequence > stop_at:
-                        out_of_step_lists.extend(_deleted_names(dropped.data))
-            if out_of_step_lists:
-                if self._mark_or_owe(
+            result, more = self._finish_batch(
+                peer_id,
+                subscription_id,
+                callbacks_to_process,
+                claimed_row,
+                out_of_step_lists,
+                stop_at,
+                prune=bool(drained),
+            )
+            if more:
+                # A callback that arrived while this one was being processed
+                # met its claim and was queued: nothing else takes it.
+                rebuild, _through = self._drain_sync(
                     peer_id,
                     subscription_id,
-                    claimed_row,
-                    new_last_seq,
-                    out_of_step_lists,
-                ):
+                    handler,
+                    callbacks_to_process[-1].sequence,
+                    started,
+                )
+                if rebuild:
                     return ProcessResult.REBUILD
-            elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
-                # Owed from an out-of-step diff inside the interval: the next
-                # callback after it rebuilds.
-                return ProcessResult.REBUILD
-
-            return ProcessResult.PROCESSED
+            return result
 
         # Exhausted retries
         logger.error(f"Failed to process callback after {self._max_retries} retries")

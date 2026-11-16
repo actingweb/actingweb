@@ -118,3 +118,15 @@ and position).
   object; the baseline path reads the raw body (`_subtarget_value`) and is
   not affected. Found by the codex review of spec-1-5 Phase 1 (2026-11-15);
   predates it, and is independent of the `text/plain` label that phase added.
+- **The pending queue is bounded by count, not by bytes**
+  (`CallbackProcessor._add_pending`, `max_pending`, 100 by default): the
+  queue is one attribute row, and DynamoDB's row limit is 400 KB, so a few
+  large queued diffs can fail the write (a 503 since the pre-validation
+  plan, where it was a silent loss). A byte bound, or one row per queued
+  callback. Recorded by `2026-11-16-3-16-pre-validation-fixes` (finding 33).
+- **State cleanup races a delivery that is taking queued callbacks**
+  (`CallbackProcessor.clear_state` against `_drain`): a subscription deleted
+  while a delivery prunes the queue can have its queue row written back
+  after the delete. The drain's claim reads a state row that is gone and
+  ends, so no handler runs; the row is an orphan until the peer's state is
+  cleared. Recorded by the same plan; not tested.

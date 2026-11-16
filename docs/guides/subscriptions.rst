@@ -919,8 +919,9 @@ When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``
 
    elif result == ProcessResult.PENDING:
        # Gap detected - sequence is higher than expected
-       # Callback queued, waiting for missing sequences
-       # Will auto-process when gap is filled
+       # Callback queued, waiting for missing sequences. The delivery
+       # that fills the gap processes it, also when that delivery was
+       # already running when this one arrived
        pass
 
    elif result == ProcessResult.RESYNC_TRIGGERED:
@@ -942,6 +943,12 @@ When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``
        # max_pending limit reached (back-pressure)
        # Publisher should slow down or retry later
        pass
+
+A handler passed to either method can be called for more than the callback
+it was called with: the delivery that is next in line also processes the
+callbacks queued behind it, in order (at most 20, and none once 5 seconds
+have passed since it started; the next delivery takes the rest). A
+``REBUILD`` result can therefore come from a queued callback.
 
 Performance Tuning
 ------------------

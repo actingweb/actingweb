@@ -207,11 +207,11 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 
 | AC | Phase | Test | Status |
 | --- | --- | --- | --- |
-| AC-1 | 1 | `tests/test_callback_pending_drain.py::test_a_callback_queued_behind_a_live_claim_is_processed_sync` (two cases: queued before and after N's sequence write) | Not run |
-| AC-2 | 1 | `tests/test_callback_pending_drain.py::test_a_callback_queued_behind_a_live_claim_is_processed_async` (the same two cases) | Not run |
-| AC-3 | 1 | `tests/integration/test_callback_delivery_shapes.py::test_two_simultaneous_low_granularity_writes_reach_every_replica` (the `xfail` removed) | Not run |
-| AC-4 | 1 | `tests/integration/test_callback_processor_concurrency.py::test_two_concurrent_deliveries_run_the_handler_once` (event-gated, run's backend) | Not run |
-| AC-17 | 1 | `tests/test_callback_pending_drain.py::test_a_queue_write_during_a_prune_is_kept` | Not run |
+| AC-1 | 1 | `tests/test_callback_pending_drain.py::test_a_callback_queued_behind_a_live_claim_is_processed_sync` (two cases: queued before and after N's sequence write) | Passing |
+| AC-2 | 1 | `tests/test_callback_pending_drain.py::test_a_callback_queued_behind_a_live_claim_is_processed_async` (the same two cases) | Passing |
+| AC-3 | 1 | `tests/integration/test_callback_delivery_shapes.py::test_two_simultaneous_low_granularity_writes_reach_every_replica` (the `xfail` removed) | Passing |
+| AC-4 | 1 | `tests/integration/test_callback_processor_concurrency.py::test_two_concurrent_deliveries_run_the_handler_once` (event-gated, run's backend) | Passing |
+| AC-17 | 1 | `tests/test_callback_pending_drain.py::test_a_queue_write_during_a_prune_is_kept` | Passing |
 | AC-5 | 2 | `tests/test_resume_always_resyncs.py::test_a_peer_cached_without_resync_is_sent_a_resync`; wire row `WD12` | Not run |
 | AC-6 | 2 | `tests/test_resume_always_resyncs.py::test_a_single_property_subscription_resumes` | Not run |
 | AC-7 | 2 | `tests/test_notify_subscribers_whole_value.py::test_a_resource_notification_sends_the_whole_stored_value` (real store; target-level and subtarget-level subscribers; a grant that excludes a sibling key) | Not run |
@@ -343,7 +343,42 @@ The concurrency test as changed - AC-4.
       would have shown at least five failures, all passing
 - [ ] Fast tier, then Full tier on both backends before the commit
 
-### Implementation Status: Not Started
+### Notes from implementation (2026-11-16)
+
+- **The reproduction failed as predicted**: against the unchanged receiver
+  10 of the 11 new tests failed on the stranded entry or the lost queue
+  write (the gap test is a guard and passes before and after).
+- **The two-write test**: 50 of 50 runs failed on each backend before the
+  change (run alone, one at a time); 10 of 10 passed on each after it.
+- **Rule 1 is the drain, started without a known sequence.** The delivery
+  that queued its callback takes whatever is next in line, its own callback
+  or the ones before it, through the same claim on a fresh row. That is
+  what makes "the next delivery takes the rest" true after a bounded drain.
+  It answers `PROCESSED` when its own callback was among them, `REBUILD`
+  when one is due, `PENDING` otherwise.
+- **The bound is 20 callbacks and 5 seconds since the delivery started**
+  (`DRAIN_MAX_CALLBACKS`, `DRAIN_SECONDS`), not a share of the 60-second
+  lease: the publisher waits for the first callback's answer with a
+  10-second read timeout (`callback_sender.DIFF_TIMEOUT`).
+- **A fresh state row and sequence are read only when something is queued
+  next**, so the common path costs the one queue read the plan accepted.
+- **A queue write that cannot be made raises `DbError`** (a 503; the
+  publisher keeps the diff). It was unchecked, and the callback was
+  answered 204.
+- **A store fault in the handler of a delivery's own queued callback** (rule
+  1) leaves it queued and answers `PENDING`, as for any drained callback;
+  the next delivery runs it again.
+- **Refactor**: the handler loop and what follows it (sequence write, prune,
+  out-of-step marks) moved out of the two twins into `_run_handlers` /
+  `_run_handlers_sync` and `_finish_batch`, which the drain shares.
+- **AC-17's red run** hooked `_get_pending` (the queue's only read before
+  the change); the test as committed hooks `_read_pending_row`.
+- **AC-4** passes before and after on DynamoDB (a test change, no red run);
+  it now runs on the run's backend.
+- A minor: no route, hook name, kwarg, response field or option changes in
+  this phase.
+
+### Implementation Status: Complete
 
 ---
 

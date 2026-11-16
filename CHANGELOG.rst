@@ -2709,6 +2709,27 @@ ADDED
 FIXED
 ~~~~~
 
+- **A callback that arrived while the previous one was being processed
+  stayed queued until later traffic.** A subscriber that received callback
+  N+1 while N was still being handled queued it, and nothing took it from
+  the queue: it was applied only when a later callback arrived after
+  ``gap_timeout_seconds`` (as a resync) or on the next poll, so a quiet
+  subscription could hold a stale replica indefinitely. Two writes at the
+  same moment were enough. Now the delivery that recorded N takes what was
+  queued behind it (at most 20 callbacks, and none once 5 seconds have
+  passed since the delivery started; the rest is taken by the next
+  delivery), and a delivery that queued its callback looks once more after
+  its write. A callback taken from the queue is run by the request that
+  takes it: its handler error is logged, and a database fault leaves it
+  queued, without changing that request's own answer. The cost is one more
+  read of the queue per callback received in order.
+
+- **A queued callback could be lost when two deliveries wrote the queue at
+  the same moment** (one adding, one removing what it had processed: the
+  queue was read, changed and written back). The queue is now written by
+  compare-and-swap, and a queue write that cannot be made answers 503
+  instead of 204, so the publisher keeps the diff.
+
 - **A publisher's property read fault wiped its subscribers' replicas.**
   ``GET /properties`` answered a read error other than a database fault
   with 200 and ``{}``, which a subscriber takes as the publisher's whole

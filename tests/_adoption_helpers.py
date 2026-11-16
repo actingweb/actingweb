@@ -27,11 +27,13 @@ def uuid_email() -> str:
     return f"{uuid.uuid4()}@example.com"
 
 
-def make_config(hooks: Any = None) -> Config:
+def make_config(hooks: Any = None, *, database: str = "dynamodb") -> Config:
+    """``database`` is DynamoDB unless a test asks for the run's backend: a
+    keyword to ``Config`` wins over ``DATABASE_BACKEND``."""
     config = Config(
         fqdn="test.example.com",
         proto="https://",
-        database="dynamodb",
+        database=database,
         aw_type="urn:actingweb:test:adoption",
         devtest=True,
         # The adoption suite tests the duplicate-tolerant path, which is what

@@ -6,6 +6,7 @@ Handles sequencing, deduplication, and resync per ActingWeb protocol v1.4.
 
 import asyncio
 import copy
+import json
 import logging
 import time
 import uuid
@@ -109,10 +110,11 @@ class CallbackProcessor:
     # State-row fields a resync's reset keeps.
     _REBUILD_FIELDS = ("rebuild_owed", "rebuild_lists", "rebuilt_at")
     # A delivery that recorded its sequence takes the callbacks queued behind
-    # its claim (``_drain``): at most this many, and none once this much time
-    # has passed since the delivery started (the publisher is waiting for its
-    # answer; its read timeout for a diff is 10 seconds). What is left stays
-    # queued for the next delivery.
+    # its claim (``_drain``), one claim and one sequence write per callback:
+    # always the first, then at most this many in all and none once this
+    # much time has passed since the drain started (the publisher is waiting
+    # for the delivery's answer; its read timeout for a diff is 10 seconds).
+    # What is left stays queued for the next delivery.
     DRAIN_MAX_CALLBACKS = 20
     DRAIN_SECONDS = 5.0
     # Tries of the queue row's compare-and-swap before it is a fault.
@@ -662,12 +664,25 @@ class CallbackProcessor:
         callback: dict[str, Any],
         after_seq: int | None = None,
     ) -> bool:
-        """Add callback to pending queue. Returns False if queue full.
+        """Add callback to pending queue. Returns False if queue full, or
+        the callback carries a non-finite number. A sequence already queued
+        is left as it is.
 
         ``after_seq``: the last processed sequence; entries at or below it are
         processed leftovers and neither count toward the limit nor stay.
         Raises ``DbError`` when the write could not be made.
         """
+        try:
+            # A NaN or an infinity never compares equal to itself once stored:
+            # every later compare-and-swap of the row would lose.
+            json.dumps(callback, allow_nan=False)
+        except ValueError:
+            logger.warning(
+                f"Callback seq={callback.get('sequence')} for "
+                f"{peer_id}:{subscription_id} carries a number that is not "
+                "finite; not queued"
+            )
+            return False
         # Add with timestamp for gap timeout detection
         callback["_received_at"] = time.time()
         full = False
@@ -676,6 +691,11 @@ class CallbackProcessor:
             nonlocal full
             if after_seq is not None:
                 pending = [c for c in pending if (c.get("sequence") or 0) > after_seq]
+            if any(c.get("sequence") == callback.get("sequence") for c in pending):
+                # Queued already (a redelivery, or this call's own write
+                # that landed although it was reported lost): one copy.
+                full = False
+                return None
             full = len(pending) >= self._max_pending
             if full:
                 return None  # Back-pressure
@@ -715,45 +735,50 @@ class CallbackProcessor:
         peer_id: str,
         subscription_id: str,
         after_seq: int | None,
-        limit: int,
     ) -> tuple[list[ProcessedCallback], dict[str, Any], int] | None:
-        """Claim the callbacks queued next in line, at most ``limit``:
-        ``(batch, claimed row, last sequence)``, or ``None`` when nothing is
-        next, another delivery holds a live claim, or the claim was lost (the
-        other delivery has them). ``after_seq`` is the sequence the caller
-        just recorded: with nothing queued right after it, the queue is the
-        only read. The claim itself is always made on a state row and a
-        sequence read here, never on what the caller read earlier. A
-        ``DbError`` is logged and answers ``None``."""
+        """Claim the one callback queued next in line: ``([callback], claimed
+        row, last sequence)``, or ``None`` when nothing is next, another
+        delivery holds a live claim, or the claim was lost (the other
+        delivery has it). One callback per claim: its sequence is recorded
+        before the next is claimed, so a fault or a lease that runs out
+        costs one callback, never a batch.
+
+        ``after_seq`` is the sequence the caller just recorded: with nothing
+        queued right after it, the queue is the only read. Otherwise the
+        state row, then the sequence, then the queue are read here, in the
+        order the in-order path reads them (a resync resets the row before
+        it clears the queue, so a claim on a row read first loses to it),
+        and the claim is made on that row, never on what the caller read
+        earlier. A ``DbError`` is logged and answers ``None``."""
         try:
-            pending = self._get_pending(peer_id, subscription_id)
-            by_seq = {c.get("sequence"): c for c in pending}
-            if after_seq is not None and after_seq + 1 not in by_seq:
+            if after_seq is not None and after_seq + 1 not in {
+                c.get("sequence") for c in self._get_pending(peer_id, subscription_id)
+            }:
                 return None
             row = self._read_state_row(peer_id, subscription_id)
             last_seq = self._get_last_seq(peer_id, subscription_id)
             if self._live_claim(dict(row or {}), last_seq):
                 return None
-            batch: list[ProcessedCallback] = []
-            next_seq = last_seq + 1
-            while next_seq in by_seq and len(batch) < limit:
-                data = by_seq[next_seq].get("data")
-                batch.append(
-                    ProcessedCallback(
-                        peer_id=peer_id,
-                        subscription_id=subscription_id,
-                        sequence=next_seq,
-                        callback_type=CallbackType.DIFF,
-                        data=data,
-                        timestamp=data.get("timestamp", "")
-                        if isinstance(data, dict)
-                        else "",
-                    )
-                )
-                next_seq += 1
-            if not batch:
+            entry = next(
+                (
+                    c
+                    for c in self._get_pending(peer_id, subscription_id)
+                    if c.get("sequence") == last_seq + 1
+                ),
+                None,
+            )
+            if entry is None:
                 return None
-            claimed_row = self._claim(peer_id, subscription_id, row, batch[-1].sequence)
+            data = entry.get("data")
+            callback = ProcessedCallback(
+                peer_id=peer_id,
+                subscription_id=subscription_id,
+                sequence=last_seq + 1,
+                callback_type=CallbackType.DIFF,
+                data=data,
+                timestamp=data.get("timestamp", "") if isinstance(data, dict) else "",
+            )
+            claimed_row = self._claim(peer_id, subscription_id, row, callback.sequence)
         except DbError as e:  # folds DbError: the queue waits for the next delivery
             logger.error(
                 f"Reading the queued callbacks of {peer_id}:{subscription_id} "
@@ -762,7 +787,7 @@ class CallbackProcessor:
             return None
         if claimed_row is None:
             return None
-        return batch, claimed_row, last_seq
+        return [callback], claimed_row, last_seq
 
     def _finish_batch(
         self,
@@ -907,7 +932,6 @@ class CallbackProcessor:
         subscription_id: str,
         handler: Callable[[ProcessedCallback], Awaitable[None]] | None,
         after_seq: int | None,
-        started: float,
     ) -> tuple[bool, int]:
         """Process the callbacks queued next in line, for a delivery that
         has done its own work: one that recorded its sequence (a callback
@@ -917,8 +941,10 @@ class CallbackProcessor:
 
         Each round claims on a fresh state row and sequence
         (:meth:`_claim_queued`), so a callback another delivery took is not
-        run again. Bounded by ``DRAIN_MAX_CALLBACKS`` and ``DRAIN_SECONDS``
-        since ``started``; the rest stays queued. Nothing here raises: a
+        run again. The first is always taken (a callback queued behind a
+        slow handler is the one most likely to be there); after it the drain
+        is bounded by ``DRAIN_MAX_CALLBACKS`` and ``DRAIN_SECONDS``, and the
+        rest stays queued. Nothing here raises: a
         ``DbError`` from a handler leaves that callback queued with its claim
         handed back, and ends the drain (the caller's own callback is done
         and is answered so).
@@ -927,13 +953,12 @@ class CallbackProcessor:
         last sequence processed here (0: nothing was)."""
         taken = 0
         through = 0
-        while (
+        drain_started = time.monotonic()
+        while taken == 0 or (
             taken < self.DRAIN_MAX_CALLBACKS
-            and time.monotonic() - started < self.DRAIN_SECONDS
+            and time.monotonic() - drain_started < self.DRAIN_SECONDS
         ):
-            step = self._claim_queued(
-                peer_id, subscription_id, after_seq, self.DRAIN_MAX_CALLBACKS - taken
-            )
+            step = self._claim_queued(peer_id, subscription_id, after_seq)
             if step is None:
                 break
             batch, claimed_row, last_seq = step
@@ -998,7 +1023,6 @@ class CallbackProcessor:
         if callback_type == "permission":
             return await self._handle_permission(peer_id, data, handler)
 
-        started = time.monotonic()
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
@@ -1034,8 +1058,12 @@ class CallbackProcessor:
 
                 # Check gap timeout on existing pending. Not while another
                 # delivery holds a live claim: its sequence write is the
-                # progress the gap is waiting for.
-                if not claimed and self._check_gap_timeout(pending):
+                # progress the gap is waiting for. And not while the next
+                # callback in line is itself queued (left by a bounded or
+                # faulted drain): there is no gap, and the drain below takes
+                # it; a resync here would clear callbacks already answered.
+                head_queued = any(c.get("sequence") == last_seq + 1 for c in pending)
+                if not claimed and not head_queued and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
@@ -1077,7 +1105,7 @@ class CallbackProcessor:
                 # queue, and has then looked at the queue already: look once
                 # at what is next in line now.
                 rebuild, through = await self._drain(
-                    peer_id, subscription_id, handler, None, started
+                    peer_id, subscription_id, handler, None
                 )
                 if rebuild:
                     return ProcessResult.REBUILD
@@ -1157,17 +1185,14 @@ class CallbackProcessor:
                 claimed_row,
                 out_of_step_lists,
                 stop_at,
-                prune=bool(drained),
+                # Its own entry too, when an earlier delivery of it was queued.
+                prune=bool(drained) or sequence in by_seq,
             )
             if more:
                 # A callback that arrived while this one was being processed
                 # met its claim and was queued: nothing else takes it.
                 rebuild, _through = await self._drain(
-                    peer_id,
-                    subscription_id,
-                    handler,
-                    callbacks_to_process[-1].sequence,
-                    started,
+                    peer_id, subscription_id, handler, callbacks_to_process[-1].sequence
                 )
                 if rebuild:
                     return ProcessResult.REBUILD
@@ -1381,18 +1406,16 @@ class CallbackProcessor:
         subscription_id: str,
         handler: Callable[[ProcessedCallback], None] | None,
         after_seq: int | None,
-        started: float,
     ) -> tuple[bool, int]:
         """:meth:`_drain` for a synchronous handler."""
         taken = 0
         through = 0
-        while (
+        drain_started = time.monotonic()
+        while taken == 0 or (
             taken < self.DRAIN_MAX_CALLBACKS
-            and time.monotonic() - started < self.DRAIN_SECONDS
+            and time.monotonic() - drain_started < self.DRAIN_SECONDS
         ):
-            step = self._claim_queued(
-                peer_id, subscription_id, after_seq, self.DRAIN_MAX_CALLBACKS - taken
-            )
+            step = self._claim_queued(peer_id, subscription_id, after_seq)
             if step is None:
                 break
             batch, claimed_row, last_seq = step
@@ -1457,7 +1480,6 @@ class CallbackProcessor:
         if callback_type == "permission":
             return self._handle_permission_sync(peer_id, data, handler)
 
-        started = time.monotonic()
         # Retry loop for optimistic locking
         for attempt in range(self._max_retries):
             row = self._read_state_row(peer_id, subscription_id)
@@ -1493,8 +1515,12 @@ class CallbackProcessor:
 
                 # Check gap timeout on existing pending. Not while another
                 # delivery holds a live claim: its sequence write is the
-                # progress the gap is waiting for.
-                if not claimed and self._check_gap_timeout(pending):
+                # progress the gap is waiting for. And not while the next
+                # callback in line is itself queued (left by a bounded or
+                # faulted drain): there is no gap, and the drain below takes
+                # it; a resync here would clear callbacks already answered.
+                head_queued = any(c.get("sequence") == last_seq + 1 for c in pending)
+                if not claimed and not head_queued and self._check_gap_timeout(pending):
                     logger.warning(
                         f"Gap timeout exceeded for {peer_id}:{subscription_id}, "
                         f"triggering resync"
@@ -1536,7 +1562,7 @@ class CallbackProcessor:
                 # queue, and has then looked at the queue already: look once
                 # at what is next in line now.
                 rebuild, through = self._drain_sync(
-                    peer_id, subscription_id, handler, None, started
+                    peer_id, subscription_id, handler, None
                 )
                 if rebuild:
                     return ProcessResult.REBUILD
@@ -1616,17 +1642,14 @@ class CallbackProcessor:
                 claimed_row,
                 out_of_step_lists,
                 stop_at,
-                prune=bool(drained),
+                # Its own entry too, when an earlier delivery of it was queued.
+                prune=bool(drained) or sequence in by_seq,
             )
             if more:
                 # A callback that arrived while this one was being processed
                 # met its claim and was queued: nothing else takes it.
                 rebuild, _through = self._drain_sync(
-                    peer_id,
-                    subscription_id,
-                    handler,
-                    callbacks_to_process[-1].sequence,
-                    started,
+                    peer_id, subscription_id, handler, callbacks_to_process[-1].sequence
                 )
                 if rebuild:
                     return ProcessResult.REBUILD

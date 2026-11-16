@@ -71,13 +71,33 @@ class _Sub:
         processor: CallbackProcessor,
         sequence: int,
         handler: Callable[[ProcessedCallback], None] | None = None,
+        *,
+        on_loop: bool = False,
     ) -> ProcessResult:
-        return processor.process_callback_sync(
-            peer_id=self.peer,
-            subscription_id=self.sub,
-            sequence=sequence,
-            data={"v": sequence},
-            handler=handler or self.record,
+        """One delivery. ``on_loop`` runs it through the async twin, the
+        handler wrapped as a coroutine (a delivery the handler starts inline
+        stays synchronous: a loop is already running)."""
+        run = handler or self.record
+        if not on_loop:
+            return processor.process_callback_sync(
+                peer_id=self.peer,
+                subscription_id=self.sub,
+                sequence=sequence,
+                data={"v": sequence},
+                handler=run,
+            )
+
+        async def coroutine(cb: ProcessedCallback) -> None:
+            run(cb)
+
+        return asyncio.run(
+            processor.process_callback(
+                peer_id=self.peer,
+                subscription_id=self.sub,
+                sequence=sequence,
+                data={"v": sequence},
+                handler=coroutine,
+            )
         )
 
     def sequence(self) -> int:
@@ -222,7 +242,10 @@ def test_a_gap_in_the_queue_is_not_skipped() -> None:
     assert s.queued() == [3]
 
 
-def test_a_queued_callback_whose_handler_fails_leaves_the_first_answer() -> None:
+@pytest.mark.parametrize("on_loop", [False, True], ids=["sync", "async"])
+def test_a_queued_callback_whose_handler_fails_leaves_the_first_answer(
+    on_loop: bool,
+) -> None:
     """An ordinary handler error is logged and the sequence moves on, as for
     a callback that was not queued."""
     s = _Sub()
@@ -235,13 +258,16 @@ def test_a_queued_callback_whose_handler_fails_leaves_the_first_answer() -> None
         else:
             raise ValueError("the application's hook failed")
 
-    assert s.deliver(a, 1, handler) == ProcessResult.PROCESSED
+    assert s.deliver(a, 1, handler, on_loop=on_loop) == ProcessResult.PROCESSED
     assert s.ran == [1, 2]
     assert s.sequence() == 2
     assert s.queued() == []
 
 
-def test_a_queued_callback_that_meets_a_store_fault_stays_queued() -> None:
+@pytest.mark.parametrize("on_loop", [False, True], ids=["sync", "async"])
+def test_a_queued_callback_that_meets_a_store_fault_stays_queued(
+    on_loop: bool,
+) -> None:
     """The first callback was processed and is answered so; the queued one
     keeps its place and its claim is handed back."""
     s = _Sub()
@@ -254,14 +280,17 @@ def test_a_queued_callback_that_meets_a_store_fault_stays_queued() -> None:
         else:
             raise DbError("replica write", s.interface.id)
 
-    assert s.deliver(a, 1, handler) == ProcessResult.PROCESSED
+    assert s.deliver(a, 1, handler, on_loop=on_loop) == ProcessResult.PROCESSED
     assert s.ran == [1, 2]
     assert s.sequence() == 1
     assert s.queued() == [2]
     assert s.processor().precheck(s.peer, s.sub, 2) is None  # no live claim
 
 
-def test_a_rebuild_a_queued_callback_calls_for_reaches_the_caller() -> None:
+@pytest.mark.parametrize("on_loop", [False, True], ids=["sync", "async"])
+def test_a_rebuild_a_queued_callback_calls_for_reaches_the_caller(
+    on_loop: bool,
+) -> None:
     s = _Sub()
     a, b = s.processor(), s.processor()
 
@@ -272,7 +301,7 @@ def test_a_rebuild_a_queued_callback_calls_for_reaches_the_caller() -> None:
         else:
             cb.out_of_step = {"list": "notes", "operation": "insert"}
 
-    assert s.deliver(a, 1, handler) == ProcessResult.REBUILD
+    assert s.deliver(a, 1, handler, on_loop=on_loop) == ProcessResult.REBUILD
     assert s.ran == [1, 2]
     assert s.sequence() == 2
     assert s.processor().rebuild_state(s.peer, s.sub)["lists"] == ["notes"]
@@ -299,30 +328,108 @@ def test_a_delivery_takes_no_more_from_the_queue_than_its_bound() -> None:
 
 
 def test_a_queued_callback_another_delivery_processed_is_not_run_again() -> None:
-    """A read the queue (2 is there); before it claims, a redelivery of 2
-    processes it. A's claim is on a fresh row and sequence, so 2 runs once."""
+    """A read the queue, the state row and the sequence (2 is next); before
+    its claim is written, a redelivery of 2 claims and processes it. A's
+    claim is a compare-and-swap on the row it read, so it loses and 2 runs
+    once."""
     s = _Sub()
     a, b, c = s.processor(), s.processor(), s.processor()
-    recorded = {"done": False, "raced": False}
-    real_write = a._update_last_seq  # noqa: SLF001
-    real_read = a._get_pending  # noqa: SLF001
+    claims = {"count": 0, "raced": False}
+    real_claim = a._claim  # noqa: SLF001
 
-    def write(*args: Any, **kwargs: Any) -> bool:
-        result = real_write(*args, **kwargs)
-        recorded["done"] = True
-        return result
-
-    def read(*args: Any, **kwargs: Any) -> Any:
-        pending = real_read(*args, **kwargs)
-        if recorded["done"] and not recorded["raced"]:
-            recorded["raced"] = True
+    def claim(*args: Any, **kwargs: Any) -> Any:
+        claims["count"] += 1
+        if claims["count"] == 2:  # the drain's claim on 2
+            claims["raced"] = True
             assert s.deliver(c, 2) == ProcessResult.PROCESSED
-        return pending
+        return real_claim(*args, **kwargs)
 
-    a._update_last_seq = write  # type: ignore[method-assign]  # noqa: SLF001
-    a._get_pending = read  # type: ignore[method-assign]  # noqa: SLF001
+    a._claim = claim  # type: ignore[method-assign]  # noqa: SLF001
     handler = _during_first(s, lambda: s.deliver(b, 2))
     assert s.deliver(a, 1, handler) == ProcessResult.PROCESSED
-    assert recorded["raced"]
+    assert claims["raced"]
     assert s.ran == [1, 2]
     assert s.sequence() == 2
+    # The redelivery pruned the copy that was queued for it.
+    assert s.queued() == []
+
+
+def test_two_queue_writes_at_once_both_stay() -> None:
+    s = _Sub()
+    a, b = s.processor(), s.processor()
+    real = a._read_pending_row  # noqa: SLF001
+    first = {"done": False}
+
+    def read(*args: Any, **kwargs: Any) -> Any:
+        row = real(*args, **kwargs)
+        if not first["done"]:
+            first["done"] = True
+            assert b._add_pending(s.peer, s.sub, {"sequence": 3, "data": {}})  # noqa: SLF001
+        return row
+
+    a._read_pending_row = read  # type: ignore[method-assign]  # noqa: SLF001
+    assert a._add_pending(s.peer, s.sub, {"sequence": 2, "data": {}})  # noqa: SLF001
+    assert s.queued() == [2, 3]
+
+
+def test_a_sequence_is_queued_once() -> None:
+    s = _Sub()
+    a = s.processor()
+    for _ in range(2):
+        assert a._add_pending(s.peer, s.sub, {"sequence": 2, "data": {}})  # noqa: SLF001
+    assert s.queued() == [2]
+
+
+def test_a_callback_with_a_number_that_is_not_finite_is_not_queued() -> None:
+    """Stored, it would never compare equal to itself, and every later
+    compare-and-swap of the queue would lose."""
+    s = _Sub()
+    a = s.processor()
+    result = a.process_callback_sync(
+        peer_id=s.peer,
+        subscription_id=s.sub,
+        sequence=2,
+        data={"v": float("nan")},
+        handler=s.record,
+    )
+    assert result == ProcessResult.REJECTED
+    assert s.queued() == []
+
+
+def test_the_first_queued_callback_is_taken_whatever_time_has_passed() -> None:
+    """The time bound applies after the first: a callback queued behind a
+    slow handler is exactly the one that must not be left."""
+    s = _Sub()
+    a, b = s.processor(), s.processor()
+    a.DRAIN_SECONDS = 0  # type: ignore[misc]
+
+    def others() -> None:
+        for sequence in (2, 3):
+            assert s.deliver(b, sequence) == ProcessResult.PENDING
+
+    assert s.deliver(a, 1, _during_first(s, others)) == ProcessResult.PROCESSED
+    assert s.ran == [1, 2]
+    assert s.queued() == [3]
+
+
+def test_a_callback_left_at_the_head_of_the_queue_is_no_gap() -> None:
+    """3 was left queued by a bounded drain and has waited longer than the
+    gap timeout. The next delivery takes it and then itself; it does not
+    trigger a resync, which would clear callbacks already answered."""
+    s = _Sub()
+    a, b = s.processor(), s.processor()
+    a.DRAIN_SECONDS = 0  # type: ignore[misc]
+
+    def others() -> None:
+        for sequence in (2, 3):
+            s.deliver(b, sequence)
+
+    s.deliver(a, 1, _during_first(s, others))
+    assert s.queued() == [3]
+    late = CallbackProcessor(
+        s.interface, gap_timeout_seconds=0, max_retries=3, retry_backoff_base=0
+    )
+    assert s.deliver(late, 4) == ProcessResult.PROCESSED
+    assert s.ran == [1, 2, 3, 4]
+    assert s.sequence() == 4
+    assert s.queued() == []

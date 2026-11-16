@@ -251,3 +251,27 @@ def test_a_clearing_put_whose_sequence_is_not_a_number_is_400(seq: Any) -> None:
         handler.put("a" * 32, "peer1", "sub1")
     assert webobj.response.status_code == 400
     iface.assert_not_called()
+
+
+def test_a_publisher_whose_bulk_read_faults_answers_500_not_an_empty_listing() -> None:
+    """Verification 2026-11-16-3 (B2): ``GET /properties`` folded a fault
+    other than ``DbError`` into 200 ``{}``, which a subscriber takes as a
+    valid whole-target baseline and sweeps its whole replica of the peer.
+    It answers 500, so the baseline fails and the rebuild stays owed."""
+    from actingweb.handlers.properties import PropertiesHandler
+
+    handler = PropertiesHandler(AWWebObj(params={}), mock.Mock())
+    handler.hooks = None
+    myself = mock.Mock()
+    myself.id = "a1"
+    broken = mock.Mock()
+    broken.fetch_all_including_lists.side_effect = RuntimeError("cannot decode")
+    with (
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+        mock.patch(
+            "actingweb.handlers.properties.get_property_list", return_value=broken
+        ),
+    ):
+        handler.listall(myself, mock.Mock())
+    assert handler.response.status_code == 500
+    assert handler.response.body in (None, "", b"")

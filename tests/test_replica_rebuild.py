@@ -686,3 +686,41 @@ class TestIteration27OutsideVoice:
                 PEER, "properties", subtarget="notes"
             )
         assert got is None
+
+
+class TestVerification2026_11_16:
+    """thoughts/verifications/2026-11-16-spec-1-5-3.md (B1): a rebuild, the
+    one an incoming callback runs included, told the application's data
+    hooks nothing, so a change folded into its baseline reached no hook."""
+
+    def test_a_rebuild_tells_the_data_hooks_its_baseline_as_a_resync(
+        self, env: _Env
+    ) -> None:
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        seen: list[tuple[Any, ...]] = []
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            subscription_data_hooks={
+                "properties": [
+                    lambda actor, peer, target, data, seq, kind: seen.append(
+                        (peer, target, data, seq, kind)
+                    )
+                ]
+            },
+        )
+        env.baselines = [{"status": "paid"}]
+        assert env.rebuild(config=config, force=True).success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    def test_a_failed_rebuild_tells_the_hooks_nothing(self, env: _Env) -> None:
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        seen: list[Any] = []
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            subscription_data_hooks={"*": [lambda *a: seen.append(a)]},
+        )
+        env.baselines = [None]
+        assert not env.rebuild(config=config, force=True).success
+        assert seen == []

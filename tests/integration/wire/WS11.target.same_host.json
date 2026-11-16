@@ -848,6 +848,22 @@
          "status": 200
         },
         {
+         "actor": "<B>",
+         "data": {
+          "x": {
+           "v": 1
+          },
+          "y": {
+           "v": 2
+          }
+         },
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 2,
+         "target": "properties",
+         "type": "resync"
+        },
+        {
          "auth": "bearer:trust:A-B",
          "children": [],
          "headers": {},

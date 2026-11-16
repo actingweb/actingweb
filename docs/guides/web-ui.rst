@@ -55,8 +55,10 @@ the application's ``www`` callback hook. A path the hook does not handle
 (it returns ``False`` or ``None``), or any path when no ``www`` hook is
 registered, answers 404 (3.16; it answered 200 with the text ``False``).
 *What to check:* a hook that returned ``False`` for a page it does serve
-(for example after writing a response itself) returns what the page shows
-instead.
+returns a dict instead: ``{"template": "<name>.html", "data": {...}}``
+renders that template (see :doc:`../reference/hooks-reference`, "Template
+Rendering for WWW Hooks"), and any other dict is answered as JSON. A
+string, or ``True``, is answered as the text ``True``, not as the page.
 
 Web Interface Features
 ----------------------

@@ -162,6 +162,10 @@ The template will receive:
 
 This allows applications to add custom web UI pages without modifying the core library.
 
+A dict without ``template`` is answered as JSON. ``False`` or ``None``
+answers 404 (3.16). Any other result, a string included, is answered as
+the text ``True``: return a template dict to show a page.
+
 Application Callback Hooks
 ==========================
 
@@ -223,6 +227,10 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   ``timestamp`` key the publisher did not send.
 - After a resync the replica no longer holds what the baseline lacks; the
   hook gets the baseline, not the names removed.
+- A rebuild of the replica from a baseline (owed after a failed resync
+  fetch or a list the replica could not apply, or asked for by a polled
+  marker) calls the hook once with the baseline and ``"resync"`` (3.16), as
+  a pushed resync does.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

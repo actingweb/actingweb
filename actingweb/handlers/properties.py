@@ -1243,8 +1243,13 @@ class PropertiesHandler(_PropertyHandlerBase):
             except DbError:
                 raise
             except Exception as e:
+                # 500, not an empty listing: a subscriber takes ``{}`` as the
+                # publisher's whole state and deletes its replica (3.16,
+                # verification B2).
                 logger.error(f"Error bulk-reading properties: {e}")
-                all_rows = {}
+                if self.response:
+                    self.response.set_status(500, "Error reading properties")
+                return
         properties = {
             name: value
             for name, value in all_rows.items()

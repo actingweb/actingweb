@@ -1027,7 +1027,12 @@ CHANGED
   and ``sync_subscription`` acts on a marker as a resync (a rebuild). The
   poll runs the application's data hooks for each diff it processes when
   given the configuration, which the gap resync now passes, with or without
-  ``auto_storage``. **Behavior change.**
+  ``auto_storage``. A rebuild (the one the next callback runs when a rebuild
+  is owed, a polled marker's, a list fault's) tells the data hooks its
+  baseline once, with ``callback_type`` ``"resync"``, as a pushed resync
+  does; a rebuild run on a callback answered for it and no hook saw its
+  change. **Behavior change:** a data hook is called with ``"resync"`` and
+  the whole baseline after every rebuild.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
   nothing (it cleared the queue); a callback with ``data`` and no integer
   ``sequence`` answers 400 (it was dropped with 204); a granularity other
@@ -1049,7 +1054,8 @@ CHANGED
   with the text ``False``): with no ``www`` hook registered, or when the
   hook returns ``False`` or ``None`` for the path. **Behavior change:** a
   ``www`` hook that returned ``False`` for a page it served gets 404; it
-  returns what the page shows instead.
+  returns a ``{"template": ..., "data": ...}`` dict instead (a string or
+  ``True`` is answered as the text ``True``).
 - **Trust answers follow the specification.** ``approved`` in a trust
   ``PUT`` accepts ``true`` (or the string ``"true"`` a form sends) only;
   ``false``, ``null`` and anything else answer 400 with nothing changed
@@ -2697,6 +2703,14 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **A publisher's property read fault wiped its subscribers' replicas.**
+  ``GET /properties`` answered a read error other than a database fault
+  with 200 and ``{}``, which a subscriber takes as the publisher's whole
+  state: the resync sweep then deleted every property and list it held for
+  that peer. It answers 500, so the baseline fails and the rebuild stays
+  owed. **Behavior change:** a client sees 500 where it saw an empty
+  listing.
 
 - **Callback tasks on a running event loop could be collected before they
   ran** (no reference was kept); the sender keeps each until it is done.

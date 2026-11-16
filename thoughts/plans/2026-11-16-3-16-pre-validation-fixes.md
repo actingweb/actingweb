@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 approved: 2026-11-16 by Greger Wedel
 ---
 
@@ -742,7 +742,88 @@ Nothing High. Fixed in the Phase 3 commit unless noted:
   multi-send caller left; it stays (small, tested, and a resync plus a diff
   may use it).
 
-### Implementation Status: In Progress (browser walk, Full tier, Emm's suite)
+### Implementation Status: Complete
+
+---
+
+## Implementation Summary
+
+**Completed:** 2026-11-16
+**All phases:** Complete
+**Test status:** Full tier green on both backends for Phases 1 and 2
+(DynamoDB 7,940 passed, PostgreSQL 7,712 passed, docs clean). Phase 3's
+Full tier ran with two wire rows failing (`WG15`, `WG16`: the recorded
+provider redirect carried the old default `redirect_uri`) and a title
+underline in the migration guide; all else passed (7,964 and 7,736). The
+two rows were re-recorded under an ownership commit, and
+`tests/integration/test_wire_grants.py` (23 tests) and the docs build were
+re-run green on both backends; the whole suite was not run a second time.
+
+**Commits:** `ac5aec5` (plan), `6d30934` (Phase 1), `09823be` (Phase 1
+review fixes), `2fd8e3f` (ownership of `WD12`), `480b12a` (Phase 2),
+`334fdaf` (ownership of `WG15`, `WG16`), `d62021b` (Phase 3). Two commits
+carry a staged todo deletion that belongs to the phase after them
+(`09823be`: `full-state-fallback-replica.md`; `334fdaf`: the two Phase 3
+todos); the tree at each phase commit is right.
+
+**Browser walk** (headless Playwright against the demo in local QA mode,
+1280 and 375 px): every step met its expectation: the five status labels,
+the links from the dashboard and the list, each form failure back on the
+form with its message and an empty form, the existing-trust notice with no
+second row, nothing from a tampered query string on the page, no sideways
+scroll, no console error. Fixed from it: the demo's "New trust" button lost
+its label on hover. Left as they are (the demo's own styling, low): the
+status badges' contrast, three waiting states in one colour, the dashboard's
+button row at 375 px, a legend of relationship types that does not match
+the form, and long peer ids breaking mid-word at desktop width.
+
+**The consumer's suite on `d62021b`** (environment 9, the library worktree
+at `d62021b`; `creator-to-email` dry run first: 1 scanned, nothing to move;
+no schema change): **PostgreSQL** 3 failed, 7,405 passed, 14 skipped, 179
+deselected; **DynamoDB lane** 3 failed, 54 passed. The same six failures by
+name as the run on `2f1a891` (the baseline's five and the date-dependent
+`test_trial_state_pure` case), nothing new or gone. Logs:
+`../actingweb_mcp/.claude/worktrees/emm9-{pg,dyn}-d62021b.log`. Its suite
+does not poll a quiet subscription, so it does not show the effect of the
+poll's `"resync"` hook call there.
+
+### Deviations from Plan
+
+- **Phase 1**: the drain takes one callback per claim, always the first,
+  then at most 20 and none after 5 seconds (not a share of the lease); a
+  callback left at the head of the queue no longer triggers the gap resync;
+  a queue write that cannot be made is a 503; a non-finite number is
+  refused. Rule 1 is the same drain, started without a known sequence.
+- **Phase 2**: two fallback tests were deleted and not re-pinned (the deep
+  value has a test on the baseline read already; the holed list has none
+  that joins publisher and subscriber); a baseline is told only when all of
+  it was applied; two more helpers went with the fallback; three more
+  specification passages were reworded.
+- **Phase 3**: the default `redirect_uri` changed (owner decision during
+  the phase); the status label is computed in the handler; the tests are in
+  process under `tests/`; the wildcard-import test became an `__all__`
+  check.
+
+### Learnings
+
+- The gap timeout and the pending queue interact: anything that leaves the
+  next callback in line queued must not be read as a gap.
+- A "dead" default was live: `with_oauth()` copied the `/oauth` default into
+  the provider entry, so only an application that passed its own
+  `redirect_uri` had a working callback. The wire rows showed it.
+- A quiet poll with `auto_storage` fetches and applies a whole baseline
+  every time; telling the hook there is the most visible effect of this
+  plan for a polling application.
+
+### Open after this plan
+
+- `thoughts/todo/subtarget-diff-list-key-exclusion.md` (a reviewer's
+  Medium, predates the plan).
+- `thoughts/todo/demo-qa-mode-basic-auth-challenge.md`.
+- Three lines in `subscription-subscriber-fault-hardening.md` and one in
+  `subscriber-hooks-and-resource-diffs-after-1-5.md`.
+- No verification document yet: `/verify_implementation` writes it and
+  quotes the consumer suite's run below.
 
 ---
 

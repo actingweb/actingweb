@@ -69,6 +69,13 @@ baseline's failures by name and nothing else:
   validation's run on `master` covers them, so a new failure there may be
   theirs.
 
+- `3-16-pre-validation-fixes` (environment 9, on `d62021b`,
+  `creator-to-email` first: nothing to move): the same six failures by name
+  as the `spec-1-5` run, nothing new. Emm's `properties` data hook sends
+  its UI a full-sync notification on `"resync"`; since this plan a quiet
+  poll with `auto_storage` calls it each time (an adoption item on Emm's
+  side: compare before notifying, or accept the refresh).
+
 Still to run: `3-16-release-validation` (the last; it deletes
 this file). A run now starts with `creator-to-email` (dry run, then
 `--apply`) on the environment's database before the preview server.

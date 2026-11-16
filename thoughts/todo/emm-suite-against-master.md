@@ -73,7 +73,8 @@ baseline's failures by name and nothing else:
   `creator-to-email` first: nothing to move): the same six failures by name
   as the `spec-1-5` run, nothing new. Run again on `3fb93ab` (the branch
   after its verification's iteration): PostgreSQL 3 failed, 7,405 passed;
-  DynamoDB lane 3 failed, 54 passed; the same six by name. Emm's `properties` data hook sends its UI a
+  DynamoDB lane 3 failed, 54 passed; the same six by name; and on `ab11326`
+  (after the second iteration) with the same counts and names. Emm's `properties` data hook sends its UI a
   full-sync notification on `"resync"`: since this plan a poll that rebuilt
   the replica calls it (a quiet poll does not).
 

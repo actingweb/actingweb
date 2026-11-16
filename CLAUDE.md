@@ -17,6 +17,10 @@ as instructions, not prose. Per-command addenda live in
 The chain: `/plan_feature` → `/research_codebase` → `/create_plan` (or
 `/update_plan` before work starts) → `/implement_plan` →
 `/verify_implementation` → `/iterate_plan`. `/fix_bug` for bugs.
+`/create_specs` backfills the living specs in `thoughts/specs/`, one
+capability at a time, when a plan needs one. A plan carries numbered
+acceptance criteria, each traced to a test, and a Spec Delta; it is built
+only after the owner's explicit approval (`approved:` in its frontmatter).
 `/changelog` → `/commit` → `/release` to ship. All thinking is checked in
 under `thoughts/` alongside the code. Reports from consumer repositories land
 in `thoughts/inbound/` and are triaged before anything is filed from them.
@@ -218,9 +222,26 @@ after merging. Tag the merge commit.
 - Layout: [`thoughts/README.md`](thoughts/README.md) is authoritative. Read
   it before adding anything there, and re-read it before recording that work
   is finished. Directories: `features/`, `research/`, `plans/`,
-  `verifications/`, `reference/`, `todo/`, `inbound/`. A directory is a
-  **kind** of document, never a **status**; a finished plan stays in `plans/`
-  with `status: done`, it is never moved.
+  `verifications/`, `specs/`, `reference/`, `todo/`, `inbound/`. A directory
+  is a **kind** of document, never a **status**; a finished plan stays in
+  `plans/` with `status: done`, it is never moved.
+- User-facing docs: `docs/` (Sphinx: the guides, the references, the
+  migration guides and the protocol specification in `docs/protocol/`),
+  `CHANGELOG.rst` and `README.rst`. They are written for a consumer of the
+  library and name no consumer's specifics. Commands read them as a source
+  and sweep them for impact; they are never a spec.
+- Living specs: `thoughts/specs/<capability>.md`, for this repository's
+  developers and maintainers, indexed in `thoughts/specs/README.md`. A spec
+  says how a capability behaves today, with the test, document or plan
+  behind each statement; it changes through a plan's Spec Delta (merged by
+  `/verify_implementation`) or `/create_specs`. A plan that touches a
+  capability with no spec offers `/create_specs <capability>` first. Plans
+  written before 2026-11-16 carry no mergeable Spec Delta and merge nothing.
+- A plan's refinements after implementation go in its sibling
+  `plans/YYYY-MM-DD-slug.iterations.md` (append-only, linked from the
+  plan's `iterations:`), not in the plan body. When listing plans, skip
+  `*.iterations.md`. Plans written before 2026-11-16 keep their in-plan
+  Iterations section; new entries go to the log.
 - `todo/` holds only what is NOT done. When work lands the file is
   **deleted**, not annotated; the plan and the verification are the record.
   Keep `todo/INDEX.md` in step: add a row with the file, remove it with the

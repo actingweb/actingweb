@@ -12,11 +12,14 @@ The `actingweb_mcp` consumer repo (`../actingweb_mcp/thoughts/README.md`)
 follows the same convention with two deliberate differences: this repo has an
 `inbound/` directory for untriaged external reports, and it identifies todos by
 filename only, where that repo keeps stable numbers in `todo/INDEX.md`.
+The rules the workflow commands share (plan frontmatter, acceptance criteria,
+living specs, the iterations log) are in `~/.claude/shared/conventions.md`;
+this file is authoritative for the layout.
 Everything else should read the same; other divergence is drift. The workflow
 commands read the table below and ask before creating a directory it does not
 list.
 
-## The seven directories
+## The eight directories
 
 | Directory | Holds | Dated? | Written by |
 | --- | --- | --- | --- |
@@ -24,12 +27,30 @@ list.
 | `research/` | What we found out — investigation, measurement, analysis, bug investigations, inbound triage | yes | `/research_codebase`, `/fix_bug` |
 | `plans/` | What we intend to do — phased implementation plans | yes | `/create_plan` |
 | `verifications/` | Evidence a plan actually landed | yes | `/verify_implementation` |
+| `specs/` | How each capability behaves today, for maintainers: one file (or directory) per capability, indexed in `specs/README.md` | no | `/create_specs` (backfill), `/verify_implementation` (merges each plan's Spec Delta) |
 | `reference/` | Durable knowledge — patterns, architecture, protocol flows | no | by hand |
 | `todo/` | Known work not yet scheduled | no | by hand |
 | `inbound/` | Reports from outside this repo, not yet triaged | no | whoever files one |
 
-Nothing else. If a document doesn't fit one of these seven, it is probably a
+Nothing else. If a document doesn't fit one of these eight, it is probably a
 `research/` note.
+
+### `specs/`, `reference/` and `docs/`
+
+`specs/` says how each capability behaves today, for the people who build
+and maintain the library: stable statement IDs, the source behind each
+statement (a test, a document, a plan), and the decisions in force. `docs/`
+and `CHANGELOG.rst` say what a consumer of the library is told, and name no
+consumer; `docs/protocol/actingweb-spec.rst` is the protocol's own
+specification, which the library implements and other implementations may
+too. A spec reads all of them as sources and records any disagreement, but
+none of them is the spec. `reference/` holds knowledge about how the system
+is built (patterns, flows), which a spec leaves out on purpose.
+
+A spec changes through a plan's Spec Delta (merged at verification) or
+`/create_specs`, not by hand while the work is in flight. Format and rules:
+`~/.claude/shared/conventions.md` ("Living specs"); this repository's
+sources: `.claude/workflow/create_specs.md`.
 
 ### Dated vs undated is not cosmetic
 
@@ -40,7 +61,22 @@ Nothing else. If a document doesn't fit one of these seven, it is probably a
   time you update it.
 
 `features/`, `research/`, `plans/` and `verifications/` are snapshots.
-`reference/`, `todo/` and `inbound/` are living.
+`specs/`, `reference/`, `todo/` and `inbound/` are living.
+
+A useful tell: if you find yourself editing a dated file to keep it accurate,
+it's in the wrong directory. Two exceptions: a plan's body, which tracks
+reality while it is implemented, and its append-only iterations log
+(`plans/YYYY-MM-DD-slug.iterations.md`), which holds the refinements made
+after implementation so the plan stays a readable design. Plans written
+before 2026-11-16 keep their in-plan Iterations section; new entries still go
+to the log.
+
+### Snapshots record a change; specs record the present
+
+Feature, research, plan and verification documents say what was true when a
+piece of work happened. `specs/` says what is true now: each plan carries a
+Spec Delta, and the verification that closes it merges the delta into the
+spec. To learn how a capability behaves, read its spec, not its plans.
 
 ### Same slug = same thread of work
 
@@ -123,10 +159,18 @@ Every plan carries frontmatter:
 ```yaml
 ---
 status: proposed | active | done | superseded
+approved: YYYY-MM-DD by <who>                         # the owner's go-ahead; implementation does not start without it
 verified: thoughts/verifications/YYYY-MM-DD-slug.md   # when status: done
+spec_merged: YYYY-MM-DD                              # the plan's Spec Delta is merged into specs/
 superseded_by: thoughts/plans/YYYY-MM-DD-slug.md      # when status: superseded
+iterations: thoughts/plans/YYYY-MM-DD-slug.iterations.md  # once the first iteration is logged
 ---
 ```
+
+Full rules for these keys, acceptance criteria and specs:
+`~/.claude/shared/conventions.md`. When listing plans, skip `*.iterations.md`.
+A plan that was `active` or `done` before `approved:` existed is treated as
+approved.
 
 Other keys are fine — some older plans carry `date`, `git_commit`, `tags` from an
 earlier `/create_plan`. Only `status` is required, and it must be one of the four
@@ -134,7 +178,8 @@ below.
 
 Closed vocabulary, four values:
 
-- **proposed** — written, not agreed. Nobody is working on it.
+- **proposed** — written, not started. Nobody is working on it. `approved:`
+  says whether the owner has agreed to it.
 - **active** — being implemented right now.
 - **done** — implemented. Link the verification.
 - **superseded** — overtaken. Link the replacement. (Kept, not deleted: knowing
@@ -143,9 +188,11 @@ Closed vocabulary, four values:
 Find work in flight with `grep -l "^status: active" thoughts/plans/*.md`.
 
 The workflow commands maintain this themselves: `/create_plan` opens a plan at
-`proposed`, `/implement_plan` moves it to `active` when work actually starts and
-to `done` when the phases finish, `/verify_implementation` adds the `verified:`
-back-link.
+`proposed` and records `approved:` on the owner's explicit go-ahead (a
+substantive `/update_plan` change removes it again), `/implement_plan` moves
+it to `active` when work actually starts and to `done` when the phases
+finish, `/verify_implementation` adds the `verified:` back-link and, when it
+merges the plan's Spec Delta, `spec_merged:`.
 
 **Never leave a stalled plan `active`.** A plan whose remaining phases were never
 picked up is `done` — write the unfinished remainder to `todo/` and let the plan
@@ -175,16 +222,17 @@ point.
 **Tool-driven loop** — the `/` commands already implement this:
 
 ```
-/plan_feature           → features/YYYY-MM-DD-slug.md    (no status: only plans carry one)
+/create_specs           → specs/README.md, specs/<capability>.md   (backfill, one capability per run)
+/plan_feature           → features/YYYY-MM-DD-slug.md    (acceptance criteria; no status: only plans carry one)
 /research_codebase      → research/YYYY-MM-DD-slug.md
-/create_plan            → plans/YYYY-MM-DD-slug.md      (status: proposed)
-        ↓ implementation starts                          (status: active)
-/implement_plan         → code
+/create_plan            → plans/YYYY-MM-DD-slug.md      (status: proposed; ACs, traceability, Spec Delta)
+        ↓ the owner approves                             (approved:)
+/implement_plan         → code, tests first              (status: active, then done)
 /verify_implementation  → verifications/YYYY-MM-DD-slug.md
-        ↓                                                (status: done + verified:)
-/iterate_plan           → amends the plan in place
-/fix_bug                → research/YYYY-MM-DD-slug.md   (root-cause record; also a
-                          Post-Verification entry in the plan it belongs to)
+        ↓                                                (verified: + spec_merged:, delta merged into specs/)
+/iterate_plan           → plans/YYYY-MM-DD-slug.iterations.md (and AC / spec updates)
+/fix_bug                → research/YYYY-MM-DD-slug.md   (root-cause record; also an
+                          entry in the iterations log of the plan it belongs to)
 ```
 
 `/plan_feature` mints the slug; it names the outcome, not the implementation.
@@ -198,7 +246,8 @@ An inbound report that turns out to need a plan gets its own dated
 - A todo grows big enough to need phases → `/create_plan` from it, and leave the
   todo as a stub pointing at the plan (or delete it — the plan supersedes it).
 - Learned something durable about how the system works → `reference/slug.md`,
-  updated in place forever.
+  updated in place forever. How a capability *behaves* is a spec statement
+  instead, and arrives through a plan's Spec Delta or `/create_specs`.
 - Investigated something and wrote it up → `research/`, even if no plan follows.
 - A report arrived from outside the repo → it lands in `inbound/`; triage it,
   file what survives verification, then delete the file.

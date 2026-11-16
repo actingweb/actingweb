@@ -17,4 +17,5 @@ Until a capability has a spec, its behaviour is recorded where it was before:
 `docs/` (what a consumer is told), `docs/protocol/actingweb-spec.rst` (the
 protocol), the wire recordings under `tests/integration/wire/` (what two
 applications exchange), and the plans and verifications that changed it.
-Plans written before 2026-11-16 carry no mergeable Spec Delta.
+Plans written up to and including `2026-11-16-3-16-pre-validation-fixes`
+carry no mergeable Spec Delta.

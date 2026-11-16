@@ -36,6 +36,7 @@ from actingweb.permission_evaluator import (
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
+    path_excluded,
     withheld,
 )
 from actingweb.secret_compare import secret_digest_equals, secret_equals
@@ -4375,15 +4376,18 @@ class Actor:
                 # (whole since 3.16, or ``{resource: value}``): kept whole
                 # except the parts the grant excludes, at their paths under
                 # the subtarget. A ``list:<name>`` key is a list, decided by
-                # its bare name, and a key of this object, decided at its
-                # own path too: either exclusion keeps it back (a direct
-                # read answers the same for the second).
+                # its bare name (fail closed: a grant under which the bare
+                # name cannot be read keeps the key back), and a key of this
+                # object, which an exclusion at its own path keeps back as
+                # it would any sibling key (exclusions only: the subtarget
+                # itself was allowed above, and siblings are not asked the
+                # allow list either).
                 lists = {
                     k: v
                     for k, v in parsed.items()
                     if k.startswith("list:")
                     and self._may_read(snapshot, k[5:])
-                    and self._may_read(snapshot, f"{subtarget}/{k}")
+                    and not path_excluded(rules, f"{subtarget}/{k}")
                 }
                 kept_value = self._diff_part(
                     rules,

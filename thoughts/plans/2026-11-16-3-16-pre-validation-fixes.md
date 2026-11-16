@@ -1,7 +1,7 @@
 ---
 status: done
 approved: 2026-11-16 by Greger Wedel
-verified: thoughts/verifications/2026-11-16-3-16-pre-validation-fixes.md
+verified: thoughts/verifications/2026-11-16-3-16-pre-validation-fixes-2.md
 iterations: thoughts/plans/2026-11-16-3-16-pre-validation-fixes.iterations.md
 ---
 

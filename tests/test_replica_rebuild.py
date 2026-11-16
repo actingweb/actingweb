@@ -911,14 +911,59 @@ class TestAPollTellsTheDataHooks:
         assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
-    def test_a_behind_poll_whose_baseline_was_not_applied_whole_is_not_told(
+    def test_a_behind_poll_whose_baseline_was_not_stored_whole_stays_owed(
         self, env: _Env, loop: bool
     ) -> None:
+        """Not told, and not forgotten: the rebuild stays owed, so the next
+        poll after the interval runs it again and tells it then (re-run 1,
+        Issue 3: the poll was recorded as level and nothing was owed)."""
         seen: list[Any] = []
         env.baselines = [{"status": "paid"}]
         result = MagicMock(skipped=False, failed=["status"])
         with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
-            assert _poll(env, _hooked(seen), [], loop=loop).success
+            polled = _poll(env, _hooked(seen), [], loop=loop)
+        assert not polled.success
+        assert seen == []
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+
+    def test_without_sequence_tracking_a_quiet_poll_is_never_behind(
+        self, env: _Env
+    ) -> None:
+        """Without ``auto_sequence`` callbacks record no sequence, so the
+        recorded one says nothing about what was missed: no rebuild, no
+        hook, on every quiet poll."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = _poll(env, _hooked(seen, auto_sequence=False), [], loop=False)
+        assert result.success and result.baseline is None
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_tells_an_empty_baseline_and_empties_the_replica(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 1 (Issue 1): the lost callbacks deleted the publisher's
+        last properties. The baseline is ``{}``: the hook is told it, and
+        the replica no longer holds what the publisher deleted."""
+        seen: list[Any] = []
+        env.replica.set_value("status", {"value": "paid"})
+        env.baselines = [{}]
+        assert _poll(env, _hooked(seen), [], loop=loop).success
+        assert seen == [(PEER, "properties", {}, 5, "resync")]
+        assert env.replica.get_value("status") is None
+
+    @pytest.mark.parametrize("sequence", [None, "5", float("nan"), True])
+    def test_a_publisher_sequence_that_is_no_integer_is_not_behind(
+        self, env: _Env, sequence: Any
+    ) -> None:
+        """Re-run 1 (Issue 6): a ``NaN`` raised in the comparison."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.sequences = [sequence]
+        try:
+            _poll(env, _hooked(seen), [], loop=False)
+        except TypeError:
+            pass  # a text sequence fails later, as before this plan
         assert seen == []
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])

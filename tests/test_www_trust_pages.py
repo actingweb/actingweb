@@ -262,6 +262,23 @@ def test_a_different_peer_at_the_url_is_not_called_a_re_pair(site: _Site) -> Non
     assert location == f"{site.www}/trust"
 
 
+def test_a_returned_row_without_a_peer_id_is_not_called_a_re_pair(site: _Site) -> None:
+    baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
+    answer = mock.Mock(to_dict=mock.Mock(return_value={"baseuri": baseuri}))
+    with (
+        mock.patch.object(TrustManager, "create_relationship", return_value=answer),
+        mock.patch(
+            "actingweb.actor.Actor.get_trust_relationships",
+            return_value=[
+                {"baseuri": baseuri, "approved": True, "relationship": "friend"}
+            ],
+        ),
+    ):
+        status, location = site.submit(peer_url=baseuri, trust_type="friend")
+    assert status == 302
+    assert location == f"{site.www}/trust"
+
+
 def test_a_row_waiting_for_approval_is_not_an_existing_trust(site: _Site) -> None:
     """Creating toward a peer whose request waits is how it is approved: the
     create runs with what was typed, and no notice is shown."""
@@ -286,6 +303,10 @@ def test_a_row_waiting_for_approval_is_not_an_existing_trust(site: _Site) -> Non
         ("https://user:pw@peer.example/a", False),
         ("https://peer.example/a?x=1", False),
         ("https://peer.example/a#frag", False),
+        ("https://peer.example/a?", False),
+        ("https://peer.example/a#", False),
+        ("https://peer.exa\tmple/a", False),
+        ("https://peer.example/a b", False),
         ("https://peer.example/A", False),
         ("https://[::1]/a", False),
         ("", False),
@@ -334,6 +355,7 @@ def test_nothing_from_the_query_string_is_rendered(site: _Site) -> None:
     )
     assert _shown(TRUST_FORM_MESSAGES["create_failed"]) in form
     assert "evil.example" not in form
+    assert 'value="admin"' in form  # the type is offered, so the check bites
     assert not re.search(r'<option[^>]*value="admin"[^>]*selected', form)
     # A form's code means nothing to the list.
     status, _, listing = site.get(f"{site.www}/trust?notice=create_failed")

@@ -233,8 +233,9 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   poll, with nothing to fetch and the recorded sequence level with the
   publisher's, refreshes the replica without calling the hook: that is the
   state it already heard about. With nothing to fetch but the subscriber
-  behind (after a gap resync discarded queued callbacks, say), the hook is
-  called with the baseline. A coroutine hook of the async poll
+  behind (after a gap resync discarded queued callbacks, say; asked only
+  with ``auto_sequence``), the poll runs a rebuild: the hook is called with
+  its baseline, an empty one included. A coroutine hook of the async poll
   is scheduled on the caller's loop. A poll tells the data hooks only: the
   legacy ``subscription`` callback hook is told on the callback path.
 - After a resync the replica no longer holds what the baseline lacks; the

@@ -236,7 +236,8 @@ after merging. Tag the merge commit.
   behind each statement; it changes through a plan's Spec Delta (merged by
   `/verify_implementation`) or `/create_specs`. A plan that touches a
   capability with no spec offers `/create_specs <capability>` first. Plans
-  written before 2026-11-16 carry no mergeable Spec Delta and merge nothing.
+  written up to and including `2026-11-16-3-16-pre-validation-fixes` carry
+  no mergeable Spec Delta and merge nothing.
 - A plan's refinements after implementation go in its sibling
   `plans/YYYY-MM-DD-slug.iterations.md` (append-only, linked from the
   plan's `iterations:`), not in the plan body. When listing plans, skip

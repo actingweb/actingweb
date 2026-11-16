@@ -272,6 +272,36 @@ class TestListDiffObjects:
         assert out is not None
         assert json.loads(out) == {"name": "x", "list:open": "v"}
 
+    def test_a_grant_that_names_the_property_keeps_its_list_keys(self, actor) -> None:
+        """Verification re-run 1 (Issue 2): the check at the key's own path
+        asked the allow list, which a grant naming the property and not its
+        children fails for every ``list:`` key, while sibling keys were
+        sent. It asks the exclusions only, as it does for the siblings."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["profile", "open", "secret"],
+                    "operations": ["read"],
+                }
+            },
+        )
+        blob = {"name": "x", "list:secret": "hunter2", "list:open": "v"}
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "profile"},
+            json.dumps(blob),
+            snapshot=grant,
+        )
+        assert out is not None and json.loads(out) == blob
+
     def test_an_excluded_list_is_still_dropped(self, actor) -> None:
         blob = {"list:secret": self.DIFF, "list:notes": self.DIFF}
         out = actor.filter_subscription_blob(

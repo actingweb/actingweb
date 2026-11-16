@@ -1181,6 +1181,19 @@ class SubscriptionManager:
         recorded = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
         return recorded if isinstance(recorded, int) else 0
 
+    def _behind_publisher(
+        self, peer_id: str, subscription_id: str, response: dict[str, Any]
+    ) -> bool:
+        """Whether this subscriber has recorded a lower sequence than the
+        publisher answers. A sequence that is not an integer is not
+        compared (never behind). Asked only with ``auto_sequence``: without
+        it callbacks record no sequence, and the recorded one says nothing
+        about what was missed."""
+        sequence = response.get("sequence", 0)
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            return False
+        return self._recorded_sequence(peer_id, subscription_id) < sequence
+
     def _tell_polled_baseline(
         self,
         peer_id: str,
@@ -1234,7 +1247,8 @@ class SubscriptionManager:
         told: a quiet poll (nothing to fetch and the recorded sequence level
         with the publisher's; with ``auto_storage`` it refreshes the replica
         from a baseline, which is the state the hooks already heard about;
-        behind the publisher, as after a gap resync, the baseline is told),
+        behind the publisher, as after a gap resync, the poll runs a
+        rebuild, which is told),
         a baseline that was skipped (another
         subscription covers the replica) or had an entry that failed to
         store, and a rebuild after a list diff the same poll told. A key the
@@ -1352,14 +1366,20 @@ class SubscriptionManager:
                 f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
-            # Behind the publisher with nothing retained to fetch (after a
-            # gap resync cleared the queue, say): the baseline is then the
-            # first the hooks hear of what changed. Level with it, the
-            # baseline is the state they already heard about.
-            behind = self._recorded_sequence(peer_id, subscription_id) < int(
-                response.get("sequence", 0) or 0
-            )
-            caught_up: Any = None
+            if config.auto_sequence and self._behind_publisher(
+                peer_id, subscription_id, response
+            ):
+                # Behind the publisher with nothing retained to fetch (a gap
+                # resync cleared callbacks no hook saw, say): a rebuild, not
+                # a refresh. It deletes what the baseline no longer carries,
+                # an empty baseline included, records the sequence only when
+                # it settled, stays owed when it did not, and its baseline
+                # is the first the hooks hear of what changed. Level with
+                # the publisher, the refresh below is the state they
+                # already heard about.
+                return self.rebuild_subscription(
+                    peer_id, subscription_id, config=config, force=True
+                )
 
             # Fetch and transform baseline data
             transformed_data = self._fetch_and_transform_baseline(
@@ -1394,15 +1414,13 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                applied = store.apply_resync_data(
+                store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                if behind and not applied.skipped and not applied.failed:
-                    caught_up = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -1429,12 +1447,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                # A baseline for the hooks only when the subscriber was
-                # behind; level with the publisher, this refresh is the
-                # replica they already heard about (owner, 2026-11-16).
-                baseline=caught_up,
-                target=sub.target,
-                subtarget=sub.subtarget or None,
+                # No baseline for the hooks: level with the publisher,
+                # this refresh is the replica they already heard about
+                # (owner, 2026-11-16).
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
@@ -2371,11 +2386,13 @@ class SubscriptionManager:
                 f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
-            # As the synchronous poll: told only when it was behind.
-            behind = self._recorded_sequence(peer_id, subscription_id) < int(
-                response.get("sequence", 0) or 0
-            )
-            caught_up: Any = None
+            if config.auto_sequence and self._behind_publisher(
+                peer_id, subscription_id, response
+            ):
+                # As the synchronous poll: behind, a rebuild.
+                return await self.rebuild_subscription_async(
+                    peer_id, subscription_id, config=config, force=True
+                )
 
             # Fetch and transform baseline data
             transformed_data = await self._fetch_and_transform_baseline_async(
@@ -2410,15 +2427,13 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                applied = store.apply_resync_data(
+                store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
-                if behind and not applied.skipped and not applied.failed:
-                    caught_up = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -2445,12 +2460,9 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                # A baseline for the hooks only when the subscriber was
-                # behind; level with the publisher, this refresh is the
-                # replica they already heard about (owner, 2026-11-16).
-                baseline=caught_up,
-                target=sub.target,
-                subtarget=sub.subtarget or None,
+                # No baseline for the hooks: level with the publisher,
+                # this refresh is the replica they already heard about
+                # (owner, 2026-11-16).
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case

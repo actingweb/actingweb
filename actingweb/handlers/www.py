@@ -54,18 +54,24 @@ TRUST_LIST_NOTICES = {
 def _same_peer_url(left: str, right: str) -> bool:
     """Whether two base URIs name one peer address: scheme and host compared
     without case, a default port and a trailing slash ignored. A URL with a
-    port that is not a number, with userinfo, a query or a fragment names no
-    peer address and matches nothing."""
+    port that is not a number, with userinfo, a query or a fragment (an
+    empty one too), or that ``is_valid_peer_baseuri`` refuses, names no peer
+    address and matches nothing."""
     from urllib.parse import urlsplit
 
     def key(url: str) -> tuple[str, str, int | None, str] | None:
-        parts = urlsplit(url.strip())
+        # What the library accepts as a peer's base URI, and nothing else:
+        # no whitespace or control characters, no userinfo, and no query or
+        # fragment, an empty one included.
+        if not is_valid_peer_baseuri(url) or "?" in url or "#" in url:
+            return None
+        parts = urlsplit(url)
         scheme = parts.scheme.lower()
         try:
             port = parts.port
         except ValueError:
             return None
-        if not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+        if not parts.hostname or "@" in parts.netloc:
             return None
         if port == {"http": 80, "https": 443}.get(scheme):
             port = None
@@ -1157,9 +1163,11 @@ class WwwHandler(base_handler.BaseHandler):
                 # "Paired again" only when the row that came back is the one
                 # matched by URL: the library acts on the id the URL answers
                 # now, and another id means a new trust was made.
-                repaired = bool(existing) and (
-                    isinstance(new_trust, dict)
-                    and new_trust.get("peerid") == (existing or {}).get("peerid")
+                matched_peer = (existing or {}).get("peerid")
+                repaired = (
+                    bool(matched_peer)
+                    and isinstance(new_trust, dict)
+                    and new_trust.get("peerid") == matched_peer
                 )
                 self.response.set_redirect(
                     self._www_path(

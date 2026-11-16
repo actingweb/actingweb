@@ -1321,7 +1321,10 @@ CHANGED
   as before, and the notice says so (it looked like a new trust); with
   another relationship nothing is changed (it was a bare failure). The
   stored base URI is matched without regard to host case, a default port
-  or a trailing slash. The trust list's status reads from
+  or a trailing slash; a URL the library would not accept as a peer's base
+  URI (userinfo, a query, a fragment, a port that is not a number) matches
+  no stored trust. When another actor now answers at the address, the
+  result is a trust with that actor and no "paired again" notice. The trust list's status reads from
   both sides (``Active``, ``Waiting for peer``, ``Awaiting your approval``,
   ``Awaiting both``, ``Unverified``); it showed this actor's approval only.
   The dashboard links to the form. Template variables: ``status_label`` on
@@ -1371,8 +1374,10 @@ CHANGED
   ``baseline``, ``target`` and ``subtarget`` carry the same). Not told: a
   quiet poll (nothing to fetch and the recorded sequence level with the
   publisher's: its refresh of the replica is the state the hooks already
-  heard about; a poll with nothing to fetch that was behind, as after a gap
-  resync, is told), a baseline that was skipped or had an entry
+  heard about; with sequence tracking, a poll with nothing to fetch that
+  was behind, as after a gap resync, runs a rebuild, which is told and
+  deletes what the publisher no longer holds), a baseline that was skipped
+  or had an entry
   that failed to store, a rebuild that did not settle, and a rebuild after
   a list diff the same poll already told. The legacy ``subscription``
   callback hook is not told by a poll, as before. **Check:** a data hook

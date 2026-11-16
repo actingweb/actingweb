@@ -2,7 +2,9 @@
 
 Every file in this directory, ordered by what to do next. **Last full re-rank:
 2026-11-01.** Rows, files and the todos the 3.16 roll-up touched were
-re-checked on 2026-11-05, after it merged; the order still stands. Rows marked
+re-checked on 2026-11-05, after it merged; the order still stands. Every row
+was checked against its file, and the todos `spec-1-5` touched against the
+code, on 2026-11-16 after #178 merged. Rows marked
 **Planned for 3.16** have an owner-chosen approach and a proposed plan
 (2026-11-06); the order they are taken in is the first section below.
 
@@ -32,16 +34,14 @@ moderate problem outranks an expensive fix to a slightly worse one.
 ## Planned for 3.16: order, dependencies and gates
 
 Eight plans: six from 2026-11-06, plus `grant-enforcement-per-route` (0b,
-2026-11-10) and `3-16-release-validation` (6, 2026-11-15). Six have merged
-and two are `status: proposed`. **This section is
+2026-11-10) and `3-16-release-validation` (6, 2026-11-15). Seven have merged;
+`3-16-release-validation` is `status: proposed`. **This section is
 the one copy of the order, of what depends on what between the plans, and of
 the gates between them.** Each plan keeps a pointer here and its own "This
 plan" paragraph, which says what that plan uses from the others and wins on
 that detail. One PR per plan, one commit per phase. A plan starts when the one
 before it has merged and its gates are met, because the checks allow one test
-run at a time. The 3.16 tag stays held until all eight have merged.
-`spec-1-5` was implemented on 2026-11-15 and awaits its
-verification and PR. The history of the merged plans is in their plans and
+run at a time. The 3.16 tag stays held until all eight have merged. The history of the merged plans is in their plans and
 verifications, not here.
 
 | Order | Plan | Todo it closes | Needs first |
@@ -53,8 +53,8 @@ verifications, not here.
 | 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md) | — | **Merged** (#175, 2026-11-13) |
 | 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md) | — | **Merged** (#176, 2026-11-15) |
 | 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md) | The vouched SDK rename | **Merged** (#177, 2026-11-15) |
-| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | Subscription docs: status codes and `FanOutManager` samples (closed in Phase 4); it files [`outbound-callback-backpressure.md`](outbound-callback-backpressure.md) and `callback-oauth-handler-unrouted.md` | Implemented 2026-11-15 on `release/3.16.0-spec-1-5` (five phases, Emm's run done); `/verify_implementation`, then the PR |
-| 6 | [`3-16-release-validation`](../plans/2026-11-15-3-16-release-validation.md): the release read as one before its tag: changelog and migration guide, Emm's questions and coverage of its uses, the demo and `actingwebdemo`, the wire between 3.15 and 3.16, agent discoverability | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md), as far as the owner's resources reach; [Emm's suite](emm-suite-against-master.md) with its last run | `spec-1-5` merged; `/update_plan` (a first draft, not evaluated) |
+| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | Subscription docs: status codes and `FanOutManager` samples (closed in Phase 4); it files [`outbound-callback-backpressure.md`](outbound-callback-backpressure.md) and `callback-oauth-handler-unrouted.md` | **Merged** (#178, 2026-11-16) |
+| 6 | [`3-16-release-validation`](../plans/2026-11-15-3-16-release-validation.md): the release read as one before its tag: changelog and migration guide, Emm's questions and coverage of its uses, the demo and `actingwebdemo`, the wire between 3.15 and 3.16, agent discoverability | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md), as far as the owner's resources reach; [Emm's suite](emm-suite-against-master.md) with its last run | `spec-1-5` merged (met); `/update_plan` (a first draft, not evaluated). **Next.** |
 
 A todo these plans edit without closing:
 [subscriber fault hardening](subscription-subscriber-fault-hardening.md)
@@ -117,8 +117,8 @@ owner-chosen approach and a proposed plan (2026-11-06).
 | [`set_description()`/`set_explanation()` still create the meta row unconditionally](meta-row-create-unconditional-for-description-writers.md) | Makes every v2 meta-row creation conditional, one creation path — closes the narrower last-writer-wins race the 2026-09-14 first-mutation fix left on `count_hint` (never on the description itself, and self-repaired by the next rank-counting mutation) | Found while implementing that fix; explicitly out of scope for the 3.14.7 patch. Needs a decision on whether the shared `_save_metadata()` creation branch (also used by v1's `create_if_absent=False` writers and `clear()`'s replace) routes through `_v2_create_meta_row()` or grows its own conditional create |
 | [The full-state fallback corrupts a subscriber's replica](full-state-fallback-replica.md) | A subscriber whose publisher thinks it lacks resync stops getting list items twice and objects stored as JSON strings after a `resume()` | Recorded by wire row `WD12` (2026-11-07). Reached only for an older peer or a stale capability cache, since every 3.16 library advertises resync. The list half is fixed; the scalar, deleted-property and single-property cases remain |
 | [Old-layout attribute lists: remove the reader](attribute-list-old-layout-removal.md) | One list layout to read and test, not two | Filed 2026-11-13 by `attribute-list-v2-port`: 3.16 reads the pre-3.16 attribute list layout in place and converts on the first change; the reader and converter go once a release has been live long enough that no deployment holds old-layout lists (`actingweb-verify-property-lists --attributes` reports them) |
-| [Subscribers after specification 1.5: hooks on rebuilds, the last partial resource diffs](subscriber-hooks-and-resource-diffs-after-1-5.md) | A rebuild calls the data hook with its baseline, and the SDK's resource notification sends the whole value | Filed 2026-11-15 by the codex review of `spec-1-5` Phase 3; each path left as it was, none a data loss on the default configuration |
-| [Two concurrent low-granularity writes leave a replica without one of them](low-granularity-concurrent-writes-replica.md) | A subscriber of two simultaneous low-granularity writes holds both without waiting for its next callback or poll | Found 2026-11-15 by `spec-1-5` Phase 4's two-write test (a strict `xfail`); fails with the serial sender too, so not the sender's |
+| [Subscribers after specification 1.5: hooks on rebuilds, the last partial resource diffs](subscriber-hooks-and-resource-diffs-after-1-5.md) | A rebuild the poll runs calls the data hook with its baseline (the callback's rebuild does since #178), and the SDK's resource notification sends the whole value | Filed 2026-11-15 by the codex review of `spec-1-5` Phase 3; each path left as it was, none a data loss on the default configuration |
+| [Two concurrent low-granularity writes leave a replica without one of them](low-granularity-concurrent-writes-replica.md) | A subscriber of two simultaneous low-granularity writes holds both without waiting for its next callback or poll | Found 2026-11-15 by `spec-1-5` Phase 4's two-write test (an `xfail`, not strict: it passed once on CI); fails with the serial sender too, so not the sender's |
 | [`CallbackOauthHandler` is exported, documented and routed nowhere](callback-oauth-handler-unrouted.md) | One less public class that does nothing, or a routed per-actor OAuth callback | Filed 2026-11-15 by `spec-1-5` Phase 5 (O5); a public-surface decision |
 | [Outbound callbacks: back-off, a per-peer breaker, payload limits](outbound-callback-backpressure.md) | A publisher stops spending the timeouts on a subscriber that keeps failing, backs off on 429 and 503, and bounds sends per process | Filed 2026-11-15 by `spec-1-5` Phase 4 (concurrent delivery, `FanOutManager` removed); optional in specification 1.5 |
 | [Subscription subscriber: recover cleanly from a store fault](subscription-subscriber-fault-hardening.md) | A subscriber that faulted mid-callback re-applies only what it has not applied, records the callbacks that finished, and a quiet subscription recovers without waiting for its next change | Filed 2026-10-29 when 3.16 made the publisher side spec-conformant (plan entry 32). Beyond the spec's minimum; a re-applied `append` can use 3.16's `ListProperty.append_once()` once each diff carries a stable key |

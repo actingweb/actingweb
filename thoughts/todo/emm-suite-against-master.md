@@ -63,7 +63,11 @@ baseline's failures by name and nothing else:
   (`thoughts/verifications/2026-11-15-email-as-creator-at-write-time-2.md`).
 
 - `spec-1-5` (environment 9, on `2f1a891`, `creator-to-email` first:
-  nothing to move): the baseline's failures, nothing new.
+  nothing to move): the baseline's failures, nothing new. Not re-run for
+  its four iteration commits (merged as #178, `e928e5b`), against gate 2's
+  rule; verification `2026-11-16-spec-1-5-2` deferred it. The release
+  validation's run on `master` covers them, so a new failure there may be
+  theirs.
 
 Still to run: `3-16-release-validation` (the last; it deletes
 this file). A run now starts with `creator-to-email` (dry run, then

@@ -6,14 +6,22 @@ says; these paths were left as they were, each with a reason.
 
 ## What is still weak
 
-- **A rebuild runs no data hook.** `rebuild_subscription` (and the owed
-  rebuild the callback handler now runs first, and a polled resync marker,
-  which hands off to it) applies the baseline and sweeps, but the
-  application's `subscription_data_hook` is not called with the baseline, as
-  a pushed resync's hook is. A hook-only application (`auto_storage` off)
-  never takes the marker path, so it loses nothing; an `auto_storage`
-  application's hooks miss what the rebuild applied. Run the hooks once
-  with the baseline as `callback_type="resync"` after a successful rebuild.
+- **A rebuild the poll runs tells no data hook.** Half closed by
+  `spec-1-5` (iterations log entry 14, PR #178): a callback that runs an
+  owed rebuild tells the data hooks and the legacy `subscription` hook the
+  baseline once, as `"resync"`, after it settled
+  (`handlers/callbacks.py`, `_tell_subscription_hooks`). The rebuild itself
+  tells no hook, and `rebuild_subscription` returns the applied baseline
+  (`SubscriptionSyncResult.baseline`) for a caller that does. Still silent:
+  the poll's paths (`sync_subscription` running an owed rebuild, a polled
+  resync marker through `_rebuild_for_marker`, `rebuild_needed`). A
+  hook-only application (`auto_storage` off) never takes the marker path,
+  so it loses nothing; an `auto_storage` application's hooks miss what a
+  polled rebuild applied. Tell the hooks from the poll's caller the same
+  way, on its loop for coroutine hooks (entry 12's attempt inside
+  `rebuild_subscription` ran them off the loop and before it settled). A
+  list diff's rebuild (`ProcessResult.REBUILD`) stays silent on purpose: the
+  diff that arrived was told.
 - **`SubscriptionManager.notify_subscribers(resource=...)`** still sends
   `{resource: blob}` to a subscription above the resource, which a receiver
   applies as the whole value. Pass `whole` (the subtarget's stored value)

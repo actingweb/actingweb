@@ -1,6 +1,8 @@
 ---
 status: done
 approved: 2026-11-16 by Greger Wedel
+verified: thoughts/verifications/2026-11-16-3-16-pre-validation-fixes.md
+iterations: thoughts/plans/2026-11-16-3-16-pre-validation-fixes.iterations.md
 ---
 
 # Implementation Plan: the fixes 3.16 takes before its release validation
@@ -189,7 +191,9 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
 - **AC-8** - A poll that replaced the replica from a baseline calls the
   data hooks once with the baseline, the recorded sequence and `"resync"`.
   [Updated 2026-11-16, owner: a poll that rebuilt it; a quiet poll, with
-  nothing to fetch, calls no hook.]
+  nothing to fetch, calls no hook.] [Updated 2026-11-16, iteration 2: quiet
+  means level with the publisher's sequence; with nothing to fetch but the
+  subscriber behind, the baseline is told.]
 - **AC-9** - A poll whose rebuild did not settle calls no data hook.
 - **AC-10** - On the async poll, a coroutine data hook is scheduled on the
   caller's loop and runs there.
@@ -548,12 +552,11 @@ Eleven findings on `6d30934`; fixed in the commit after it unless noted:
   and `sync_subscription_async` call `_poll_subscription[_async]` (the
   former bodies) and then `_tell_polled_baseline`. `SubscriptionSyncResult`
   gains `target` and `subtarget`, set with `baseline`.
-- **A quiet poll tells the hook every time** (the no-diffs path fetches a
-  baseline on each poll with `auto_storage`). This is what the plan's rule
-  says; it is the path a polling application will notice most. The
-  changelog, the hooks reference and the migration guide's item 31 say so.
-  Raised with the owner in the hand-off as the one choice worth a second
-  look.
+- **A quiet poll told the hook every time** as first built (the no-diffs
+  path fetches a baseline on each poll with `auto_storage`). [Superseded
+  2026-11-16: the owner chose that a quiet poll tells nothing, and
+  iteration 2 made "quiet" mean level with the publisher; the docs say
+  that.]
 - **Removed with the fallback**, beyond the plan's list:
   `Actor._resolve_list_heads` and `Actor._list_state_reference` (only the
   full state used them), with their tests
@@ -643,9 +646,9 @@ Eleven findings on `6d30934`; fixed in the commit after it unless noted:
 
 ### New Tests (written first)
 
-`tests/integration/test_www_trust_pages.py`, each test with its own actor
-and trust rows (no test depends on another), redirects not followed, then a
-GET of `Location`:
+`tests/test_www_trust_pages.py` (in process; the plan first put it under
+`tests/integration/`), each test with its own actor and trust rows (no test
+depends on another), redirects not followed, then a GET of `Location`:
 
 - AC-12 to AC-16 as in the Traceability table, on Flask and FastAPI for the
   redirects.
@@ -749,10 +752,10 @@ Nothing High. Fixed in the Phase 3 commit unless noted:
   for a refused callback.
 - Tests: a subtarget subscriber with an exclusion; no `whole` on a plain
   notification; a skipped and a partly stored baseline; a dead mock line.
-- **Not fixed, filed**: a `list:`-named key inside a stored property passes
-  a subtarget subscriber unfiltered (the reviewer's Medium; predates the
-  plan, needs an owner-stored `list:` key with an exclusion beneath it):
-  `thoughts/todo/subtarget-diff-list-key-exclusion.md`. A queued callback
+- **Filed, then fixed** [updated 2026-11-16]: a `list:`-named key inside
+  a stored property passed a subtarget subscriber unfiltered (the
+  reviewer's Medium). The owner chose to fix it; the todo is gone, and
+  iteration 1 closed what that fix left open. **Not fixed, filed**: a queued callback
   whose handler faults every time blocks its queue until a poll or a resync
   (Low): in the fault-hardening todo.
 - Accepted: the ordered-unit machinery in `callback_sender` has no

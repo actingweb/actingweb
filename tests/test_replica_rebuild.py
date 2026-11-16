@@ -884,13 +884,41 @@ class TestAPollTellsTheDataHooks:
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
     def test_a_quiet_poll_tells_no_hook(self, env: _Env, loop: bool) -> None:
-        """Nothing to fetch: the replica is refreshed from a baseline, which
-        is the state the hooks already heard about (owner, 2026-11-16)."""
+        """Nothing to fetch and the subscriber level with the publisher: the
+        replica is refreshed from a baseline, which is the state the hooks
+        already heard about (owner, 2026-11-16)."""
         seen: list[Any] = []
         env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5  # the publisher answers 5
         result = _poll(env, _hooked(seen), [], loop=loop)
         assert result.success and result.baseline is None
         assert env.replica.get_value("status") is not None  # still applied
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_poll_with_nothing_to_fetch_that_was_behind_tells_the_hook(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Verification 2026-11-16 (Issue 2): after a gap resync the sequence
+        is 0 and the queued callbacks are gone, unseen by any hook. When the
+        publisher retains no diff, the poll that follows has nothing to fetch
+        and its baseline is the first the application hears of the change."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 0  # reset by the gap resync; publisher at 5
+        result = _poll(env, _hooked(seen), [], loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_whose_baseline_was_not_applied_whole_is_not_told(
+        self, env: _Env, loop: bool
+    ) -> None:
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = MagicMock(skipped=False, failed=["status"])
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
+            assert _poll(env, _hooked(seen), [], loop=loop).success
         assert seen == []
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])

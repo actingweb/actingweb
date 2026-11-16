@@ -9,6 +9,7 @@ real store. Each test has its own actor and trust rows.
 from __future__ import annotations
 
 import base64
+import re
 import uuid
 from typing import Any
 from unittest import mock
@@ -112,6 +113,11 @@ class _Site:
             verified=verified,
         )
         return baseuri
+
+
+def _row(peer_id: str) -> Any:
+    """What ``TrustManager.create_relationship`` answers: a row for a peer."""
+    return mock.Mock(to_dict=mock.Mock(return_value={"peerid": peer_id}))
 
 
 @pytest.fixture(params=["flask", "fastapi"])
@@ -233,13 +239,66 @@ def test_an_existing_trust_is_paired_again_and_says_so(site: _Site) -> None:
     baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
     typed = baseuri.replace("peer1.example.test", "Peer1.Example.Test:443")
     with mock.patch.object(
-        TrustManager, "create_relationship", return_value=mock.Mock()
+        TrustManager, "create_relationship", return_value=_row("peer1")
     ) as create:
         status, location = site.submit(peer_url=typed + "/", trust_type="friend")
     assert create.call_args.kwargs["peer_url"] == baseuri
     assert status == 302
     assert location == f"{site.www}/trust?notice=trust_repaired"
     assert _shown(TRUST_LIST_NOTICES["trust_repaired"]) in site.get(location)[2]
+
+
+def test_a_different_peer_at_the_url_is_not_called_a_re_pair(site: _Site) -> None:
+    """Verification 2026-11-16 (Issue 3): the form matches a row by URL; the
+    library acts on the id the URL answers now. Another id means a new
+    trust was made, so the list does not say "paired again; nothing else
+    was changed"."""
+    baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
+    with mock.patch.object(
+        TrustManager, "create_relationship", return_value=_row("someone-else")
+    ):
+        status, location = site.submit(peer_url=baseuri, trust_type="friend")
+    assert status == 302
+    assert location == f"{site.www}/trust"
+
+
+def test_a_row_waiting_for_approval_is_not_an_existing_trust(site: _Site) -> None:
+    """Creating toward a peer whose request waits is how it is approved: the
+    create runs with what was typed, and no notice is shown."""
+    baseuri = site.trust("peer1", approved=False, peer_approved=True, verified=True)
+    with mock.patch.object(
+        TrustManager, "create_relationship", return_value=_row("peer1")
+    ) as create:
+        status, location = site.submit(peer_url=baseuri, trust_type="admin")
+    create.assert_called_once()
+    assert status == 302
+    assert location == f"{site.www}/trust"
+
+
+@pytest.mark.parametrize(
+    "typed,same",
+    [
+        ("https://peer.example/a", True),
+        ("https://PEER.example:443/a/", True),
+        ("http://peer.example:80/a", False),  # another scheme
+        ("https://peer.example:8443/a", False),
+        ("https://peer.example:not-a-port/a", False),
+        ("https://user:pw@peer.example/a", False),
+        ("https://peer.example/a?x=1", False),
+        ("https://peer.example/a#frag", False),
+        ("https://peer.example/A", False),
+        ("https://[::1]/a", False),
+        ("", False),
+    ],
+)
+def test_which_typed_urls_name_the_stored_peer(typed: str, same: bool) -> None:
+    """Verification 2026-11-16 (Issue 4): a port that is not a number read
+    as the default port, and userinfo, a query and a fragment were ignored,
+    so a URL the library refuses elsewhere matched and rotated the secret."""
+    from actingweb.handlers.www import _same_peer_url
+
+    assert _same_peer_url("https://peer.example/a", typed) is same
+    assert _same_peer_url(typed, "https://peer.example/a") is same
 
 
 def test_an_existing_trust_with_another_relationship_returns_a_notice(
@@ -267,6 +326,18 @@ def test_nothing_from_the_query_string_is_rendered(site: _Site) -> None:
         assert text not in form
     status, _, form = site.get(f"{site.www}/trust/new?error={markup}")
     assert "alert(1)" not in form and '<div class="aw-error"' not in form
+    # A known code shows its text and still nothing else from the URL; the
+    # trust type asked for in the URL is not selected.
+    status, _, form = site.get(
+        f"{site.www}/trust/new?error=create_failed&peer_url=https://evil.example/x"
+        "&trust_type=admin"
+    )
+    assert _shown(TRUST_FORM_MESSAGES["create_failed"]) in form
+    assert "evil.example" not in form
+    assert not re.search(r'<option[^>]*value="admin"[^>]*selected', form)
+    # A form's code means nothing to the list.
+    status, _, listing = site.get(f"{site.www}/trust?notice=create_failed")
+    assert 'class="aw-notice"' not in listing
     status, _, listing = site.get(f"{site.www}/trust?notice={markup}&error=x")
     assert status == 200
     assert "alert(1)" not in listing and 'class="aw-notice"' not in listing

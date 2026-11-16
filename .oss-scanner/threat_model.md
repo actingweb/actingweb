@@ -116,7 +116,7 @@ caller or followed through redirects.
 These are implementation-defined and in scope:
 
 - OAuth2 login for the actor's owner: `oauth2*.py`, `oauth_*`,
-  `handlers/oauth2_*.py`, `handlers/callback_oauth.py`. Checks: `state`,
+  `handlers/oauth2_*.py`. Checks: `state`,
   redirect URIs, ID-token validation, and that only verified emails link
   accounts.
 - The OAuth2 authorization server for MCP clients: `oauth2_server/`, dynamic

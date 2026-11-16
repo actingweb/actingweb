@@ -137,3 +137,15 @@ and position).
   on every drain is retried by each delivery and later callbacks queue behind
   it until the queue is full. A poll or a resync callback still recovers it.
   A bound on the attempts per queued callback, then the resync.
+- **A resync is not fenced against a diff in progress, and takes no care of
+  what is queued above it** (`CallbackProcessor._handle_resync[_sync]`;
+  verification `2026-11-16-3-16-pre-validation-fixes`, Issue 7). A diff's
+  handler that finishes after a resync landed writes its older sequence
+  over the resync's (`_finish_batch`, the sequence write is unconditional).
+  The resync clears the whole queue, a callback above its own sequence
+  included, and does not drain what is queued after the clear. Since 3.16 a
+  resume always sends a resync, so suspend, bulk write, resume, one more
+  write can leave a quiet subscription without the last write until later
+  traffic. Make the sequence write conditional on the claim still being
+  current; prune the queue through the resync's sequence instead of
+  clearing it, and drain after the resync records its sequence.

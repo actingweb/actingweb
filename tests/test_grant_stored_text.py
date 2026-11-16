@@ -234,6 +234,44 @@ class TestListDiffObjects:
         assert out is not None
         assert json.loads(out) == {"theme": "x", "list:notes": {"open": 2}}
 
+    @pytest.mark.parametrize(
+        "value",
+        ["hunter2", 1, None, [1, 2], {"a": 1}, DIFF],
+        ids=["text", "number", "null", "array", "object", "list diff"],
+    )
+    @pytest.mark.parametrize("pattern", ["profile/list:secret", "*/list:secret"])
+    def test_a_list_key_the_grant_excludes_by_its_path_is_not_sent(
+        self, actor, value, pattern
+    ) -> None:
+        """Verification 2026-11-16 (Issue 1): the key was filtered beneath
+        itself only, so a subscriber to one property was sent a ``list:<x>``
+        key the grant excludes by name; a direct read is not."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["*"],
+                    "operations": ["read"],
+                    "excluded_patterns": [pattern],
+                }
+            },
+        )
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "profile"},
+            json.dumps({"name": "x", "list:secret": value, "list:open": "v"}),
+            snapshot=grant,
+        )
+        assert out is not None
+        assert json.loads(out) == {"name": "x", "list:open": "v"}
+
     def test_an_excluded_list_is_still_dropped(self, actor) -> None:
         blob = {"list:secret": self.DIFF, "list:notes": self.DIFF}
         out = actor.filter_subscription_blob(

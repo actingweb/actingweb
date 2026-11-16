@@ -4375,11 +4375,15 @@ class Actor:
                 # (whole since 3.16, or ``{resource: value}``): kept whole
                 # except the parts the grant excludes, at their paths under
                 # the subtarget. A ``list:<name>`` key is a list, decided by
-                # its bare name.
+                # its bare name, and a key of this object, decided at its
+                # own path too: either exclusion keeps it back (a direct
+                # read answers the same for the second).
                 lists = {
                     k: v
                     for k, v in parsed.items()
-                    if k.startswith("list:") and self._may_read(snapshot, k[5:])
+                    if k.startswith("list:")
+                    and self._may_read(snapshot, k[5:])
+                    and self._may_read(snapshot, f"{subtarget}/{k}")
                 }
                 kept_value = self._diff_part(
                     rules,

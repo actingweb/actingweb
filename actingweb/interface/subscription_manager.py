@@ -1166,6 +1166,21 @@ class SubscriptionManager:
         }
         return AwProxy(peer_target=peer_target, config=config)
 
+    def _recorded_sequence(self, peer_id: str, subscription_id: str) -> int:
+        """The sequence this subscriber has recorded for a subscription it
+        holds, or 0."""
+        from ..subscription import Subscription
+
+        sub_obj = Subscription(
+            actor_id=self._core_actor.id,
+            peerid=peer_id,
+            subid=subscription_id,
+            callback=True,
+            config=self._core_actor.config,
+        )
+        recorded = (sub_obj.get() or {}).get("sequence", 0) if sub_obj.handle else 0
+        return recorded if isinstance(recorded, int) else 0
+
     def _tell_polled_baseline(
         self,
         peer_id: str,
@@ -1216,9 +1231,11 @@ class SubscriptionManager:
         when the poll rebuilt the replica from one (an owed rebuild, a
         resync marker, a diff that could not be applied, or diffs that were
         all applied already); the result's ``baseline`` is that value. Not
-        told: a quiet poll (nothing to fetch; with ``auto_storage`` it
-        refreshes the replica from a baseline, which is the state the hooks
-        already heard about), a baseline that was skipped (another
+        told: a quiet poll (nothing to fetch and the recorded sequence level
+        with the publisher's; with ``auto_storage`` it refreshes the replica
+        from a baseline, which is the state the hooks already heard about;
+        behind the publisher, as after a gap resync, the baseline is told),
+        a baseline that was skipped (another
         subscription covers the replica) or had an entry that failed to
         store, and a rebuild after a list diff the same poll told. A key the
         replica refuses (a reserved name) is in the baseline the hook gets.
@@ -1335,6 +1352,15 @@ class SubscriptionManager:
                 f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
+            # Behind the publisher with nothing retained to fetch (after a
+            # gap resync cleared the queue, say): the baseline is then the
+            # first the hooks hear of what changed. Level with it, the
+            # baseline is the state they already heard about.
+            behind = self._recorded_sequence(peer_id, subscription_id) < int(
+                response.get("sequence", 0) or 0
+            )
+            caught_up: Any = None
+
             # Fetch and transform baseline data
             transformed_data = self._fetch_and_transform_baseline(
                 peer_id=peer_id,
@@ -1368,13 +1394,15 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(
+                applied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
+                if behind and not applied.skipped and not applied.failed:
+                    caught_up = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -1401,9 +1429,12 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                # No baseline for the hooks: nothing was fetched because
-                # nothing changed, and this refresh is the replica they
-                # already heard about (owner, 2026-11-16).
+                # A baseline for the hooks only when the subscriber was
+                # behind; level with the publisher, this refresh is the
+                # replica they already heard about (owner, 2026-11-16).
+                baseline=caught_up,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case
@@ -2340,6 +2371,12 @@ class SubscriptionManager:
                 f"No diffs for subscription {subscription_id}, fetching baseline from target"
             )
 
+            # As the synchronous poll: told only when it was behind.
+            behind = self._recorded_sequence(peer_id, subscription_id) < int(
+                response.get("sequence", 0) or 0
+            )
+            caught_up: Any = None
+
             # Fetch and transform baseline data
             transformed_data = await self._fetch_and_transform_baseline_async(
                 peer_id=peer_id,
@@ -2373,13 +2410,15 @@ class SubscriptionManager:
                     validate_peer_id=False,
                 )
 
-                store.apply_resync_data(
+                applied = store.apply_resync_data(
                     transformed_data,
                     subtarget=sub.subtarget or None,
                     target=sub.target,
                     resource=sub.resource or None,
                 )
                 logger.info(f"Stored baseline for subscription {subscription_id}")
+                if behind and not applied.skipped and not applied.failed:
+                    caught_up = transformed_data
 
             # Update local subscription sequence after baseline sync
             final_seq = response.get("sequence", 0)
@@ -2406,9 +2445,12 @@ class SubscriptionManager:
                 diffs_fetched=0,
                 diffs_processed=1,  # Count baseline fetch as 1 processed item
                 final_sequence=response.get("sequence", 0),
-                # No baseline for the hooks: nothing was fetched because
-                # nothing changed, and this refresh is the replica they
-                # already heard about (owner, 2026-11-16).
+                # A baseline for the hooks only when the subscriber was
+                # behind; level with the publisher, this refresh is the
+                # replica they already heard about (owner, 2026-11-16).
+                baseline=caught_up,
+                target=sub.target,
+                subtarget=sub.subtarget or None,
             )
         elif diffs_fetched == 0:
             # Update local subscription sequence for no-diffs case

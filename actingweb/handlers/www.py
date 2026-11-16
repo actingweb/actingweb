@@ -53,21 +53,26 @@ TRUST_LIST_NOTICES = {
 
 def _same_peer_url(left: str, right: str) -> bool:
     """Whether two base URIs name one peer address: scheme and host compared
-    without case, a default port and a trailing slash ignored."""
+    without case, a default port and a trailing slash ignored. A URL with a
+    port that is not a number, with userinfo, a query or a fragment names no
+    peer address and matches nothing."""
     from urllib.parse import urlsplit
 
-    def key(url: str) -> tuple[str, str, int | None, str]:
+    def key(url: str) -> tuple[str, str, int | None, str] | None:
         parts = urlsplit(url.strip())
         scheme = parts.scheme.lower()
         try:
             port = parts.port
         except ValueError:
-            port = None
+            return None
+        if not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+            return None
         if port == {"http": 80, "https": 443}.get(scheme):
             port = None
-        return scheme, (parts.hostname or "").lower(), port, parts.path.rstrip("/")
+        return scheme, parts.hostname.lower(), port, parts.path.rstrip("/")
 
-    return bool(left) and bool(right) and key(left) == key(right)
+    left_key = key(left)
+    return left_key is not None and left_key == key(right)
 
 
 def trust_status_label(row: dict[str, Any], actor_id: str | None) -> str | None:
@@ -1149,10 +1154,17 @@ class WwwHandler(base_handler.BaseHandler):
             if new_trust:
                 # Success - redirect back to trust page
                 self.response.set_status(302, "Found")
+                # "Paired again" only when the row that came back is the one
+                # matched by URL: the library acts on the id the URL answers
+                # now, and another id means a new trust was made.
+                repaired = bool(existing) and (
+                    isinstance(new_trust, dict)
+                    and new_trust.get("peerid") == (existing or {}).get("peerid")
+                )
                 self.response.set_redirect(
                     self._www_path(
                         actor_id,
-                        "/trust?notice=trust_repaired" if existing else "/trust",
+                        "/trust?notice=trust_repaired" if repaired else "/trust",
                     )
                 )
             else:

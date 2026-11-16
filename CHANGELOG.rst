@@ -1369,8 +1369,10 @@ CHANGED
   data hooks heard nothing of it; they are now called once with the
   baseline, the sequence recorded and ``"resync"`` (the result's
   ``baseline``, ``target`` and ``subtarget`` carry the same). Not told: a
-  quiet poll (nothing to fetch: its refresh of the replica is the state the
-  hooks already heard about), a baseline that was skipped or had an entry
+  quiet poll (nothing to fetch and the recorded sequence level with the
+  publisher's: its refresh of the replica is the state the hooks already
+  heard about; a poll with nothing to fetch that was behind, as after a gap
+  resync, is told), a baseline that was skipped or had an entry
   that failed to store, a rebuild that did not settle, and a rebuild after
   a list diff the same poll already told. The legacy ``subscription``
   callback hook is not told by a poll, as before. **Check:** a data hook
@@ -2811,9 +2813,10 @@ FIXED
   changes. A key in that value whose name starts with ``list:`` passed
   whole once the bare name could be read, also when the grant excluded a
   path beneath it (``settings/list:notes/private``); a subscription to the
-  whole target and a direct read filtered it. Such a key now passes whole
-  only when its value is a list diff; anything else is filtered at its
-  path, as every other key is.
+  whole target and a direct read filtered it. Such a key is now sent only
+  when the grant lets the subscriber read it at its own path too, and
+  passes whole only when its value is a list diff; anything else loses what
+  the grant excludes beneath it, as every other key does.
 
 - **A queued callback could be lost when two deliveries wrote the queue at
   the same moment** (one adding, one removing what it had processed: the

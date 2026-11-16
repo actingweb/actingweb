@@ -2314,9 +2314,10 @@ whole value without ``resource``.
 baseline when a rebuild is owed, a resync marker is polled, a diff could not
 be applied, or everything fetched was applied already. A subscription data
 hook was told nothing; it is now called once with the baseline, the
-sequence recorded and ``"resync"``. A quiet poll (nothing to fetch) tells
-nothing: its refresh of the replica is the state the hook already heard
-about. Neither does a rebuild that did not settle, a baseline that was
+sequence recorded and ``"resync"``. A quiet poll (nothing to fetch, and the
+recorded sequence level with the publisher's) tells nothing: its refresh of
+the replica is the state the hook already heard about. A poll with nothing
+to fetch that was behind the publisher, as after a gap resync, is told. Neither does a rebuild that did not settle, a baseline that was
 skipped or partly stored, or a rebuild after a list diff the same poll
 already told. The legacy ``subscription`` callback hook is told on the
 callback path only, as before. *What to check:* a data hook can now receive

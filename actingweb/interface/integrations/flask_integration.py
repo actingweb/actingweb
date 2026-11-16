@@ -690,13 +690,20 @@ class FlaskIntegration(BaseActingWebIntegration):
                 )
                 del headers["Authorization"]
 
+        # A callback hands its hook the body's bytes (an anonymous webhook
+        # verifies a signature over them, 3.16): read and cache them before
+        # the form parse, which would otherwise consume a form-encoded body.
+        raw_callback_body = (
+            request.get_data(cache=True) if "/callbacks/" in request.path else b""
+        )
+
         params = {}
         for k, v in request.values.items():
             params[k] = v
 
         # Handle form data: Flask parses form-encoded bodies into request.form,
         # leaving request.data empty. Reconstruct the form-encoded body for OAuth2 handlers.
-        data = request.data
+        data = raw_callback_body or request.data
         if not data and request.form:
             from urllib.parse import urlencode
 

@@ -35,7 +35,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"p\": {\"k\": {\"j\": 5, \"new\": 6}}}",
+         "data": "{\"p\": {\"k\": {\"j\": 5, \"i\": 1, \"new\": 6}, \"keep\": 2}}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         }
@@ -156,9 +156,11 @@
        "scalars": {
         "p": {
          "k": {
+          "i": 1,
           "j": 5,
           "new": 6
-         }
+         },
+         "keep": 2
         }
        }
       },
@@ -204,9 +206,11 @@
          "data": {
           "p": {
            "k": {
+            "i": 1,
             "j": 5,
             "new": 6
-           }
+           },
+           "keep": 2
           }
          },
          "event": "subscription_data",
@@ -225,9 +229,11 @@
         "data": {
          "p": {
           "k": {
+           "i": 1,
            "j": 5,
            "new": 6
-          }
+          },
+          "keep": 2
          }
         },
         "granularity": "high",
@@ -235,7 +241,7 @@
         "sequence": 2,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -290,12 +296,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"p\": {\"k\": {\"j\": 5, \"new\": 6}}}",
+         "data": "{\"p\": {\"k\": {\"j\": 5, \"i\": 1, \"new\": 6}, \"keep\": 2}}",
          "sequence": 2,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"p\": {\"k\": {\"j\": 7, \"i\": 1, \"new\": 6}}}",
+         "data": "{\"p\": {\"k\": {\"j\": 7, \"i\": 1, \"new\": 6}, \"keep\": 2}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -419,7 +425,8 @@
           "i": 1,
           "j": 7,
           "new": 6
-         }
+         },
+         "keep": 2
         }
        }
       },
@@ -468,7 +475,8 @@
             "i": 1,
             "j": 7,
             "new": 6
-           }
+           },
+           "keep": 2
           }
          },
          "event": "subscription_data",
@@ -490,7 +498,8 @@
            "i": 1,
            "j": 7,
            "new": 6
-          }
+          },
+          "keep": 2
          }
         },
         "granularity": "high",
@@ -498,7 +507,7 @@
         "sequence": 3,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

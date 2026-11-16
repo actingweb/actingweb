@@ -53,7 +53,7 @@ Example:
 Callback Hooks
 ==============
 
-Decorator: ``app.callback_hook(name: str = "*")``
+Decorator: ``app.callback_hook(name: str = "*", *, allow_anonymous: bool = False)``
 
 Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 
@@ -65,6 +65,74 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
   ``subscriptions``, ``www`` and any ``resource_*``) answer 403 on a direct
   ``/callbacks/<name>`` request, so their hooks only receive data the
   library built (the web UI still dispatches ``www``)
+- An authenticated request to a name **no hook is registered for** (and no
+  ``"*"`` hook) answers 403 (3.16; it answered 200 with ``false``). A hook
+  that ran and returned ``False`` or ``None`` keeps its answer (200 with
+  ``false``): only "nothing registered" changed
+- ``data`` holds the JSON object the body carried (an empty dict for any
+  other body; a JSON array raised before 3.16), ``method``, and
+  ``anonymous`` (``False`` for an authenticated request)
+
+Anonymous webhooks (``allow_anonymous``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A third party's webhook (a payment or SMS provider) cannot send an actor's
+credentials. Registering the hook with ``allow_anonymous=True`` (3.16) lets a
+``POST /<actor_id>/callbacks/<name>`` without credentials reach it:
+
+- **Admitted:** a ``POST`` that arrived as a ``POST`` (no ``_method``
+  override on either side), with no ``Authorization`` header, to exactly the
+  name the hook was registered under. Only the hooks registered for that
+  name with the flag run, never the ``"*"`` hooks, and no access row is
+  consulted (there is no caller to authorise). An unknown actor answers 404,
+  as before.
+- **Refused:** ``GET``, ``PUT`` and ``DELETE`` without credentials, a
+  ``_method`` override, an unflagged name, and the subscription and
+  permission callback paths all answer 401 as before. A request that carries
+  credentials is authenticated as today (a bearer that matches nobody is
+  403) and its hook is given ``anonymous: False``. Registering the flag for
+  ``"*"`` or a library name raises ``ValueError``.
+- **What the hook is given:** ``data["anonymous"]`` is ``True``,
+  ``data["headers"]`` the request's headers, ``data["raw_body"]`` the body's
+  bytes, and the parsed JSON object when the body is one (a form-encoded
+  body leaves the parsed part empty; ``raw_body`` is the bytes as sent on
+  both integrations). A body over 1 MB answers 413 before the hook runs (by
+  its ``Content-Length`` first); the integration has read the body by then,
+  so a deployment that must bound memory sets a request size limit in front
+  of the application as well.
+- **The answer:** the hook's result as JSON with 200 when it returns a
+  truthy value; 403 when it returns ``False`` or ``None`` or raises (the
+  registry logs the exception), so a provider that retries on a non-2xx
+  retries, and a forger learns nothing.
+- **The hook authenticates its caller, on every request.** There is no peer
+  and no creator behind an anonymous request, and an authenticated request
+  may come from a peer of any relationship (the ``any`` row admits
+  ``/callbacks``), so a hook that acts on a provider's event verifies the
+  provider's signature over ``raw_body`` or a shared secret in a header, in
+  constant time, whatever ``data["anonymous"]`` says, and returns ``False``
+  otherwise. ``headers`` and ``raw_body`` always come from the request
+  itself, on both paths, so a body cannot supply its own; ``headers``
+  leaves out the caller's ``Authorization`` and ``Cookie``.
+- **A provider that sends its own ``Authorization`` header** (Basic
+  credentials in the webhook URL, a bearer token) is authenticated as an
+  actor caller, and refused (403), so it cannot use the flag: point it at
+  an application route.
+
+.. code-block:: python
+
+    import hashlib
+    import hmac
+    import os
+
+    @app.callback_hook("payment_webhook", allow_anonymous=True)
+    def payment_webhook(actor, name, data):
+        secret = os.environ["PAYMENT_WEBHOOK_SECRET"].encode()
+        headers = {k.lower(): v for k, v in (data.get("headers") or {}).items()}
+        expected = hmac.new(secret, data.get("raw_body") or b"", hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(headers.get("x-signature", ""), expected):
+            return False  # 403
+        # ... act on the verified event ...
+        return {"status": "processed"}
 
 Template Rendering for WWW Hooks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -85,7 +153,7 @@ The special ``www`` callback hook can render custom templates by returning a dic
                 },
             }
 
-        return False  # Fall through to default handling
+        return False  # Not handled: the page answers 404 (3.16)
 
 The template will receive:
 
@@ -93,6 +161,11 @@ The template will receive:
 - Custom data from the ``data`` dict in the return value
 
 This allows applications to add custom web UI pages without modifying the core library.
+
+A template dict renders on a ``GET`` only; on a ``POST``, and without
+``template``, a dict is answered as JSON. ``False`` or ``None`` answers 404
+(3.16). Any other result, a string included, is answered as the text
+``True``: return a template dict to show a page.
 
 Application Callback Hooks
 ==========================
@@ -144,6 +217,23 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   by ``"list" in value``: a property's value may carry those keys. The
   legacy ``callback_hook("subscription")`` receives the same diff in its
   ``data["data"]``.
+- A delete (3.16, specification 1.5) is ``""`` at the subscribed level:
+  ``{"name": ""}`` for a whole-target subscription, ``""`` for one to the
+  name or to a resource that went with its parent. A clear is one call with
+  every deleted name. A nested write gives a subscription above the resource
+  the parent's whole value. Treat ``""`` as absent.
+- The hook also runs for each change the library's poll applies (the gap
+  resync's poll included, 3.16; it ran for none), once per sequence, with
+  ``callback_type`` ``"diff"`` or ``"resync"``. ``data`` never carries a
+  ``timestamp`` key the publisher did not send.
+- After a resync the replica no longer holds what the baseline lacks; the
+  hook gets the baseline, not the names removed.
+- A callback that arrives while a rebuild of the replica is owed (after a
+  resync whose fetch failed) runs the rebuild instead of being applied.
+  When the rebuild settles, the hook, and the legacy ``subscription``
+  callback hook, is told the baseline once with ``"resync"`` (3.16): the
+  callback's change is in it. A rebuild that does not settle tells no hook;
+  the callback answers 503 and is told when it is sent again.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

@@ -593,9 +593,9 @@ class AuthenticatedPropertyListStore:
         A name that collides with a `PropertyListStore` METHOD raises
         `AttributeError` rather than resolving either way. Both readings
         are wrong and one is dangerous: treating it as a list name
-        permission-checks a method name -- which passes, because an
-        unmatched target evaluates to `NOT_FOUND` and only `DENIED`
-        raises -- and returns a view wrapping a bound method, which raises
+        permission-checks a method name -- which the shared decision may
+        allow (a grant that does not mention properties leaves a name to the
+        access table) -- and returns a view wrapping a bound method, which raises
         `TypeError` when called; while "resolve it to the store's method"
         would hand a permission-scoped accessor the UNAUTHENTICATED
         store's `list_all_with_rows()`, turning a `TypeError` into a full
@@ -624,9 +624,12 @@ class AuthenticatedPropertyListStore:
         `handlers/properties.py`: *"On error, exclude all list properties
         for security"*. Drop-all, never partial.
 
-        `NOT_FOUND` counts as permitted, matching `_check_permission()`
-        above (which denies only on `DENIED`) and the REST `listall()`
-        handler. One bulk call, not one per name.
+        A name is permitted as the shared decision answers it (3.16, default
+        deny): a rule the grant states that does not match denies, and a name
+        a grant that does not mention properties leaves undecided follows the
+        access table for a peer and is refused for a client, as in
+        `_check_permission()` and the REST `listall()` handler. One bulk
+        call, not one per name.
 
         No denied name is ever returned, raised or logged from here. In
         the single-list path a name in an error message came from the

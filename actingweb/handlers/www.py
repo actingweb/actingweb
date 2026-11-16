@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Any
 
+from actingweb.actor import previous_kw
 from actingweb.db import get_property
 from actingweb.handlers import base_handler
 from actingweb.property_list import (
@@ -500,9 +501,17 @@ class WwwHandler(base_handler.BaseHandler):
                 elif lookup and myself.property:
                     # This is a regular property
                     myself.property[prop_name] = None
-                    # Register diff for subscription callbacks
+                    # Register diff for subscription callbacks: the encoded
+                    # ``""`` every writer sends for a delete (3.16)
                     myself.register_diffs(
-                        target="properties", subtarget=prop_name, blob=""
+                        target="properties",
+                        subtarget=prop_name,
+                        blob=json.dumps(""),
+                        **previous_kw(
+                            myself.previous_for_resource_subscribers(
+                                "properties", prop_name, lambda: lookup
+                            )
+                        ),
                     )
                     deleted = True
 
@@ -838,15 +847,17 @@ class WwwHandler(base_handler.BaseHandler):
                 "default_relationship": self.config.default_relationship,
             }
             return
-        # Execute callback hook for custom web paths
+        # Execute callback hook for custom web paths. A path no ``www`` hook
+        # is registered for, or one the hook does not handle (it returns
+        # ``False`` or ``None``), is 404 (3.16; it answered 200 "False").
         output = None
-        if self.hooks:
+        if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
                     "www", actor_interface, {"path": path, "method": "GET"}
                 )
-                if hook_result is not None:
+                if hook_result is not None and hook_result is not False:
                     # Check if hook wants to render a template
                     if isinstance(hook_result, dict) and "template" in hook_result:
                         # Hook returned template rendering request
@@ -1607,6 +1618,11 @@ class WwwHandler(base_handler.BaseHandler):
                             500, "PropertyStore is not initialized"
                         )
                         return
+                    previous = myself.previous_for_resource_subscribers(
+                        "properties",
+                        property_name,
+                        lambda: myself.property[property_name],
+                    )
                     myself.property[property_name] = final_value
                     # 3.16: as the REST PUT registers it (nothing was sent).
                     myself.register_diffs(
@@ -1615,6 +1631,7 @@ class WwwHandler(base_handler.BaseHandler):
                         blob=final_value
                         if isinstance(final_value, str)
                         else json.dumps(final_value),
+                        **previous_kw(previous),
                     )
 
                 else:
@@ -1655,15 +1672,16 @@ class WwwHandler(base_handler.BaseHandler):
                 self.response.set_status(500, f"Error processing property: {str(e)}")
                 return
 
-        # Handle other POST operations or custom web paths
+        # Handle other POST operations or custom web paths (404 when no
+        # ``www`` hook is registered or it does not handle the path, 3.16)
         output = None
-        if self.hooks:
+        if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
                 hook_result = self.hooks.execute_callback_hooks(
                     "www", actor_interface, {"path": path, "method": "POST"}
                 )
-                if hook_result is not None:
+                if hook_result is not None and hook_result is not False:
                     if isinstance(hook_result, str):
                         output = hook_result  # type: ignore[unreachable]
                     elif isinstance(hook_result, dict):

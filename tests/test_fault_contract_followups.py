@@ -156,7 +156,7 @@ class TestResyncRecord:
         assert actor.suspend_subscriptions("properties")
         sent: list[str] = []
 
-        def resync(self: Any, sub: dict[str, Any], _sub: Any = None) -> bool:
+        def resync(self: Any, sub: dict[str, Any], _sub: Any = None, **_: Any) -> bool:
             sent.append(str(sub.get("peerid")))
             return sub.get("peerid") != "p1"  # p1's resync fails over HTTP
 
@@ -184,7 +184,7 @@ class TestResyncRecord:
         with patch.object(
             type(actor),
             "_callback_subscription_resync",
-            lambda _s, sub, *_a: sub.get("peerid") != "p1",
+            lambda _s, sub, *_a, **_k: sub.get("peerid") != "p1",
         ):
             actor.resume_subscriptions("properties")  # p1 missed: recorded
         assert actor.suspend_subscriptions("properties")  # a second import
@@ -192,7 +192,7 @@ class TestResyncRecord:
         with patch.object(
             type(actor),
             "_callback_subscription_resync",
-            lambda _s, sub, *_a: sent.append(str(sub.get("peerid"))) or True,
+            lambda _s, sub, *_a, **_k: sent.append(str(sub.get("peerid"))) or True,
         ):
             assert actor.resume_subscriptions("properties") == 2
         assert sorted(sent) == ["p0", "p1"]
@@ -219,7 +219,7 @@ class TestResyncRecord:
         with patch.object(
             type(actor),
             "_callback_subscription_resync",
-            lambda _s, sub, *_a: seen.append(str(sub.get("peerid"))) or True,
+            lambda _s, sub, *_a, **_k: seen.append(str(sub.get("peerid"))) or True,
         ):
             later.resume_subscriptions("properties")
         assert seen == ["p1"]
@@ -296,7 +296,7 @@ class TestResyncRecordKeysByPeer:
         with patch.object(
             type(actor),
             "_callback_subscription_resync",
-            lambda _s, sub, *_a: sub.get("peerid") != "pa",
+            lambda _s, sub, *_a, **_k: sub.get("peerid") != "pa",
         ):
             actor.resume_subscriptions("properties")
         assert actor._resync_pending("properties", None) == ["pa:same"]
@@ -305,7 +305,7 @@ class TestResyncRecordKeysByPeer:
         with patch.object(
             type(actor),
             "_callback_subscription_resync",
-            lambda _s, sub, *_a: sent.append(str(sub.get("peerid"))) or True,
+            lambda _s, sub, *_a, **_k: sent.append(str(sub.get("peerid"))) or True,
         ):
             later.resume_subscriptions("properties")
         assert sent == ["pa"]

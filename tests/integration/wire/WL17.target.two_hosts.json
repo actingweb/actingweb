@@ -483,7 +483,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 3
+        "version": 5
        }
       ],
       "peer_permissions": {
@@ -589,20 +589,20 @@
       {
        "auth": "bearer:trust:A-B",
        "children": [],
-       "headers": {},
+       "headers": {
+        "content-type": "application/json"
+       },
        "host": "wire_app",
        "method": "GET",
-       "path": "/<A>/properties/notes",
+       "path": "/<A>/properties",
        "query": "",
        "request": null,
-       "response": null,
-       "status": 404
+       "response": {},
+       "status": 200
       },
       {
        "actor": "<B>",
-       "data": {
-        "notes": ""
-       },
+       "data": {},
        "event": "subscription_data",
        "peer": "<A>",
        "sequence": 3,
@@ -622,7 +622,7 @@
       "subscriptionid": "<sub1>",
       "subtarget": "notes",
       "target": "properties",
-      "timestamp": "<ts:iso-offset>",
+      "timestamp": "<ts:iso-z>",
       "type": "resync",
       "url": "http://<wire_app>/<A>/properties/notes"
      },

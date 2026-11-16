@@ -422,9 +422,10 @@ class TestSyncSubscriptionBaselineFetch:
         ("target", "resource"), [("properties", "street"), ("resources", "")]
     )
     def test_an_empty_answer_elsewhere_is_still_a_success(self, target, resource):
-        """Only a single property's baseline fails the sync: a resource-level
-        or another target's empty answer stores nothing and succeeds, as
-        before (advisor on iteration 28)."""
+        """A resource-level or another target's empty answer stores nothing
+        and succeeds (advisor on iteration 28). Since 3.16 (spec-1-5 Phase 3)
+        an empty answer is ``{}`` and ``None`` is a failed fetch at every
+        level."""
         actor = FakeCoreActor()
         actor._subscriptions[("peer_1", "sub_1", True)] = {
             "peerid": "peer_1",
@@ -442,7 +443,7 @@ class TestSyncSubscriptionBaselineFetch:
         proxy.get_resource.return_value = {"sequence": 5, "data": []}
         with (
             patch.object(manager, "_get_peer_proxy", return_value=proxy),
-            patch.object(manager, "_fetch_and_transform_baseline", return_value=None),
+            patch.object(manager, "_fetch_and_transform_baseline", return_value={}),
             patch("actingweb.remote_storage.RemotePeerStore"),
             patch("actingweb.subscription.Subscription"),
         ):

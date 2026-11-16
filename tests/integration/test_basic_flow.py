@@ -131,7 +131,7 @@ class TestBasicActorFlow:
         # Check for either old or new format
         if "aw_version" in meta:
             # Old format - verify version value
-            assert meta["aw_version"] in [1.0, "1.0"]
+            assert meta["aw_version"] == "1.5"
         elif "actingweb" in meta:
             # New format
             assert "version" in meta["actingweb"]
@@ -147,7 +147,7 @@ class TestBasicActorFlow:
         assert response.status_code in [200, 404]
         if response.status_code == 200:
             # Response text should be version number
-            assert response.text in ["1.0", '"1.0"']
+            assert response.text == "1.5"
 
     def test_010_create_properties_form_data(self, http_client):
         """

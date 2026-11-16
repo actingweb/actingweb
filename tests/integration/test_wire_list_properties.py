@@ -444,3 +444,40 @@ def test_wl17_target(wire_pair, topology):
         lambda: a.interface().subscriptions.resume("properties", LIST),
     )
     check("WL17.target", s.recording(), variant=topology)
+
+
+# ---------------------------------------------------------------------------
+# spec-1-5, Phase 1: list items addressed by path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+@pytest.mark.parametrize("level", LEVELS)
+def test_wl30(wire_pair, level, topology):
+    """WL30: ``GET``, ``PUT`` and ``DELETE /properties/notes/<n>``; each write
+    registers the diff of the form it copies (``?index=N`` for the PUTs,
+    ``/items`` delete for the DELETE)."""
+    s = _pair(wire_pair, topology, level)
+    _seed_list(s)
+    a = s.publisher
+    s.step(
+        "get item 1",
+        lambda: requests.get(f"{a.url}/properties/{LIST}/1", auth=a.basic),
+    )
+    s.step(
+        "put item 0",
+        lambda: requests.put(
+            f"{a.url}/properties/{LIST}/0", json={"id": "a", "v": 5}, auth=a.basic
+        ),
+    )
+    s.step(
+        "put at the length",
+        lambda: requests.put(
+            f"{a.url}/properties/{LIST}/2", json={"id": "c", "v": 6}, auth=a.basic
+        ),
+    )
+    s.step(
+        "delete item 1",
+        lambda: requests.delete(f"{a.url}/properties/{LIST}/1", auth=a.basic),
+    )
+    check(f"WL30.{level}", s.recording(), variant=topology)

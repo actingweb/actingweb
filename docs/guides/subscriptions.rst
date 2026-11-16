@@ -76,66 +76,60 @@ and every call of the trust methods that can send a request to the peer. An inst
 requests does not see subscriptions created elsewhere; the actors the
 library hands to hooks and handlers are built per request.
 
-Callback Modes
---------------
+Callback Delivery
+-----------------
 
-By default, subscription callbacks are sent asynchronously (fire-and-forget) to avoid blocking the caller. This works well for traditional server deployments but can cause issues in serverless environments.
+Since 3.16 one sender delivers every subscriber's callback for a write
+(``actingweb.callback_sender``):
 
-**Synchronous Callbacks (Lambda/Serverless)**
+- **Concurrently, with a bound per write.** Subscribers on other hosts are
+  sent at most ``max_concurrent_callbacks`` at a time (default 4). Each
+  subscription's own sequence orders its diffs, so overlapping sends are safe.
+- **Subscribers on the publisher's own host one at a time**
+  (``serialize_own_host_callbacks``, default on): such a subscriber needs a
+  handler of the same process to answer, and a low-granularity one a second
+  for its fetch back. The two groups run alongside each other, so a write
+  waits for the longer of them, not the sum. A subscriber is on the own host
+  when its trust's base URI has the publisher's origin (scheme, host, port).
+- **Two ordered callbacks to one subscriber** (the clear and the state of the
+  fallback for a peer without resync) arrive in order.
+- **Timeouts:** 5 s to connect and 10 s to read for a diff, 30 s to read for
+  a resync.
 
-In Lambda/serverless environments, async tasks may be lost when the function freezes after returning a response. Enable synchronous callbacks to ensure delivery:
-
-.. code-block:: python
-
-   from actingweb.interface import ActingWebApp
-
-   app = ActingWebApp(...).with_sync_callbacks(enable=True)
-
-This makes **all subscription callbacks** (both diff and resync) use blocking HTTP requests, guaranteeing delivery at the cost of slightly longer response times.
-
-**Why Lambda Requires Sync Callbacks:**
-
-- Lambda freezes execution after returning a response
-- Async fire-and-forget callbacks are terminated before completion
-- Sync callbacks block until delivery is confirmed
-- Both diff callbacks and resync callbacks respect this configuration
-
-**Local Development Warning:**
-
-Do **NOT** use ``with_sync_callbacks()`` in local/container deployments:
-
-- Default async behavior prevents blocking and self-deadlock
-- Async mode allows both actors on the same server to communicate without blocking
-- Sync mode can cause 30+ second blocking when both actors are on the same server
-- Callbacks complete in the background after the response is returned
-
-**When to Use Each Mode:**
+Where the write waits:
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 35 65
 
-   * - Environment
-     - Callback Mode
-     - Reason
-   * - Traditional Server (Flask/FastAPI)
-     - Async (default)
-     - Background tasks persist after response
-   * - AWS Lambda
-     - Sync (``with_sync_callbacks()``)
-     - Function freezes after response
-   * - Google Cloud Functions
-     - Sync (``with_sync_callbacks()``)
-     - Function freezes after response
-   * - Azure Functions
-     - Sync (``with_sync_callbacks()``)
-     - Function freezes after response
-   * - Kubernetes/Docker
-     - Async (default)
-     - Background tasks persist after response
-   * - Local Development
-     - Async (default)
-     - Prevents blocking and self-deadlock
+   * - Where the write runs
+     - What the sender does
+   * - Off the event loop (Flask, FastAPI's sync handlers, the SDK in a
+       thread), or ``with_sync_callbacks()``
+     - The write returns when every send has answered or timed out (or the
+       delivery budget ran out). A resync that was not delivered (refused,
+       timed out, a 503 from a subscriber that could not fetch its baseline)
+       is recorded and sent again on the next resume.
+   * - On a running event loop without ``with_sync_callbacks()``
+     - The sends are tasks the library keeps a reference to until done, not
+       awaited; the write returns at once. On a function platform the
+       instance may freeze before they finish, which is why that shape sets
+       ``with_sync_callbacks()``.
+
+``with_sync_callbacks()`` on a running loop blocks the loop while the sends
+run: it is for handlers that run off the loop.
+
+**The delivery budget** (``callback_delivery_budget_seconds``, off by
+default) gives one request a total time for delivering its callbacks (every
+write in it shares the deadline): each
+send's timeouts are clipped to what is left, and a send that would start with
+nothing left is not made. Every diff was stored and numbered before any send,
+so a subscriber that was skipped sees the gap at its next callback, or polls.
+Set it under a gateway's response limit, not as a tuning knob. See
+:doc:`../quickstart/deployment` for the two deployment shapes.
+
+Callback sends no longer set ``Actor.last_response_code`` (3.16); trust and
+peer calls still do.
 
 ========================
 Subscription Processing
@@ -215,7 +209,24 @@ The ``with_subscription_processing()`` method accepts these parameters:
      - Seconds before a sequence gap triggers resync
    * - ``max_pending``
      - ``100``
-     - Maximum pending callbacks before back-pressure
+     - Maximum pending callbacks before a callback is refused
+   * - ``max_concurrent_callbacks``
+     - ``4``
+     - Callbacks of one write sent at once to subscribers on other hosts
+       (read since 3.16; it was 10 and read by nothing)
+   * - ``callback_delivery_budget_seconds``
+     - ``None``
+     - Total time one request may spend delivering its callbacks; off unless
+       set (see "Callback Delivery")
+   * - ``serialize_own_host_callbacks``
+     - ``True``
+     - Send subscribers on the publisher's own host one at a time; turn off
+       only for one request per function instance
+
+``max_payload_for_high_granularity``, ``circuit_breaker_threshold`` and
+``circuit_breaker_cooldown`` were removed in 3.16 (they configured
+``FanOutManager``, which was never on the publish path): passing one raises
+``RuntimeError`` naming :doc:`../migration/v3.16`.
 
 Subscription Data Hooks
 -----------------------
@@ -278,7 +289,7 @@ Regular incremental updates containing only changed data:
      "sequence": 42,
      "target": "properties",
      "data": {"status": "active"},
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 **Resync Callbacks** (``callback_type="resync"``):
@@ -312,7 +323,7 @@ Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
      "target": "properties",
      "type": "resync",
      "url": "https://example.com/actor123/properties",
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 **Low-Granularity Fallback:**
@@ -328,10 +339,70 @@ When a peer doesn't support the ``subscriptionresync`` option (per ActingWeb pro
      "target": "properties",
      "granularity": "low",
      "url": "https://example.com/actor123/subscriptions/sub456/43",
-     "timestamp": "2026-01-20T12:00:00Z"
+     "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
 Note: No ``type`` field, and ``url`` points to the subscription diff endpoint. The receiver fetches the data from the URL automatically.
+
+What a Subscriber Is Told
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Since 3.16 (specification 1.5) every writer, the REST handlers, the web UI
+and ``actor.properties``, registers the same diffs:
+
+- **A delete is ``""``** at the level that was deleted, and ``{name: ""}``
+  above it. A subscription to the deleted name itself receives ``""`` with a
+  sequence number (a REST delete reached it with nothing before). A
+  subscription to a resource (``name/key``) receives ``""`` when its key went
+  with its parent: the parent was deleted, or overwritten by a value without
+  the key. It receives nothing when the key never existed. A data hook reads
+  ``""`` as "absent"; a stored empty string cannot be told from a delete.
+- **A nested write sends the parent's whole stored value** to a subscription
+  above the resource (``{name: whole}`` at target level): a receiver applies
+  a target- or subtarget-level value whole, so the partial ``{name: {key:
+  value}}`` sent before 3.16 dropped the parent's other keys from replicas.
+  A resource subscription still receives its resource.
+- **A diff carries the value stored after the property hooks**, not the
+  request body.
+- **A clear** (``DELETE /properties``, ``actor.properties.clear()``) is one
+  diff naming every deleted property (``{"a": "", "b": ""}``), one sequence
+  number and one callback per subscriber. Lists are not cleared and are not
+  in it.
+- **The timestamp** of every callback, resync callback and poll is ISO 8601
+  in UTC with ``Z`` and microseconds (``2026-01-20T12:00:00.000000Z``);
+  callbacks sent ``str()`` of the stored time and resync callbacks an offset.
+- **A ``none`` subscription** is sent no resync callback on resume: the
+  resync waits in its queue as a diff of ``"type": "resync"``, and the
+  library's poll (``sync_subscription``) acts on it as a resync: it rebuilds
+  the replica from the URL and clears the queue through it. A failed fetch
+  leaves the marker queued and the rebuild owed.
+- **The poll runs the data hooks** for each change it applies, as a pushed
+  callback does, when it is given the application's configuration; the
+  library's gap resync is. The triggering callback of a gap resync is
+  applied when the poll did not bring its sequence.
+
+What the receiver answers and does:
+
+- **A resync is fetched at the stored subscription's level**, whatever the
+  callback body names, and afterwards the replica no longer holds what the
+  baseline lacks (whole target: every name it does not carry; a subtarget:
+  that name). The sweep lists the replica, so it runs at most once a minute
+  per subscription; a resync inside that minute is applied without it and
+  leaves the rebuild owed, which the next callback or sync runs once the
+  minute has passed. The data hook gets the baseline; it is not told name by
+  name what the sweep removed.
+- **A resync whose fetch fails answers 503** with ``Retry-After``, records no
+  sequence and marks the rebuild owed. The next callback runs the owed
+  rebuild once it is due, whatever its sequence; a publisher on 3.16 sends
+  the resync again on its next resume. A gone resource (404) is an empty
+  value, not a failure.
+- **A callback with ``data`` and no integer ``sequence`` answers 400**, as a
+  low-granularity one without a sequence does (it was taken as a duplicate).
+- **``PUT /subscriptions/<peer>/<id>`` with ``{"sequence": 0}``** answers 204
+  and clears nothing; ``{"sequence": n}`` clears through ``n``.
+- **A granularity other than ``high``, ``low`` or ``none``** answers 400 at
+  the publisher, and ``create_remote_subscription`` refuses it before
+  sending anything.
 
 Peer Capability Discovery
 -------------------------
@@ -353,8 +424,8 @@ Check what features a peer supports before using optional protocol features:
        # Peer accepts compressed payloads
        pass
 
-   if caps.supports_batch_subscriptions():
-       # Peer supports batch subscription creation
+   if caps.supports("permissionquery"):
+       # Peer answers GET /{actor_id}/permissions/{peer_id}
        pass
 
    # Get all supported options
@@ -666,42 +737,6 @@ list with subscribers, prefer suspending the ``properties`` target first
 (``suspend()`` above), performing the ``_where`` call, then ``resume()``
 -- one resync callback instead of *k* individual diff deliveries.
 
-Fan-Out Manager
----------------
-
-For advanced use cases, control callback delivery with circuit breakers.
-``deliver()`` sends the payload as given to every subscriber; it does not
-apply grants (the library's own diff and resync paths filter property data
-per peer first). Send only what every subscriber of the target may read.
-
-.. code-block:: python
-
-   from actingweb.fanout import FanOutManager, FanOutResult
-
-   manager = FanOutManager(
-       actor=actor,
-       max_concurrent=5,      # Parallel deliveries
-       default_timeout=30.0,  # Request timeout
-   )
-
-   # Deliver to all subscribers
-   result: FanOutResult = await manager.deliver(
-       target="properties",
-       data={"status": "changed"},
-   )
-
-   print(f"Delivered to {result.success_count}/{result.total_count}")
-   for failure in result.failures:
-       print(f"Failed: {failure.peer_id} - {failure.error}")
-
-   # Check circuit breaker status
-   status = manager.get_circuit_breaker_status("peer123")
-   if status == "OPEN":
-       print("Peer is unavailable, requests will be skipped")
-
-   # Reset circuit breaker
-   manager.reset_circuit_breaker("peer123")
-
 Advanced: Component-Level Usage
 -------------------------------
 
@@ -838,27 +873,25 @@ When processing subscription callbacks, the library returns these HTTP status co
    * - Code
      - Status
      - Description
-   * - 201
-     - Created
-     - Callback processed successfully
-   * - 200
-     - OK
-     - Duplicate callback (already processed this sequence)
-   * - 202
-     - Accepted
-     - Callback queued as pending (gap detected, waiting for missing sequences)
-   * - 429
-     - Too Many Requests
-     - Back-pressure: pending queue full (``max_pending`` exceeded)
-   * - 401
-     - Unauthorized
-     - Invalid or missing trust token
-   * - 403
-     - Forbidden
-     - Trust relationship not approved or deleted
+   * - 204
+     - No Content
+     - Processed, a duplicate of a sequence already applied, or held behind
+       a gap (pending)
+   * - 503
+     - Service Unavailable
+     - With ``Retry-After``: another delivery of the sequence is in progress,
+       a resync's baseline could not be fetched, or the store faulted. Send
+       again later
    * - 400
      - Bad Request
-     - Malformed callback payload
+     - Malformed (data without an integer ``sequence``, an unknown type), or
+       refused (the pending queue is full, ``max_pending``)
+   * - 401
+     - Unauthorized
+     - No credentials
+   * - 403
+     - Forbidden
+     - Credentials of another peer, or a trust not approved
 
 ProcessResult Enum
 ~~~~~~~~~~~~~~~~~~
@@ -909,45 +942,6 @@ When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``
        # max_pending limit reached (back-pressure)
        # Publisher should slow down or retry later
        pass
-
-Circuit Breaker States
-~~~~~~~~~~~~~~~~~~~~~~
-
-The ``FanOutManager`` uses circuit breakers to protect against failing peers:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 80
-
-   * - State
-     - Behavior
-   * - ``CLOSED``
-     - Normal operation - requests are sent to the peer
-   * - ``OPEN``
-     - Peer is unavailable - requests are skipped (fast-fail)
-   * - ``HALF_OPEN``
-     - Testing recovery - one request allowed to check peer status
-
-**Circuit breaker triggers:**
-
-- Opens after consecutive failures (default: 5)
-- Stays open for a cooldown period (default: 60 seconds)
-- Transitions to HALF_OPEN after cooldown
-- Closes again on successful delivery
-
-.. code-block:: python
-
-   from actingweb.fanout import FanOutManager
-
-   manager = FanOutManager(actor)
-
-   # Check status
-   status = manager.get_circuit_breaker_status(peer_id)
-   print(f"Circuit breaker for {peer_id}: {status}")
-
-   # Manual reset (e.g., after fixing connectivity)
-   if status == "OPEN":
-       manager.reset_circuit_breaker(peer_id)
 
 Performance Tuning
 ------------------
@@ -1010,78 +1004,48 @@ The ``max_pending`` parameter limits how many out-of-order callbacks are queued:
 
 **Memory usage**: Each pending callback uses approximately 1-5KB depending on payload size.
 
-FanOutManager Tuning
-~~~~~~~~~~~~~~~~~~~~
+Callback Delivery Tuning
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 For publishers with many subscribers:
 
 .. code-block:: python
 
-   from actingweb.fanout import FanOutManager
-
-   manager = FanOutManager(
-       actor=actor,
-       max_concurrent=10,     # Parallel deliveries (default: 5)
-       default_timeout=45.0,  # Per-request timeout (default: 30s)
-       failure_threshold=3,   # Opens circuit after N failures (default: 5)
-       recovery_timeout=30.0, # Cooldown before testing (default: 60s)
+   app.with_callback_delivery(
+       max_concurrent_callbacks=4,             # per write, other hosts
+       serialize_own_host_callbacks=True,      # own host one at a time
+       callback_delivery_budget_seconds=None,  # set under a gateway's limit
    )
+
+``with_callback_delivery()`` sets these without turning on the processing of
+incoming callbacks; ``with_subscription_processing()`` accepts them too.
 
 **Guidelines:**
 
-- ``max_concurrent``: Increase for many subscribers, decrease if overloading infrastructure
-- ``default_timeout``: Increase for slow peers, decrease for fast-fail behavior
-- ``failure_threshold``: Lower for quick circuit breaker activation
-- ``recovery_timeout``: Lower for faster retry attempts
+- ``max_concurrent_callbacks``: a write holds one handler thread and, when
+  its subscribers call back into the same deployment through another origin,
+  up to this many more. On FastAPI size ``with_thread_pool_workers`` to at
+  least the simultaneous writes you expect times one plus the bound.
+- Twenty subscribers that all hang cost a write 75 s at the default bound
+  (five rounds of the 15 s timeout) where the serial sender took 300 s; the
+  budget caps it.
 
 Back-Pressure Handling
 ----------------------
 
-When the pending queue is full (``max_pending`` exceeded), the library returns HTTP 429.
+When the pending queue is full (``max_pending`` exceeded), the library refuses
+the callback with 400; a callback whose sequence another delivery is
+handling, or whose resync baseline could not be fetched, answers 503 with
+``Retry-After``.
 
 Publisher Handling
 ~~~~~~~~~~~~~~~~~~
 
-Publishers should implement retry logic when receiving 429:
-
-.. code-block:: python
-
-   import time
-   import httpx
-
-   def send_callback_with_retry(url, data, auth, max_retries=3):
-       """Send callback with exponential backoff on 429."""
-       for attempt in range(max_retries):
-           response = httpx.post(url, json=data, auth=auth)
-
-           if response.status_code == 429:
-               # Back-pressure - subscriber is overloaded
-               wait_time = (2 ** attempt) + random.uniform(0, 1)
-               print(f"Back-pressure from subscriber, waiting {wait_time:.1f}s")
-               time.sleep(wait_time)
-               continue
-
-           return response
-
-       raise Exception("Max retries exceeded due to back-pressure")
-
-FanOutManager Automatic Handling
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The ``FanOutManager`` handles 429 responses automatically:
-
-1. Marks the delivery as failed (not retried immediately)
-2. Increments the circuit breaker failure count
-3. Includes the peer in ``result.failures``
-
-.. code-block:: python
-
-   result = await manager.deliver(target="properties", data={"status": "active"})
-
-   for failure in result.failures:
-       if failure.status_code == 429:
-           print(f"Peer {failure.peer_id} is overloaded")
-           # Consider: reduce publishing rate or alert
+The library's sender does not retry a refused or failed callback: the diff is
+stored and numbered, so the subscriber recovers by the gap at its next
+callback or by polling, and an undelivered resync is sent again on the next
+resume. Back-off, a per-peer breaker and payload limits are not implemented
+(the specification makes them optional).
 
 Subscriber Mitigation
 ~~~~~~~~~~~~~~~~~~~~~
@@ -1119,6 +1083,8 @@ Both backends support optimistic locking for concurrent callback handling.
 See Also
 --------
 
+- :doc:`../protocol/actingweb-spec` - The ActingWeb specification (version
+  1.5), the normative rules for subscriptions, diffs and callbacks
 - :doc:`trust-relationships` - Trust lifecycle and subscription cleanup
 - :doc:`troubleshooting` - Subscription troubleshooting guide
 - :doc:`../migration/v3.10` - Migration guide for subscription processing

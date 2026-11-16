@@ -52,7 +52,11 @@ Version Migrations
    legacy reverse lookup (GSI, v1 table, PostgreSQL scan,
    ``USE_PROPERTY_LOOKUP_TABLE``) is removed: ``check_ready()`` refuses a store
    whose indexed property names were never backfilled, and
-   ``actingweb-property-lookup`` makes it ready.
+   ``actingweb-property-lookup`` makes it ready. It conforms to
+   specification 1.5 (announced at ``/meta/actingweb/version``): deletes
+   reach subscribers at every level, a resync sweeps the replica, list items
+   are addressed by path, the passphrase is not returned to a peer, a write's
+   callbacks are sent concurrently, and ``FanOutManager`` is removed.
 
 **v3.15 Migration**
    Guide for upgrading to ActingWeb 3.15, a security release for the MCP
@@ -94,7 +98,7 @@ Version Migrations
    sign-in providers.
 
 **v3.10 Migration**
-   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager, and peer capabilities.
+   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager (removed in 3.16), and peer capabilities.
 
 **v3.7 Migration**
    Guide for upgrading to ActingWeb 3.7, covering developer API extensions for SubscriptionManager and TrustManager with cleaner APIs and automatic lifecycle hooks.

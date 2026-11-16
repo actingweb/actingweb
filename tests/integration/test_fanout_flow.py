@@ -6,8 +6,9 @@ deleted subscription leaves the others as they were.
 The classes that tested FanOutManager, a granularity downgrade and a
 circuit breaker (none of them on the publish path) were retired by the
 subscription wire baseline (thoughts/plans/
-2026-11-06-subscription-wire-baseline.md, Phase 2); tests/test_fanout.py
-covers FanOutManager and the wire rows WD13 and WD14 the delivery.
+2026-11-06-subscription-wire-baseline.md, Phase 2); FanOutManager was
+removed in 3.16, and tests/test_callback_sender.py and the wire rows WD13 and
+WD14 cover the delivery.
 """
 
 import pytest

@@ -4,7 +4,9 @@ import logging
 from typing import Any
 
 from actingweb import auth
+from actingweb.access_table import is_reserved_relationship
 from actingweb.client_text import sanitize_client_name, sanitize_label
+from actingweb.constants import TRUSTEE_CREATOR
 from actingweb.handlers import base_handler
 from actingweb.permission_evaluator import get_permission_evaluator
 
@@ -169,6 +171,9 @@ class TrustHandler(base_handler.BaseHandler):
         if len(url) == 0:
             self.response.set_status(400, "Missing peer URL")
             return
+        if is_reserved_relationship(relationship):
+            self.response.set_status(400, "Reserved relationship name")
+            return
 
         # Use developer API - ActorInterface with TrustManager
         actor_interface = self._get_actor_interface(myself)
@@ -221,10 +226,36 @@ class TrustHandler(base_handler.BaseHandler):
             + "/"
             + new_trust["peerid"]
         )
-        out = json.dumps(new_trust)
+        out = json.dumps(_with_boolean_flags(new_trust))
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(201, "Created")
+
+
+_FLAG_FIELDS = ("approved", "peer_approved", "verified")
+
+
+def _approval(value: Any) -> bool | None:
+    """``approved`` in a trust PUT (3.16, specification 1.5): JSON ``true``
+    or the string ``"true"`` (the web UI's form sends text) approves; any
+    other value, ``false`` and ``"false"`` included, is None and answers
+    400 with nothing changed (``false`` was read as absent, a 204)."""
+    if value is True:
+        return True
+    if isinstance(value, str) and value.strip().lower() == "true":
+        return True
+    return None
+
+
+def _with_boolean_flags(row: dict[str, Any]) -> dict[str, Any]:
+    """A trust row with its flags as JSON booleans, as a GET of the row
+    answers them (3.16; ``Trust.create`` keeps them as the strings
+    ``"true"``/``"false"``)."""
+    out = dict(row)
+    for flag in _FLAG_FIELDS:
+        if flag in out and isinstance(out[flag], str):
+            out[flag] = out[flag].strip().lower() == "true"
+    return out
 
 
 def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
@@ -233,8 +264,8 @@ def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
     has not approved it (3.16). Whoever filed a request under another
     actor's id could otherwise answer that actor's verification with the
     token; the secret is the requester's own."""
-    answer = dict(row)
-    if str(answer.get("approved")).lower() != "true":
+    answer = _with_boolean_flags(row)
+    if not answer.get("approved"):
         answer.pop("verification_token", None)
         answer.pop("secret", None)
     return answer
@@ -272,8 +303,12 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Not found")
             return
-        # Access is the same as /trust
+        # Access is the same as /trust, and then only the creator or the
+        # trustee (3.16): an admin peer could otherwise arm trustee access,
+        # or take the actor over, and keep it after its trust was deleted.
         if not auth_result.authorize("POST", "trust"):
+            return
+        if not self._owner_or_trustee(auth_result.auth_obj):
             return
         try:
             body = self.request.body
@@ -309,6 +344,20 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             actor_interface.trust.trustee_root = trustee_root
         if self.response:
             self.response.set_status(204, "No content")
+
+    def _owner_or_trustee(self, auth_obj: Any) -> bool:
+        """Whether the caller is the creator or the trustee, not a peer of any
+        relationship; answers 403 otherwise."""
+        acl = getattr(auth_obj, "acl", None)
+        acl = acl if isinstance(acl, dict) else {}
+        if not acl.get("peerid") and acl.get("relationship") in (
+            "creator",
+            TRUSTEE_CREATOR,
+        ):
+            return True
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+        return False
 
     def _change_creator(self, myself: Any, creator: str) -> bool:
         """Change the creator for ``PUT /<id>/trust/trustee``.
@@ -382,8 +431,11 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Not found")
             return
-        # Access is the same as /trust
+        # Access is the same as /trust, and then only the creator or the
+        # trustee (3.16).
         if not auth_result.authorize("DELETE", "trust"):
+            return
+        if not self._owner_or_trustee(auth_result.auth_obj):
             return
 
         # Use developer API - ActorInterface with TrustManager
@@ -445,6 +497,11 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
 
         if len(baseuri) == 0 or len(peerid) == 0:
             self.response.set_status(400, "Missing mandatory attributes")
+            return
+        if is_reserved_relationship(relationship):
+            # ``creator``, ``trustee``, ``owner`` and ``any`` name roles and
+            # access-table keywords, never a peer (3.16).
+            self.response.set_status(400, "Reserved relationship name")
             return
         from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
 
@@ -911,8 +968,11 @@ class TrustPeerHandler(base_handler.BaseHandler):
             else:
                 desc = ""
             if "approved" in params:
-                if str(params["approved"]).lower() == "true":
-                    approved = True
+                approved = _approval(params["approved"])
+                if approved is None:
+                    if self.response:
+                        self.response.set_status(400, "approved accepts true only")
+                    return
 
             # Handle permission updates
             if params.get("permissions") is not None and PERMISSION_SYSTEM_AVAILABLE:
@@ -931,9 +991,13 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 if self.response:
                     self.response.set_status(400, "No json content")
                 return
-            if self.request.get("approved") and len(self.request.get("approved")) > 0:
-                if self.request.get("approved").lower() == "true":
-                    approved = True
+            if "approved" in [str(a).lower() for a in self.request.arguments()]:
+                # Present, even empty: true only (3.16).
+                approved = _approval(self.request.get("approved"))
+                if approved is None:
+                    if self.response:
+                        self.response.set_status(400, "approved accepts true only")
+                    return
             if self.request.get("baseuri") and len(self.request.get("baseuri")) > 0:
                 baseuri = self.request.get("baseuri")
             else:

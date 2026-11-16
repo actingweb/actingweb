@@ -230,7 +230,7 @@
         "sequence": 3,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -292,7 +292,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"q\": {\"k\": \"\"}}",
+         "data": "{\"q\": {\"m\": 3}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -412,7 +412,7 @@
        "lists": {},
        "scalars": {
         "q": {
-         "k": ""
+         "m": 3
         }
        }
       },
@@ -457,7 +457,7 @@
          "actor": "<B>",
          "data": {
           "q": {
-           "k": ""
+           "m": 3
           }
          },
          "event": "subscription_data",
@@ -475,7 +475,7 @@
        "request": {
         "data": {
          "q": {
-          "k": ""
+          "m": 3
          }
         },
         "granularity": "high",
@@ -483,7 +483,7 @@
         "sequence": 4,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

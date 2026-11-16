@@ -23,6 +23,9 @@ actingweb.handlers.bot module
 actingweb.handlers.callback\_oauth module
 -----------------------------------------
 
+``CallbackOauthHandler`` is exported but routed by neither integration; the
+OAuth2 flow is served at ``/oauth``. Its removal is tracked separately.
+
 .. automodule:: actingweb.handlers.callback_oauth
     :members:
     :undoc-members:

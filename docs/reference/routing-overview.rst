@@ -26,14 +26,14 @@ Core Actor Routes
 
 - `/`: Root factory (create actor via web or API). Open by default; answers 403 when the app calls `with_open_factory(False)`
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
-- `/<actor_id>/meta`: Discovery metadata
-- `/<actor_id>/properties`: Get/update/delete properties
+- `/<actor_id>/meta`: Discovery metadata. `/meta` is a JSON object; each scalar path (`/meta/id`, `/meta/version`, `/meta/actingweb/supported`, ...) is `text/plain` (3.16; Flask labelled them `text/html` and FastAPI sent no label)
+- `/<actor_id>/properties`: Get/update/delete properties. A value that is not JSON is read back as `text/plain`, a JSON value as `application/json` (3.16; both were labelled JSON). `PUT /properties` with no name is 405. List items are addressed by path (`/properties/<list>/<n>`, and `POST /properties/<list>` appends); see :doc:`../guides/property-lists`
 - `/<actor_id>/resources`: Application resources answered by `resource_<name>` callback hooks; a peer is decided by its `resources` grant (GET `read`, PUT/POST `write`, DELETE `delete`), and no hook runs on a refusal
 - `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
 - `/<actor_id>/subscriptions`: Subscriptions to peer updates
-- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name
+- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name. A name no hook is registered for answers 403 (3.16; 200 with `false` before). The one exception: a hook registered with `allow_anonymous=True` admits an unauthenticated `POST` to its own name and authenticates the caller itself (see :doc:`hooks-reference`)
 
 Web UI Routes (when with_web_ui(True))
 ======================================
@@ -42,6 +42,7 @@ Web UI Routes (when with_web_ui(True))
 - `/<actor_id>/www/properties` and `/<actor_id>/www/properties/<name>`
 - `/<actor_id>/www/trust` and `/<actor_id>/www/trust/new`
 - `/<actor_id>/www/init`: Initialization helpers
+- Any other `/<actor_id>/www/<path>`: the application's `www` callback hook; 404 when none is registered or it returns `False` or `None`
 
 Authentication
 ==============
@@ -79,11 +80,16 @@ JSON with actor information:
         "trustee_root": "optional-trustee-root"
     }
 
+``passphrase`` is returned to the creator and the trustee only (3.16); a
+peer, an ``admin`` one included, gets the object without it.
+
 If not authenticated, API clients receive a 401 or 403 error response. A
 peer refused by its grant on a property route gets 403 with ``{"error":
 "forbidden"}`` (``{"error": "not_approved"}`` for a trust not yet approved);
 a refused bulk ``POST /properties`` also lists the names it refused
-(``"refused"``) and applies none of them. ``POST /properties/<name>`` is 400.
+(``"refused"``) and applies none of them. ``POST /properties/<name>``
+appends one item when the name is a list (201 with ``Location``) and is 400
+otherwise; a peer that may not write the name gets 403 either way.
 
 Browser Redirect Behavior
 -------------------------

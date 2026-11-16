@@ -187,7 +187,7 @@
      "request": null,
      "response": {
       "aw_formats": "json",
-      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+      "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www",
       "aw_trust_types": [
        "admin",
        "associate",
@@ -198,7 +198,7 @@
        "subscriber_adopted",
        "viewer"
       ],
-      "aw_version": "1.0",
+      "aw_version": "1.5",
       "desc": "ActingWeb app: urn:actingweb:test:integration",
       "id": "<A>",
       "info": "http://actingweb.org/",
@@ -256,7 +256,7 @@
        "request": null,
        "response": {
         "aw_formats": "json",
-        "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www",
+        "aw_supported": "actions,callbacks,listproperties,mcp,methods,nestedproperties,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www",
         "aw_trust_types": [
          "admin",
          "associate",
@@ -267,7 +267,7 @@
          "subscriber_adopted",
          "viewer"
         ],
-        "aw_version": "1.0",
+        "aw_version": "1.5",
         "desc": "ActingWeb app: urn:actingweb:test:integration",
         "id": "<N>",
         "info": "http://actingweb.org/",
@@ -302,15 +302,15 @@
       "verify": "<secret:token:N-A#1>"
      },
      "response": {
-      "approved": "false",
+      "approved": false,
       "baseuri": "http://<wire_app>/<N>",
       "desc": "",
       "id": "<A>",
-      "peer_approved": "true",
+      "peer_approved": true,
       "peerid": "<N>",
       "relationship": "friend",
       "type": "urn:actingweb:test:integration",
-      "verified": "true"
+      "verified": true
      },
      "status": 202
     }

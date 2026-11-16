@@ -27,6 +27,12 @@ RESERVED_CALLBACK_NAMES = frozenset(
     {"permissions", "subscription", "subscriptions", "www"}
 )
 
+# The largest body an anonymous webhook POST may carry (3.16); larger answers
+# 413. An authenticated caller is not limited here.
+ANONYMOUS_CALLBACK_MAX_BYTES = 1024 * 1024
+# Left out of the headers a callback hook is given (see _request_headers).
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie"})
+
 # How far ahead of the receiver's clock a permission callback's timestamp may
 # be: ordinary clock skew. Further ahead answers 400.
 PERMISSION_TIMESTAMP_SKEW = timedelta(minutes=5)
@@ -78,11 +84,73 @@ def _still_granted(permissions: Any, names: list[str]) -> list[str]:
     ]
 
 
+_HOOK_TASKS: set[Any] = set()
+
+
+def _hook_task_done(task: Any) -> None:
+    """A data hook run as a task finished: drop the reference and log an
+    error it raised (folded, as a synchronous hook's error is)."""
+    _HOOK_TASKS.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(f"Error in subscription_data_hook: {error}")
+
+
+def run_subscription_data_hooks(
+    config: Any,
+    actor_interface: Any,
+    peer_id: str,
+    target: str,
+    data: Any,
+    sequence: int,
+    callback_type: str,
+) -> None:
+    """Run the application's subscription data hooks for one applied
+    change: the target's own, then the wildcard ones. A hook's error is
+    logged and folded (at most once: it must not get the change applied
+    twice). Shared by the callback handler and the poll (3.16: a gap resync's
+    poll ran none)."""
+    hooks = getattr(config, "subscription_data_hooks", None) or {}
+    if not hooks:
+        return
+    import asyncio
+    import inspect
+
+    for name in (target, "*"):
+        for hook in hooks.get(name, []):
+            try:
+                args = (actor_interface, peer_id, target, data, sequence, callback_type)
+                if inspect.iscoroutinefunction(hook):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is None:
+                        # Can't await in sync context, run via asyncio.run
+                        asyncio.run(hook(*args))
+                    else:
+                        # A poll run on the loop: the hook is a task, kept
+                        # until done.
+                        task = loop.create_task(hook(*args))
+                        _HOOK_TASKS.add(task)
+                        task.add_done_callback(_hook_task_done)
+                else:
+                    hook(*args)
+            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
+                logger.error(
+                    f"Error in subscription_data_hook "
+                    f"{'wildcard' if name == '*' else 'for ' + target}: {e}"
+                )
+
+
 class CallbacksHandler(base_handler.BaseHandler):
     """``/<actor>/callbacks/<name>``.
 
     Every request is authenticated (401 with a challenge when it carries no
-    credentials). The two peer branches, ``subscriptions/<peer>/<subid>`` and
+    credentials), except a ``POST`` to a name whose hook was registered with
+    ``allow_anonymous=True`` (3.16), which that hook authenticates itself. The two peer branches, ``subscriptions/<peer>/<subid>`` and
     ``permissions/<peer>``, admit only the peer they name (403 for anyone
     else, the creator and an ``admin`` peer included). The generic branch
     admits any authenticated caller to the application's callback hook,
@@ -130,6 +198,172 @@ class CallbacksHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
         return True
 
+    def _resync_fetch_failed(
+        self, actor_interface: Any, peer_id: str, subscription_id: str
+    ) -> None:
+        """A resync whose baseline could not be fetched: answer 503 with
+        ``Retry-After`` (the handler's retry-later answer) and mark the
+        rebuild owed (3.16)."""
+        from ..callback_processor import CallbackProcessor
+
+        self._callback_retry_later = True
+        try:
+            CallbackProcessor(actor_interface).settle_rebuild(
+                peer_id, subscription_id, rebuilt=False, restart_interval=False
+            )
+        except DbError as e:  # folds DbError: the 503 stands; logged
+            logger.error(
+                f"Could not mark the rebuild of {peer_id}:{subscription_id} "
+                f"owed after a failed resync fetch: {e}"
+            )
+
+    @staticmethod
+    def _sweep_after_resync(
+        processor: Any,
+        store: Any,
+        peer_id: str,
+        subscription_id: str,
+        level: dict[str, Any],
+        baseline: Any,
+        applied: Any,
+    ) -> bool:
+        """After a pushed resync's baseline: remove from the replica what the
+        baseline no longer has (3.16, specification 1.5), under the rebuild's
+        limit of one attempt a minute per subscription, since it lists the
+        replica. False when the limit holds it back."""
+        from ..interface.subscription_manager import sweep_after_baseline
+
+        if not processor.begin_rebuild(peer_id, subscription_id):
+            return False
+        owed = processor.rebuild_state(peer_id, subscription_id)["lists"]
+        sweep_after_baseline(
+            store._actor._core_actor,  # noqa: SLF001
+            store,
+            peer_id=peer_id,
+            target=level["target"],
+            subtarget=level["subtarget"],
+            resource=level["resource"],
+            baseline=baseline,
+            applied=applied,
+            owed=owed,
+        )
+        return True
+
+    def _refuse_unhandled_name(self, name: str) -> bool:
+        """403 for an authenticated request to a callback name no hook is
+        registered for (3.16, specification 1.5; it answered 200 with
+        ``false``). A hook that ran and returned a falsy value is not this:
+        it keeps its answer."""
+        if self.hooks is not None and self.hooks.has_callback_hook(name):
+            return False
+        if self.response:
+            self.response.set_status(403, "Forbidden")
+        return True
+
+    def _anonymous_webhook(self, name: str, method: str) -> bool:
+        """Whether this request is an anonymous webhook (3.16): a POST that
+        arrived as a POST (no ``_method`` override on either side), with no
+        ``Authorization`` header, to a callback name whose hook was
+        registered with ``allow_anonymous=True``."""
+        if method != "POST" or getattr(self, "_via_override", False):
+            return False
+        if self.request.get("_method"):
+            return False
+        headers = getattr(self.request, "headers", None) or {}
+        if "Authorization" in headers or "authorization" in headers:
+            return False
+        return bool(
+            self.hooks is not None and self.hooks.allows_anonymous_callback(name)
+        )
+
+    def _request_headers(self) -> dict[str, str]:
+        """The request's headers for a callback hook, without the caller's
+        credentials (``Authorization``, ``Cookie``): a provider signs
+        neither, and a hook does not need them."""
+        headers = getattr(self.request, "headers", None) or {}
+        try:
+            return {
+                str(k): str(v)
+                for k, v in dict(headers).items()
+                if str(k).lower() not in _CREDENTIAL_HEADERS
+            }
+        except (TypeError, ValueError):
+            return {}
+
+    def _request_hook_data(
+        self, raw: bytes, method: str, anonymous: bool
+    ) -> dict[str, Any]:
+        """A callback hook's ``data``: the body's JSON object, then what the
+        library sets from the request itself, which a body cannot override
+        (3.16, verification M1: an authenticated caller's JSON supplied
+        ``headers`` and ``raw_body``)."""
+        hook_data = self._hook_data(raw)
+        hook_data["method"] = method
+        hook_data["anonymous"] = anonymous
+        hook_data["headers"] = self._request_headers()
+        hook_data["raw_body"] = raw
+        return hook_data
+
+    def _raw_body(self) -> bytes:
+        body = self.request.body
+        if body is None:
+            return b""
+        if isinstance(body, bytes):
+            return body
+        return str(body).encode("utf-8")
+
+    def _hook_data(self, raw: bytes) -> dict[str, Any]:
+        """The JSON object a body holds, or an empty dict for any other body
+        (3.16: a JSON array or scalar raised, a 500)."""
+        try:
+            parsed = json.loads(raw.decode("utf-8", "ignore") or "{}")
+        except (TypeError, ValueError, RecursionError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _post_anonymous(self, actor_id: str, name: str) -> None:
+        """An anonymous webhook POST (``allow_anonymous=True``): only the
+        hooks registered under this exact name with the flag run, never the
+        ``"*"`` hooks; no access row is consulted (there is no caller). The
+        hook verifies its caller from ``headers`` and ``raw_body``."""
+        from ..actor import Actor
+
+        headers = self._request_headers()
+        declared = {k.lower(): v for k, v in headers.items()}.get("content-length", "")
+        if declared.isdigit() and int(declared) > ANONYMOUS_CALLBACK_MAX_BYTES:
+            if self.response:
+                self.response.set_status(413, "Payload Too Large")
+            return
+        raw = self._raw_body()
+        if len(raw) > ANONYMOUS_CALLBACK_MAX_BYTES:
+            if self.response:
+                self.response.set_status(413, "Payload Too Large")
+            return
+        myself = Actor(actor_id, config=self.config)
+        if not myself.id:
+            if self.response:
+                self.response.set_status(404, "Actor not found")
+            return
+        actor_interface = self._get_actor_interface(myself)
+        if not actor_interface or self.hooks is None:
+            if self.response:
+                self.response.set_status(500, "Internal error")
+            return
+        hook_data = self._request_hook_data(raw, "POST", anonymous=True)
+        hook_result = self.hooks.execute_callback_hooks(
+            name, actor_interface, hook_data, anonymous=True
+        )
+        if not hook_result:
+            # The hook refused the caller, or raised (logged by the registry):
+            # a provider retries on a non-2xx, and a forger learns nothing.
+            if self.response:
+                self.response.set_status(403, "Forbidden")
+            return
+        if self.response:
+            self.response.set_status(200, "OK")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps(hook_result))
+
     def _peer_segments(self, path: list[str], count: int) -> list[str] | None:
         """The ``count`` segments after the branch name, all non-empty, or
         None after answering 400."""
@@ -147,9 +381,11 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self._refuse_cross_site_override():
             return
         if self.request.get("_method") == "PUT":
+            self._via_override = True
             self.put(actor_id, name)
             return
         if self.request.get("_method") == "POST":
+            self._via_override = True
             self.post(actor_id, name)
             return
         auth_result = self._authenticate_callback(actor_id, name)
@@ -159,6 +395,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         if self._refuse_reserved_name(name):
             return
         if not auth_result.authorize("GET", "callbacks", name):
+            return
+        if self._refuse_unhandled_name(name):
             return
         # Execute callback hook for GET
         hook_result = None
@@ -271,6 +509,8 @@ class CallbacksHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
+        if self._refuse_unhandled_name(name):
+            return
         # Execute callback hook for DELETE
         hook_result = None
         if self.hooks:
@@ -290,6 +530,9 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def post(self, actor_id: str, name: str, method: str = "POST") -> None:
         """Handles POST callbacks (and PUT, authorised as ``method``)"""
+        if self._anonymous_webhook(name, method):
+            self._post_anonymous(actor_id, name)
+            return
         auth_result = self._authenticate_callback(actor_id, name)
         if auth_result is None:
             return
@@ -668,25 +911,16 @@ class CallbacksHandler(base_handler.BaseHandler):
             return
         if not auth_result.authorize(method, "callbacks", name):
             return
+        if self._refuse_unhandled_name(name):
+            return
         # Execute callback hook for POST
         hook_result = None
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
             if actor_interface:
-                # Parse request body for hook data
-                try:
-                    body: str | bytes | None = self.request.body
-                    if body is None:
-                        body_str = "{}"
-                    elif isinstance(body, bytes):
-                        body_str = body.decode("utf-8", "ignore")
-                    else:
-                        body_str = body
-                    hook_data = json.loads(body_str)
-                except (TypeError, ValueError, KeyError, RecursionError):
-                    hook_data = {}
-
-                hook_data["method"] = method
+                hook_data = self._request_hook_data(
+                    self._raw_body(), method, anonymous=False
+                )
                 hook_result = self.hooks.execute_callback_hooks(
                     name, actor_interface, hook_data
                 )
@@ -733,6 +967,62 @@ class CallbacksHandler(base_handler.BaseHandler):
             )
             return None, "Timestamp in the future"
         return parsed.isoformat(), ""
+
+    def _tell_subscription_hooks(
+        self,
+        config: "SubscriptionProcessingConfig",
+        actor_interface: Any,
+        peer_id: str,
+        subscription_id: str,
+        subscription: dict[str, Any],
+        data: Any,
+        sequence: int,
+        callback_type: str,
+    ) -> bool:
+        """Tell the application's hooks one applied change: the
+        subscription data hooks, then the legacy ``subscription`` callback
+        hook. False, and no hook told, for a whole properties target whose
+        data is not an object (malformed; not stored either)."""
+        target = subscription.get("target", "properties")
+        if (
+            target == "properties"
+            and not subscription.get("subtarget")
+            and not isinstance(data, dict)
+        ):
+            # A whole properties target's callback is a set of keys: a
+            # malformed one is not stored (see RemotePeerStore) and reaches
+            # none of the hooks (target, wildcard or legacy), which read it
+            # as an object. Another target's hooks get what the publisher
+            # sent.
+            logger.warning(
+                f"Callback from {peer_id} for {subscription_id}: the data of a "
+                "whole properties target is not an object; not passed to the "
+                "hooks"
+            )
+            return False
+        run_subscription_data_hooks(
+            config,
+            actor_interface,
+            peer_id,
+            target,
+            data,
+            sequence,
+            callback_type,
+        )
+        # Legacy callback hooks (for backward compatibility)
+        if self.hooks:
+            self.hooks.execute_callback_hooks(
+                "subscription",
+                actor_interface,
+                {
+                    "peerid": peer_id,
+                    "subscription": subscription,
+                    "data": data,
+                    "sequence": sequence,
+                    "type": callback_type,
+                },
+            )
+        return True
 
     def _process_subscription_callback_internal(
         self,
@@ -785,6 +1075,49 @@ class CallbacksHandler(base_handler.BaseHandler):
         # But low-granularity/resync with URL only → must send PUT to acknowledge
         fetched_from_url = bool(callback_url and not callback_data)
 
+        if "data" in params and callback_type != "resync":
+            carried_seq = params.get("sequence")
+            if not isinstance(carried_seq, int) or isinstance(carried_seq, bool):
+                # A diff with data and no sequence (3.16, specification 1.5):
+                # 400, as a low-granularity one without a sequence is; it was
+                # taken as sequence 0, a duplicate, and dropped with 204.
+                logger.warning(
+                    f"Callback from {peer_id} for {subscription_id}: data "
+                    "without an integer sequence"
+                )
+                return False
+
+        if callback_type != "resync" and config.auto_storage:
+            # An owed rebuild that is due runs on the next callback, whatever
+            # its sequence (3.16): after a resync whose fetch failed, the
+            # next diff arrives behind a gap and would otherwise wait. The
+            # baseline is read after the publisher stored this callback's
+            # change, so the rebuild carries it.
+            from ..interface.subscription_manager import SubscriptionManager
+
+            mgr = SubscriptionManager(actor_interface._core_actor)  # noqa: SLF001
+            if mgr._rebuild_owed_and_due(peer_id, subscription_id, config):  # noqa: SLF001
+                rebuilt = mgr.rebuild_subscription(
+                    peer_id, subscription_id, config=config
+                )
+                if rebuilt.success:
+                    # The hooks are told the baseline that answered for this
+                    # callback, as a resync, once the rebuild settled (3.16,
+                    # verification B1: no hook saw this callback's change).
+                    self._tell_subscription_hooks(
+                        config,
+                        actor_interface,
+                        peer_id,
+                        subscription_id,
+                        subscription,
+                        rebuilt.baseline,
+                        rebuilt.final_sequence,
+                        "resync",
+                    )
+                    return True
+                self._callback_retry_later = True
+                return False
+
         if fetched_from_url and callback_type != "resync":
             fetched_seq = params.get("sequence")
             if not isinstance(fetched_seq, int) or isinstance(fetched_seq, bool):
@@ -822,9 +1155,13 @@ class CallbacksHandler(base_handler.BaseHandler):
             if callback_type == "resync":
                 # Resync callback - use shared baseline fetch method for consistency
                 # This ensures proper handling of ?metadata=true and property list transformations
-                target = params.get("target", "properties")
-                subtarget = params.get("subtarget")
-                resource = params.get("resource")
+                # At the stored subscription's level, not the body's (3.16):
+                # the fetch and the sweep after it have one scope.
+                target = subscription.get("target") or params.get(
+                    "target", "properties"
+                )
+                subtarget = subscription.get("subtarget") or None
+                resource = subscription.get("resource") or None
 
                 try:
                     # Use SubscriptionManager's baseline fetch helper
@@ -859,17 +1196,21 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"{'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
-                        # An empty baseline and a failed fetch look the same
-                        # here (both None); applying {} moves the sequence on.
-                        # Telling them apart is in the subscriber-hardening
-                        # todo.
+                        # A failed fetch (3.16): not applied as an empty
+                        # baseline. 503 with Retry-After, the sequence not
+                        # written, and the rebuild owed so the next callback
+                        # or sync rebuilds the replica.
                         logger.warning(f"Failed to fetch resync baseline for {target}")
-                        callback_data = {}
+                        self._resync_fetch_failed(
+                            actor_interface, peer_id, subscription_id
+                        )
+                        return False
                 except DbError:
                     raise
                 except Exception as e:
                     logger.error(f"Error fetching resync baseline: {e}")
-                    callback_data = {}
+                    self._resync_fetch_failed(actor_interface, peer_id, subscription_id)
+                    return False
             else:
                 # Low-granularity diff callback - fetch from subscription diff endpoint
                 try:
@@ -985,6 +1326,22 @@ class CallbacksHandler(base_handler.BaseHandler):
                     }
                     if cb.callback_type == CallbackType.RESYNC:
                         applied = store.apply_resync_data(cb.data, **level)
+                        if not applied.failed and not self._sweep_after_resync(
+                            processor,
+                            store,
+                            peer_id,
+                            subscription_id,
+                            level,
+                            cb.data,
+                            applied,
+                        ):
+                            # Inside the rebuild interval: applied without the
+                            # sweep, and the rebuild stays owed (it sweeps).
+                            out_of_step = {
+                                "list": "",
+                                "operation": "resync",
+                                "why": "the sweep waits for the rebuild interval",
+                            }
                         # A baseline settles an owed rebuild only when every
                         # entry was stored and it carried each list owed
                         # (one it lacks may be stale); otherwise it stays
@@ -1003,103 +1360,18 @@ class CallbacksHandler(base_handler.BaseHandler):
                         applied = store.apply_callback_data(cb.data, **level)
                         out_of_step = applied.out_of_step
 
-                # Invoke subscription_data_hooks (from app.subscription_data_hook decorator)
-                target = subscription.get("target", "properties")
-                if (
-                    target == "properties"
-                    and not subscription.get("subtarget")
-                    and not isinstance(cb.data, dict)
+                if not self._tell_subscription_hooks(
+                    config,
+                    actor_interface,
+                    peer_id,
+                    subscription_id,
+                    subscription,
+                    cb.data,
+                    cb.sequence,
+                    cb.callback_type.value,
                 ):
-                    # A whole properties target's callback is a set of keys:
-                    # a malformed one is not stored (see RemotePeerStore) and
-                    # reaches none of the hooks (target, wildcard or legacy),
-                    # which read it as an object. Another target's hooks get
-                    # what the publisher sent.
-                    logger.warning(
-                        f"Callback from {peer_id} for {subscription_id}: the "
-                        "data of a whole properties target is not an object; "
-                        "not passed to the hooks"
-                    )
                     cb.out_of_step = out_of_step
                     return
-                if config.subscription_data_hooks:
-                    import inspect
-
-                    # Invoke target-specific hooks
-                    if target in config.subscription_data_hooks:
-                        for hook in config.subscription_data_hooks[target]:
-                            try:
-                                if inspect.iscoroutinefunction(hook):
-                                    # Can't await in sync context, run via asyncio.run
-                                    import asyncio
-
-                                    asyncio.run(
-                                        hook(
-                                            actor_interface,
-                                            peer_id,
-                                            target,
-                                            cb.data,
-                                            cb.sequence,
-                                            cb.callback_type.value,
-                                        )
-                                    )
-                                else:
-                                    hook(
-                                        actor_interface,
-                                        peer_id,
-                                        target,
-                                        cb.data,
-                                        cb.sequence,
-                                        cb.callback_type.value,
-                                    )
-                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
-                                logger.error(
-                                    f"Error in subscription_data_hook for {target}: {e}"
-                                )
-
-                    # Invoke wildcard hooks
-                    if "*" in config.subscription_data_hooks:
-                        for hook in config.subscription_data_hooks["*"]:
-                            try:
-                                if inspect.iscoroutinefunction(hook):
-                                    import asyncio
-
-                                    asyncio.run(
-                                        hook(
-                                            actor_interface,
-                                            peer_id,
-                                            target,
-                                            cb.data,
-                                            cb.sequence,
-                                            cb.callback_type.value,
-                                        )
-                                    )
-                                else:
-                                    hook(
-                                        actor_interface,
-                                        peer_id,
-                                        target,
-                                        cb.data,
-                                        cb.sequence,
-                                        cb.callback_type.value,
-                                    )
-                            except Exception as e:  # folds DbError: consumer data hook, at-most-once; its error must not get the diff applied twice
-                                logger.error(
-                                    f"Error in subscription_data_hook wildcard: {e}"
-                                )
-
-                # Invoke legacy callback hooks (for backward compatibility)
-                if self.hooks:
-                    hook_data = {
-                        "peerid": peer_id,
-                        "subscription": subscription,
-                        "data": cb.data,
-                        "sequence": cb.sequence,
-                        "type": cb.callback_type.value,
-                    }
-                    self.hooks.execute_callback_hooks(
-                        "subscription", actor_interface, hook_data
-                    )
 
                 cb.out_of_step = out_of_step
 
@@ -1235,12 +1507,30 @@ class CallbacksHandler(base_handler.BaseHandler):
                     from ..interface.subscription_manager import SubscriptionManager
 
                     mgr = SubscriptionManager(actor_interface._core_actor)
-                    sync_result = mgr.sync_subscription(peer_id, subscription_id)
+                    # With the application's configuration (3.16): its data
+                    # hooks run for each change the poll applies.
+                    sync_result = mgr.sync_subscription(
+                        peer_id, subscription_id, config=config
+                    )
                     if sync_result.success:
                         logger.info(
                             f"Resync completed: {sync_result.diffs_processed} diffs, "
                             f"sequence now at {sync_result.final_sequence}"
                         )
+                        if (
+                            isinstance(sequence, int)
+                            and sync_result.final_sequence < sequence
+                        ):
+                            # The poll did not bring the change that triggered
+                            # it (3.16: it was dropped): apply it now.
+                            processor.process_callback_sync(
+                                peer_id=peer_id,
+                                subscription_id=subscription_id,
+                                sequence=sequence,
+                                data=callback_data,
+                                callback_type=callback_type,
+                                handler=handler,
+                            )
                     else:
                         logger.warning(
                             f"Resync failed: {sync_result.error or 'unknown error'}"

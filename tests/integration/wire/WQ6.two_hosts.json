@@ -221,7 +221,7 @@
         "sequence": 1,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -421,7 +421,7 @@
    },
    "result": {
     "body": "",
-    "status": 500
+    "status": 400
    },
    "step": "PUT sequence null",
    "wire": [
@@ -437,7 +437,7 @@
       "sequence": null
      },
      "response": null,
-     "status": 500
+     "status": 400
     }
    ]
   }

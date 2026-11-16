@@ -606,7 +606,7 @@
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 3
        }
       ],
       "peer_permissions": {
@@ -757,7 +757,7 @@
       "subscriptionid": "<sub1>",
       "subtarget": "",
       "target": "properties",
-      "timestamp": "<ts:iso-offset>",
+      "timestamp": "<ts:iso-z>",
       "type": "resync",
       "url": "http://<wire_app>/<A>/properties"
      },

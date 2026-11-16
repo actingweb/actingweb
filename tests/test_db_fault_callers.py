@@ -9,7 +9,6 @@ and leave storage as it was.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 from unittest import mock
@@ -363,49 +362,3 @@ class TestB10PermissionCallback:
             )
             is None
         )
-
-
-class TestB11CircuitBreaker:
-    def test_unreadable_breaker_skips_delivery_and_keeps_stored_state(
-        self, config: Any
-    ) -> None:
-        from actingweb.fanout import CircuitBreaker, FanOutManager
-        from actingweb.interface.actor_interface import ActorInterface
-
-        actor = create_core_actor(config, uuid_email())
-        manager = FanOutManager(ActorInterface(actor))
-        open_cb = CircuitBreaker(
-            peer_id="peer1", failure_threshold=1, cooldown_seconds=600
-        )
-        open_cb.record_failure()
-        bucket = FanOutManager._CB_STATE_BUCKET
-        get_attribute(config).set_attr(
-            actor_id=aid(actor), bucket=bucket, name="cb:peer1", data=open_cb.to_dict()
-        )
-        before = _attr_row(config, aid(actor), bucket, "cb:peer1")
-        manager._circuit_breakers.clear()
-
-        with (
-            backend_fault(
-                config, "get_attr", lambda a, b, _n: b == bucket, raise_db_error
-            ),
-            mock.patch.object(FanOutManager, "_deliver_single") as deliver,
-        ):
-            result = asyncio.run(
-                manager.deliver_to_subscribers(
-                    subscriptions=[
-                        {
-                            "peerid": "peer1",
-                            "subid": "s1",
-                            "callback_url": "https://p.test/cb",
-                        }
-                    ],
-                    payload={"x": 1},
-                    target="properties",
-                    sequence=1,
-                )
-            )
-
-        deliver.assert_not_called()
-        assert result.results[0].error == "breaker_state_unreadable"
-        assert _attr_row(config, aid(actor), bucket, "cb:peer1") == before

@@ -533,3 +533,25 @@ def test_wa18_subscription_root_query(wire_pair, topology):
         lambda: requests.get(f"{a.url}/subscriptions", headers=_bearer(secret)),
     )
     check("WA18", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_wa19_anonymous_webhook(wire_pair, topology):
+    """WA19 (spec-1-5 Phase 2): no credentials, a POST to ``wire_webhook``,
+    whose hook is registered with ``allow_anonymous``: the hook runs; a GET
+    to it and a POST to ``wire_ping`` (not flagged) still answer 401."""
+    s = wire_pair(topology, grant=["*"])
+    b = s.subscribers[0]
+    s.step(
+        "anonymous POST to the flagged webhook",
+        _post(f"{b.url}/callbacks/wire_webhook", {"event": "x"}),
+    )
+    s.step(
+        "anonymous GET to the flagged webhook",
+        lambda: requests.get(f"{b.url}/callbacks/wire_webhook"),
+    )
+    s.step(
+        "anonymous POST to an unflagged callback",
+        _post(f"{b.url}/callbacks/wire_ping", {"event": "x"}),
+    )
+    check("WA19", s.recording(), variant=topology)

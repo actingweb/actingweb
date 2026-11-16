@@ -220,8 +220,18 @@ class TestSyncSubscriptionCallbacks:
                 )
 
                 # Verify error handling
+                # Callback sends no longer write the actor's last response
+                # (3.16); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
-                assert "No response from peer" in actor.last_response_message
+                assert actor.last_response_message == ""
+                from actingweb import callback_sender
+
+                unit = actor._prepare_callback(  # noqa: SLF001
+                    peerid="peer123", sub=sub, diff=diff, blob="{}"
+                )
+                assert unit is not None
+                callback_sender.deliver([unit], actor.config, wait=True)
+                assert unit.delivered is False
 
     def test_sync_callback_handles_timeout(self, mock_actor_sync):
         """Test that sync callback catches Timeout properly."""
@@ -260,8 +270,18 @@ class TestSyncSubscriptionCallbacks:
                 )
 
                 # Verify error handling
+                # Callback sends no longer write the actor's last response
+                # (3.16); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
-                assert "No response from peer" in actor.last_response_message
+                assert actor.last_response_message == ""
+                from actingweb import callback_sender
+
+                unit = actor._prepare_callback(  # noqa: SLF001
+                    peerid="peer123", sub=sub, diff=diff, blob="{}"
+                )
+                assert unit is not None
+                callback_sender.deliver([unit], actor.config, wait=True)
+                assert unit.delivered is False
 
     def test_sync_callback_handles_connection_error(self, mock_actor_sync):
         """Test that sync callback catches ConnectionError properly."""
@@ -300,8 +320,18 @@ class TestSyncSubscriptionCallbacks:
                 )
 
                 # Verify error handling
+                # Callback sends no longer write the actor's last response
+                # (3.16); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
-                assert "No response from peer" in actor.last_response_message
+                assert actor.last_response_message == ""
+                from actingweb import callback_sender
+
+                unit = actor._prepare_callback(  # noqa: SLF001
+                    peerid="peer123", sub=sub, diff=diff, blob="{}"
+                )
+                assert unit is not None
+                callback_sender.deliver([unit], actor.config, wait=True)
+                assert unit.delivered is False
 
     def test_sync_callback_clears_diff_on_204(self, mock_actor_sync):
         """Test that sync callback does NOT clear diff on 204 (behavior changed).

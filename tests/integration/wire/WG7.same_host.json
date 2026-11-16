@@ -440,7 +440,7 @@
         "sequence": 2,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -519,7 +519,7 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"private\": \"s2\"}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         }
@@ -563,9 +563,10 @@
       "callback_state": [
        {
         "last_seq": 0,
-        "pending_count": 1,
+        "pending_count": 2,
         "pending_sequences": [
-         2
+         2,
+         3
         ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
@@ -675,7 +676,32 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:A-F",
+       "children": [],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<F>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "settings": {
+          "theme": "x"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 3,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:iso-z>"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -743,12 +769,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"private\": \"s2\"}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         }
@@ -792,9 +818,11 @@
       "callback_state": [
        {
         "last_seq": 0,
-        "pending_count": 1,
+        "pending_count": 3,
         "pending_sequences": [
-         2
+         2,
+         3,
+         4
         ],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
@@ -904,7 +932,32 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:A-F",
+       "children": [],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<F>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": {
+         "settings": {
+          "theme": "x"
+         }
+        },
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 4,
+        "subscriptionid": "<sub1>",
+        "target": "properties",
+        "timestamp": "<ts:iso-z>"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
      "headers": {},
      "host": "wire_app",
      "method": "PUT",
@@ -973,12 +1026,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"private\": \"s2\"}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
@@ -1027,9 +1080,11 @@
       "callback_state": [
        {
         "last_seq": 0,
-        "pending_count": 2,
+        "pending_count": 4,
         "pending_sequences": [
          2,
+         3,
+         4,
          5
         ],
         "resync_pending": false,
@@ -1158,7 +1213,7 @@
         "sequence": 5,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204
@@ -1232,12 +1287,12 @@
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"private\": \"s2\"}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d\"}}}",
          "sequence": 3,
          "timestamp": "<ts:stored>"
         },
         {
-         "data": "{\"settings\": {\"deep\": {\"private\": \"d2\"}}}",
+         "data": "{\"settings\": {\"theme\": \"x\", \"private\": \"s2\", \"deep\": {\"private\": \"d2\"}}}",
          "sequence": 4,
          "timestamp": "<ts:stored>"
         },
@@ -1286,9 +1341,11 @@
       "callback_state": [
        {
         "last_seq": 0,
-        "pending_count": 2,
+        "pending_count": 4,
         "pending_sequences": [
          2,
+         3,
+         4,
          5
         ],
         "resync_pending": false,
@@ -1412,12 +1469,20 @@
        "timestamp": "<ts:iso-z>"
       },
       {
-       "data": {},
+       "data": {
+        "settings": {
+         "theme": "x"
+        }
+       },
        "sequence": 3,
        "timestamp": "<ts:iso-z>"
       },
       {
-       "data": {},
+       "data": {
+        "settings": {
+         "theme": "x"
+        }
+       },
        "sequence": 4,
        "timestamp": "<ts:iso-z>"
       },
@@ -1469,12 +1534,20 @@
         "timestamp": "<ts:iso-z>"
        },
        {
-        "data": {},
+        "data": {
+         "settings": {
+          "theme": "x"
+         }
+        },
         "sequence": 3,
         "timestamp": "<ts:iso-z>"
        },
        {
-        "data": {},
+        "data": {
+         "settings": {
+          "theme": "x"
+         }
+        },
         "sequence": 4,
         "timestamp": "<ts:iso-z>"
        },

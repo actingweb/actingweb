@@ -8,6 +8,27 @@ Unreleased
 SECURITY
 ~~~~~~~~
 
+- **An admin peer could keep trustee access to an actor after its trust was
+  deleted.** ``GET /<actor_id>`` returned the passphrase to every caller the
+  access table admitted, an ``admin`` peer included, and ``PUT
+  /<actor_id>/trust/trustee`` was authorised as ``/trust`` is, so an admin
+  peer could set the trustee root and rename the creator to ``trustee``:
+  with the passphrase, that was trustee access no trust deletion ended. Now
+  the passphrase is returned to the creator and the trustee only, and only
+  they may ``PUT`` or ``DELETE /trust/trustee`` (403 for every peer; an admin
+  peer keeps the rest of ``/trust``). A trust relationship can no longer be
+  named ``creator``, ``trustee``, ``owner`` or ``any`` (400 when requested
+  or initiated), and the access table's ``creator`` and ``trustee`` rows
+  never match a peer whatever its relationship is called: a peer whose
+  trust was named ``creator`` matched the creator's rows, ``/www`` (which
+  shows the passphrase) included. **Behavior change:** a peer no longer
+  reads the passphrase, and an integration that set the trustee through an
+  admin peer has the creator set it. **Check:** an admin peer of an earlier
+  version may hold the passphrase; where that matters, set a new one with
+  ``Actor.modify(passphrase=...)`` and check ``/meta/trustee_root`` and the
+  creator. See ``docs/migration/v3.16.rst``, "The passphrase and the
+  trustee".
+
 - **An actor's owner could write a grant into another actor.** ``PUT
   /<actor>/trust/<rel>/<peer>/permissions`` (and ``permissions`` in a trust
   ``PUT``) on an existing override copied any field the request named,
@@ -199,12 +220,7 @@ SECURITY
   library's own hook names (``permissions``, ``subscription``,
   ``subscriptions``, ``www``, ``resource_*``) answer 403 on the generic
   branch. **Check:** a third party pointed at ``/callbacks/<name>`` without
-  credentials now receives 401; ``FanOutManager`` no longer downgrades a
-  payload over ``max_payload_for_high_granularity`` to a resource URL (a
-  3.16 subscriber does not fetch it): it sends it in full and logs a
-  WARNING; ``FanOutManager`` delivers only with
-  the trust's secret, to ``<baseuri>/callbacks/subscriptions/<own id>/<subid>``
-  under the trust's stored base URI (not a stored ``callback_url``); a peer
+  credentials now receives 401; a peer
   trustee's Basic retry after a refused bearer cannot succeed on the two
   peer branches.
 - **A peer could reach another peer's subscriptions, permissions and trust
@@ -900,6 +916,15 @@ SECURITY
 REMOVED
 ~~~~~~~
 
+- **``FanOutManager``, ``FanOutResult`` and three settings.** The class was
+  exported and documented but never on the publish path (one sequence for all
+  subscribers, no permission filter); ``max_payload_for_high_granularity``,
+  ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` configured it
+  only. Importing the names raises ``ImportError`` and passing a setting to
+  ``with_subscription_processing()`` raises ``RuntimeError``, both naming
+  ``docs/migration/v3.16.rst``, "Callback delivery". **Breaking:** remove the
+  import or setting.
+
 - **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
   sequence number back after a diff could not be stored, which could hand
   the number to a second change. A number whose diff is not stored now stays
@@ -928,6 +953,165 @@ REMOVED
 
 CHANGED
 ~~~~~~~
+
+- **ActingWeb announces and conforms to specification version 1.5.**
+  ``/meta/actingweb/version`` answered ``1.0`` while the library followed most
+  of 1.4 and departed from it in places the specification did not describe.
+  ``docs/protocol/actingweb-spec.rst`` is now version 1.5: rewritten where the
+  library's behaviour is the working design, with the library fixed where it
+  was a defect (the entries above), and generic (it describes the protocol,
+  not this library). Its changelog block lists each normative difference from
+  1.4 as an addition, a clarification or a change; back-pressure, a circuit
+  breaker, payload limits and compression become optional mechanisms (two
+  1.4 MUSTs are now MAYs). **Behavior change:** a peer that compared the
+  version with ``"1.0"``. ``docs/migration/v3.16.rst``, "Specification 1.5",
+  tables every changed answer by endpoint.
+
+- **One write's callbacks are sent concurrently.** The publisher sent each
+  subscriber's callback in turn, so one write waited for the sum of its
+  subscribers' answers (up to 15 s each for one that hangs). Now at most
+  ``max_concurrent_callbacks`` (default 4; it was 10 and read by nothing) go
+  to subscribers on other hosts at once, subscribers on the publisher's own
+  host one at a time, and two ordered callbacks to one subscriber stay in
+  order. Off the event loop, and with ``with_sync_callbacks()``, the write
+  waits for all of them; on a running loop they are tasks the library keeps
+  until done. **Behavior change:** a FastAPI deployment whose subscribers
+  call it back through another origin sizes ``with_thread_pool_workers`` to at
+  least the simultaneous writes times one plus the bound.
+- **A missed resync is sent again without ``with_sync_callbacks()``.** A
+  resync that was refused, timed out or answered other than 2xx is recorded
+  and sent on the next resume whenever the write waited for its callbacks
+  (before, only with ``with_sync_callbacks()``; any 2xx now counts as
+  delivered, where 200 and 204 did). The full state of the fallback for a
+  peer without resync is not sent when its clear was not delivered.
+- **Callback sends no longer set ``Actor.last_response_code``**; trust and
+  peer calls still do. **Behavior change:** code that read it after a write.
+
+- **Subscribers are told of deletes at every level, of a clear in one diff,
+  and of the value after the hooks (specification 1.5).** A REST delete, an
+  empty PUT and the web UI's delete registered a raw ``""`` that no
+  subscription to the deleted name received; a resource subscription was not
+  told when its key went with its parent; a nested write sent
+  ``{name: {key: value}}``, which a replica applied as the whole value; a
+  PUT's diff carried the request body before the property hooks; a clear
+  registered a diff per name. Now a delete is the encoded ``""`` at the
+  deleted level and ``{name: ""}`` above it, a resource subscription gets
+  ``""`` when its key existed and went, a subscription above a nested write
+  gets the parent's whole stored value, the diff is the stored value, and a
+  clear is one diff naming every deleted property (lists are not cleared),
+  sent after the deletes; a name written while the clear ran is kept, and
+  a diff with its value follows.
+  The previous value is read only when a resource-level subscription exists,
+  by ``PUT``, ``DELETE``, ``POST /properties``, the web UI and the SDK alike.
+  A parent written as JSON text is read as the JSON it holds: a resource it
+  still holds gets its value, not a delete.
+  ``Actor.register_diffs`` takes keyword-only ``previous`` and ``whole``.
+  **Behavior change:** see ``docs/migration/v3.16.rst``, "What a subscriber
+  receives", for what a subscriber application checks.
+- **One timestamp form on the wire.** Diff callbacks sent ``str()`` of the
+  stored time and resync callbacks an ISO offset; the polls sent ISO with
+  ``Z``. All now send ``2026-01-20T12:00:00.000000Z``. **Behavior change:**
+  a parser of the old callback form.
+- **A resync sweeps the replica, is fetched at the subscription's level, and
+  a failed fetch answers 503.** After a resync the replica no longer holds
+  what the baseline lacks (at most once a minute per subscription; inside
+  that minute the rebuild stays owed); the baseline is fetched at the stored
+  subscription's level, not the callback body's; a fetch that fails (decided
+  by status and redirect, so an empty baseline is empty and a property named
+  ``error`` is data) answers 503 with ``Retry-After``, records no sequence and
+  owes the rebuild, which the next callback runs once due (it was applied as
+  an empty baseline). A gone resource (404) is an empty value. **Behavior
+  change.**
+- **A ``none`` subscription polls its resync.** It was sent a resync callback
+  it could not use; the resync is now a ``type: resync`` marker in its queue,
+  and ``sync_subscription`` acts on a marker as a resync (a rebuild). The
+  poll runs the application's data hooks for each diff it processes when
+  given the configuration, which the gap resync now passes, with or without
+  ``auto_storage``. **Behavior change.**
+- **A callback that ran an owed rebuild reached no hook.** After a resync
+  whose fetch failed, the next callback rebuilds the replica from a
+  baseline and answers for itself; neither the subscription data hooks nor
+  the legacy ``subscription`` callback hook saw its change. When that
+  rebuild settles, both are told the baseline once, with ``"resync"``; a
+  rebuild that does not settle tells neither, and the callback (answered
+  503) is told when it is sent again. **Behavior change:** a data hook can
+  be called with ``"resync"`` and the whole baseline in place of the diff
+  that arrived.
+- **Answers that follow the specification:** ``{"sequence": 0}`` clears
+  nothing (it cleared the queue); a callback with ``data`` and no integer
+  ``sequence`` answers 400 (it was dropped with 204); a granularity other
+  than ``high``, ``low`` or ``none`` answers 400, and
+  ``create_remote_subscription`` refuses it before sending. **Behavior
+  change.**
+
+- **An authenticated callback to a name nothing handles answers 403.**
+  ``/callbacks/<name>`` with no hook registered for the name (and no ``"*"``
+  hook) answered 200 with ``false``; a hook registry could not tell that
+  apart from a hook that ran and returned ``False``. Now
+  ``HookRegistry.has_callback_hook`` tells them apart: nothing registered is
+  403, and a hook that returns a falsy value keeps its 200. An
+  authenticated body that is not a JSON object reaches the hook as an empty
+  dict (a JSON array was a 500), and the hook's ``data`` carries
+  ``anonymous: False``. **Behavior change:** a probe that expected 200 from
+  an unhandled callback gets 403.
+- **A ``/www/<path>`` that nothing handles answers 404** (it answered 200
+  with the text ``False``): with no ``www`` hook registered, or when the
+  hook returns ``False`` or ``None`` for the path. **Behavior change:** a
+  ``www`` hook that returned ``False`` for a page it served gets 404; it
+  returns a ``{"template": ..., "data": ...}`` dict instead (a string or
+  ``True`` is answered as the text ``True``).
+- **Trust answers follow the specification.** ``approved`` in a trust
+  ``PUT`` accepts ``true`` (or the string ``"true"`` a form sends) only;
+  ``false``, ``null`` and anything else answer 400 with nothing changed
+  (``false`` was read as absent and answered 204). The answer to a trust
+  request (and a re-pair) carries ``approved``, ``peer_approved`` and
+  ``verified`` as JSON booleans, as a GET of the row does (they were the
+  strings ``"true"``/``"false"``). ``GET /permissions/<peer>`` answers 404
+  for a relationship whose trust type is not registered, as the trust
+  permissions endpoint does (it answered 500). **Behavior change:** a
+  client that compared the flags with ``"true"`` compares with ``true``.
+
+- **List items are addressed by path, and ``POST`` to a list appends
+  (specification 1.5).** ``GET /properties/<list>/0`` answered the whole
+  list, ignoring the index, and ``POST /properties/<list>`` answered 400, so
+  the item paths the specification describes did nothing they said. Now
+  ``GET``, ``PUT`` and ``DELETE /properties/<list>/<n>`` read, replace (or
+  append at the length) and remove item ``n`` (404 out of range), and
+  ``POST /properties/<list>`` appends the body as one item, 201 with
+  ``Location`` naming the index it landed at. Each registers the list diff
+  of the form it copies (``?index=N`` or ``/items``) and runs the property
+  hooks with the item's path. The second segment is an item only when it is
+  a canonical non-negative integer and the first is a list; elsewhere a
+  numeric segment is a nested key as before. Access is decided on the list
+  name, and a peer that may not write a name gets 403 from the append
+  whether or not it is a list (it got 400 first). **Behavior change:** a
+  client that read the list from ``/properties/<list>/0`` now gets one item.
+  See ``docs/migration/v3.16.rst``, "List items by path, and text values".
+- **A property value that is not JSON is labelled ``text/plain``.** ``GET
+  /properties/<name>`` sent stored text as ``application/json``, which a
+  client could not parse. Now text is ``text/plain; charset=utf-8`` and a
+  JSON value ``application/json``. A subscriber accepts a text baseline
+  labelled either way. **Behavior change:** a client that parsed the body as JSON because
+  of the label checks the label first; a 3.15 subscriber of a 3.16
+  publisher reads a text value at a property-name subscription as a failed
+  fetch; upgrade subscribers first.
+- **A name taken by a list or a property answers 409 on every route.** A
+  property write over a list, or a list created over a property, answered
+  400 on a nested ``PUT`` and 500 on the single ``PUT``, a ``POST`` key and
+  list creation. Now each answers 409 ``{"error": "name_taken"}`` with
+  nothing written for that name (the property hook has run; in a ``POST`` of
+  several keys, those applied before it stay and are announced), and the
+  library raises
+  ``ListNameTakenError`` (still a ``ValueError``) for both directions.
+  **Behavior change:** a client that retried a 500 there gets a 409 to act
+  on.
+- **``/meta/actingweb/supported`` no longer lists ``subscriptionbatch``, and
+  always lists ``permissioncallback`` and ``permissionquery``.** The first is
+  defined by no specification and was served by nothing; the other two were
+  listed only with peer permission caching on, though both endpoints are
+  always served. **Behavior change:** a peer that read
+  ``subscriptionbatch`` no longer finds it (nothing in the library acted
+  on it).
 
 - **Under ``with_email_as_creator`` the creator follows the stored email
   where the email is written, not when the actor is next loaded.**
@@ -2103,6 +2287,36 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``ActingWebApp.with_callback_delivery()``, with
+  ``callback_delivery_budget_seconds`` and ``serialize_own_host_callbacks``**
+  (also accepted by ``with_subscription_processing()``): a total time one
+  request may spend delivering its callbacks, shared by every diff it
+  registers (off by default; only on a write that waits for its callbacks, the
+  event loop's sends are past the response already; sends not started are skipped, sends in flight
+  end with it, the diffs are stored either way), and a switch
+  to send own-host subscribers under the bound for a deployment that serves
+  one request per function instance. See ``docs/quickstart/deployment.rst``.
+
+- **``allow_anonymous`` on callback hooks, for third-party webhooks.**
+  ``@app.callback_hook(name, allow_anonymous=True)`` lets an unauthenticated
+  ``POST /<actor_id>/callbacks/<name>`` reach that hook (only a ``POST``
+  that arrived as one, no ``_method`` override, never ``"*"`` or the
+  library's callback names, never the ``"*"`` hooks; 413 above 1 MB). The
+  hook authenticates its caller itself from ``data["headers"]`` and
+  ``data["raw_body"]`` (``data["anonymous"]`` is ``True``), and its falsy
+  result answers 403 (a truthy one 200). Every callback hook, anonymous or
+  not, gets ``headers`` (without ``Authorization`` and ``Cookie``) and
+  ``raw_body`` from the request itself; a JSON body cannot supply them, so
+  a hook's signature check holds whoever calls. Since 3.16 made
+  every callback authenticated, this is how a provider webhook works again.
+  The demo's ``sms_webhook`` and ``payment_webhook`` use it with a shared
+  secret.
+
+- **``ActingWebApp.with_app_version(version)``** sets the application's
+  version, served at ``/meta/version`` and in the ``/meta`` object. The
+  specification defines that value as the application's; unset it is the
+  library's version, as before, so an application should set its own.
+
 - ``actingweb-unique-creators creator-to-email [--apply]``: moves each actor
   vouched for its current creator whose stored email is another address to
   that email (conditioned on what it read, so a concurrent sign-in wins),
@@ -2495,6 +2709,34 @@ ADDED
 FIXED
 ~~~~~
 
+- **A publisher's property read fault wiped its subscribers' replicas.**
+  ``GET /properties`` answered a read error other than a database fault
+  with 200 and ``{}``, which a subscriber takes as the publisher's whole
+  state: the resync sweep then deleted every property and list it held for
+  that peer. It answers 500, so the baseline fails and the rebuild stays
+  owed. **Behavior change:** a client sees 500 where it saw an empty
+  listing.
+
+- **Callback tasks on a running event loop could be collected before they
+  ran** (no reference was kept); the sender keeps each until it is done.
+
+- **DynamoDB stamped every subscription diff of a process with one time**
+  (the attribute's default was evaluated at import). Each diff is stamped
+  when it is created.
+- **The gap resync dropped the callback that triggered it and ran no data
+  hook**; it now passes the application's configuration to the poll, which
+  runs the hooks once per applied sequence, and applies the trigger when the
+  poll did not bring it.
+- **A poll wrote each diff's timestamp into the replica** (a whole-target
+  replica held a property named ``timestamp``).
+
+- **The scalar ``/meta`` paths were labelled ``text/html`` (Flask) or not
+  at all (FastAPI).** ``/meta/id``, ``/meta/version``,
+  ``/meta/actingweb/supported`` and the others are ``text/plain`` on both
+  integrations; ``/meta`` itself stays ``application/json``.
+- **``PUT /properties`` without a name answered 500** (an unhandled
+  ``IndexError``). It answers 405 with ``Allow: GET, POST, DELETE``.
+
 - **Every actor load under ``with_email_as_creator`` read the whole
   ``_internal`` bucket.** The creator-equals-email check ran on every load
   (one strongly consistent Query on each SPA request for a deployment with
@@ -2750,10 +2992,7 @@ FIXED
   answers 503 and processes nothing (it used to apply an empty diff and
   advance the sequence). With subscription processing on and
   ``auto_sequence`` at its default (on), a callback the subscriber fetches by URL (not a resync)
-  without an integer ``sequence`` answers 400. ``FanOutManager`` no longer counts
-  the in-progress answer toward opening a subscriber's circuit breaker, and
-  a half-open breaker that gets it closes; every other 503, a subscriber's
-  store-fault answer included, and a 429 still count. **Check:** the claim
+  without an integer ``sequence`` answers 400. **Check:** the claim
   holds once every instance runs 3.16 (an older instance ignores it),
   between processes with synchronised clocks, and for handlers that finish
   within the 60 seconds (the lease is not renewed).
@@ -2988,12 +3227,6 @@ FIXED
   everything was synced. The callback answers 503 now, before anything is
   stored or synced. (B10)
 
-- **A faulted read reset an open circuit breaker.** The fan-out manager read
-  a peer's persisted breaker, and a fault read as "no breaker": a fresh,
-  closed one was created and persisted over the open one. That delivery is
-  skipped now (``error="breaker_state_unreadable"``) and the stored state is
-  left as it was. (B11)
-
 - **An actor whose sign-in marker could not be read was ranked like an
   unvouched one.** With several actors sharing an address, a fault on the
   owner's vouched actor let a lower-id unvouched sibling (an attacker's
@@ -3108,10 +3341,6 @@ FIXED
 
 - **The MCP bridge counted a concurrent create as the winner when the
   tombstone could not be read.** It now answers 503.
-
-- **Two fan-out comments said the subscription circuit breaker was shared
-  through persistence.** It is per process; persisted state only seeds a new
-  process. ``docs/quickstart/deployment.rst`` says so.
 
 v3.15.1: September 29, 2026
 ---------------------------

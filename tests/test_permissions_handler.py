@@ -251,9 +251,10 @@ class TestPermissionsHandler:
             with patch("actingweb.handlers.permissions.get_registry", mock_registry):
                 handler.get("actor123", "peer456")
 
-                # Verify 500 response
+                # 404, as the trust permissions endpoint answers (3.16,
+                # specification 1.5; it was a 500)
                 handler.response.set_status.assert_called_with(
-                    500, "Trust type 'unknown_type' not configured"
+                    404, "Trust type 'unknown_type' not found"
                 )
 
     def test_get_permissions_exception_handling(self, handler):

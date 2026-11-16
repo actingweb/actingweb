@@ -14,9 +14,11 @@ Start here
 3.16 closes a squat on the actor factory, makes a database fault an error
 instead of a guess, makes creator uniqueness (on by default) a guarantee the
 database enforces, binds every peer to its own paths, and adds ``prompt``
-to the SPA sign-in. Most applications need to check only the first three
-items, item 11 and item 18; an application with ``with_email_as_creator``
-also item 25.
+to the SPA sign-in. It also conforms to specification 1.5, which changes
+what subscribers are told and several answers, sends a write's callbacks
+concurrently, and removes ``FanOutManager``. Most applications need to check
+only the first three items, item 11, item 18 and items 26 to 30; an
+application with ``with_email_as_creator`` also item 25.
 
 .. warning::
 
@@ -35,7 +37,11 @@ also item 25.
    **With ``with_email_as_creator`` it also does not start until
    ``actingweb-unique-creators creator-to-email --apply`` has run**
    (``EmailAsCreatorNotReady``; see `The creator follows the stored
-   email`_).
+   email`_). **An application that passes ``max_payload_for_high_granularity``,
+   ``circuit_breaker_threshold`` or ``circuit_breaker_cooldown`` to
+   ``with_subscription_processing()``, or imports ``FanOutManager`` or
+   ``FanOutResult``, does not start**: the setting raises ``RuntimeError`` and
+   the import ``ImportError``, both naming `Callback delivery`_. Remove them.
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -141,7 +147,9 @@ also item 25.
     without credentials answers 401; an access row admits only the method a
     request performs; a peer's own subscription and trust row are admitted
     by the built-in ``owner`` rows, so a GET-only subscriber type needs no
-    new rows. A trust request for a peer that already has a
+    new rows. A third party's webhook reaches a hook registered with
+    ``allow_anonymous=True``, which verifies its caller itself (see
+    :doc:`../reference/hooks-reference`, "Anonymous webhooks"). A trust request for a peer that already has a
     trust is a re-pair that must carry the current secret. After every
     instance runs 3.16, run ``actingweb-peer-state report`` (then ``prune
     --apply``) and restart.
@@ -187,6 +195,27 @@ also item 25.
     holds raises ``CreatorTaken``; a creator changed with
     ``Actor.modify(creator=…)`` is no longer undone by a load; a custom actor
     backend implements ``rename_creator``.
+26. **Removed subscription-processing settings stop startup** (see `Callback
+    delivery`_): remove ``max_payload_for_high_granularity``,
+    ``circuit_breaker_threshold``, ``circuit_breaker_cooldown`` and any
+    ``FanOutManager`` import.
+27. **What a subscriber receives changed** (see `What a subscriber
+    receives`_): deletes reach every level as ``""``, a nested write sends the
+    parent's whole value, a clear is one diff, the callback timestamp is ISO
+    with ``Z``, and a resync removes from the replica what its baseline
+    lacks.
+28. **List items are addressed by path and text values are ``text/plain``**
+    (see `List items by path, and text values`_): ``GET
+    /properties/<list>/0`` returns one item, ``POST /properties/<list>``
+    appends, and a name taken by a list or a property answers 409.
+29. **The passphrase is no longer returned to a peer, and only the creator
+    and the trustee change the trustee root or the creator** (see `The
+    passphrase and the trustee`_); an admin peer of an earlier version may hold
+    the passphrase: rotate it where that matters.
+30. **A write's callbacks are sent concurrently** (see `Callback delivery`_):
+    size a FastAPI handler pool for it; behind a gateway with a response
+    limit set ``with_callback_delivery(callback_delivery_budget_seconds=...)``.
+    The protocol changes are tabled in `Specification 1.5`_.
 
 
 What changed and why
@@ -415,6 +444,10 @@ to its trustee and back to its owner changes nothing. A ``factory`` actor keeps
 ``force_email_prop_as_creator`` on and a stored email, a ``creator`` other than
 those two answers ``400``: the creator is pinned to that email.
 
+Only the creator and the trustee may call ``PUT`` and ``DELETE
+/<id>/trust/trustee`` (see `The passphrase and the trustee`_); a peer of
+any relationship, ``admin`` included, answers 403.
+
 The endpoint answers ``500`` and changes nothing (``trustee_root`` included)
 when it cannot read the actor's ``_internal`` bucket, when the marker cannot
 be written, or when the creator change itself fails. In the last case the
@@ -467,7 +500,8 @@ single-row reads and raised on list reads. A caller could not tell "no such
 trust" from "the read failed", and eleven callers acted on the guess: they
 issued a new trust secret, overwrote a permission override, created a
 duplicate actor, deleted an actor without notifying its peers, reset an open
-circuit breaker. In 3.16 the decision reads raise, and those callers stop.
+circuit breaker (of ``FanOutManager``, since removed). In 3.16 the decision
+reads raise, and those callers stop.
 
 **What raises now.** On both backends, every single-row ``get``, every list
 ``fetch``, ``get_by_creator``, ``get_bucket``, ``get_attr``, the reverse
@@ -906,6 +940,13 @@ computed from the configuration on every read, so ``with_mcp()`` and the other
 builder calls cannot leave it stale, and ``Config.aw_supported`` is **read-only**
 (an assignment raises ``AttributeError``). A peer that keyed on ``sessions`` or
 ``onewaytrust`` finds neither; none that we know of does.
+
+``subscriptionbatch`` is gone too: no specification defines it and nothing
+served it. ``permissioncallback`` and ``permissionquery`` are always
+advertised, since the two endpoints are always served (they were listed only
+with peer permission caching on). A peer that read ``subscriptionbatch`` from
+the list stops finding it; ``PeerCapabilities.supports_batch_subscriptions()``
+still reads what a peer says and answers ``False`` for a 3.16 peer.
 
 Permission pattern escapes
 --------------------------
@@ -1583,9 +1624,8 @@ credentials answers 401 with a challenge. The two library branches,
 anyone else, the actor's creator and an ``admin`` peer included). Only
 ``diff`` and ``resync`` callbacks are accepted on the subscription branch
 (400). A low-granularity diff is fetched from the trust's stored base URI,
-never from the callback's ``url``; ``FanOutManager`` therefore no longer
-downgrades a large payload to a resource URL, it sends it in full and logs
-a WARNING above ``max_payload_for_high_granularity``. A permission callback's timestamp may be at most five minutes
+never from the callback's ``url`` (``FanOutManager``, which downgraded a large
+payload to such a URL, is removed; see `Callback delivery`_). A permission callback's timestamp may be at most five minutes
 ahead of the receiver's clock (400 beyond, and for one that does not
 parse): check the sender's clock if you see ``Refused a permission
 callback``. A stored permission copy is written conditionally on the row
@@ -1600,8 +1640,12 @@ replaces a stored copy. On the generic branch, ``/callbacks/<name>``, any authen
 caller reaches the application's hook as before, except for the library's
 own names (``permissions``, ``subscription``, ``subscriptions``, ``www``,
 ``resource_*``), which answer 403: only a direct request to such a name is
-affected, not the library's own dispatch. A third party that called
-``/callbacks/<name>`` anonymously (a webhook) now receives 401. A peer
+affected, not the library's own dispatch. A name no hook is registered for
+answers 403 (it answered 200 with ``false``); a hook that returns ``False``
+keeps its answer. A third party that called ``/callbacks/<name>``
+anonymously (a webhook) now receives 401, unless the application registers
+that hook with ``allow_anonymous=True`` and verifies the caller in the hook
+(see :doc:`../reference/hooks-reference`, "Anonymous webhooks"). A peer
 trustee's Basic retry after a refused bearer cannot succeed on the two peer
 branches.
 
@@ -1710,8 +1754,9 @@ validated and authorised before anything is applied. One refusal is 403 with
 ``{"error": "forbidden", "refused": [<names>]}`` and nothing changed; a
 malformed ``items`` is 400 with nothing changed. Before 3.16 a refused name
 was skipped silently, and a refused bulk list update answered 403 after it
-was applied. ``POST /properties/<name>`` is 400 (it answered 400 and wrote
-the body anyway); post to the collection.
+was applied. ``POST /properties/<name>`` is 400 for a name that is not a
+list (it answered 400 and wrote the body anyway); post to the collection. For
+a list it appends one item (see `List items by path, and text values`_).
 
 **Behavior change: a rule that does not match denies.** When a peer's grant
 states a rule for properties or resources (the key is present, even empty),
@@ -2016,6 +2061,358 @@ applied twice.
 - *Mixed versions.* Until every process runs 3.16, a 3.15 process reads a
   converted list, a replica's included, as empty (see "During a rolling
   deploy" and "Rolling back" above).
+
+List items by path, and text values
+-----------------------------------
+
+Specification 1.5 is written to what the library serves; these are the
+``/properties`` answers that changed for it.
+
+**List items by path.** ``GET``, ``PUT`` and ``DELETE
+/properties/<list>/<n>`` address item ``n`` of an existing list, as
+``?index=n`` does for GET and PUT: GET returns the item (404 out of range),
+PUT replaces it or appends at the length (204; 404 beyond it), DELETE removes
+it and the rest close up (204; 404 out of range). ``POST
+/properties/<list>`` appends the body as one item: 201 with ``Location:
+…/properties/<list>/<index>`` and ``{"index": <index>}`` (two concurrent
+appends get two indices on a v2 list; a v1 list can report the same index
+for both, as its appends always could). The second segment
+is an item only when it is a canonical non-negative integer and the first is a
+list; under any other name a numeric segment is still a nested key, and
+``items`` and ``metadata`` keep their routes. Access is decided on the list
+name. The hooks each form runs and the out-of-range answers of the three item
+forms (path, ``?index``, ``/items``) are in :doc:`../guides/property-lists`,
+"Three ways to address an item".
+
+*What to check:* a client that read the whole list from ``GET
+/properties/<list>/0`` (it answered the list and ignored the index) now gets
+item 0; read ``/properties/<list>`` for the list. A client that relied on
+``POST /properties/<list>`` answering 400 now appends. **Behavior change:**
+both.
+
+**A value that is not JSON is ``text/plain``.** ``GET /properties/<name>`` of
+a value stored as text answers ``Content-Type: text/plain; charset=utf-8``; a
+JSON value stays ``application/json``. The scalar ``/meta`` paths
+(``/meta/id``, ``/meta/version``, ``/meta/actingweb/supported``, …) are
+``text/plain`` too; Flask labelled them ``text/html`` and FastAPI sent no
+label. *What to check:* a client that called a JSON parser because of the
+label (``response.json()`` on a text value raised before, as now) reads the
+text. A 3.16 subscriber accepts a text baseline labelled either way, so a
+3.15 subscriber of a 3.16 publisher is the one case to upgrade first: it
+reads a ``text/plain`` value at a property-name subscription as a failed
+fetch. **Behavior change.**
+
+**409 for a name that is taken.** A write that would put a property where a
+list of that name exists, or a list where a property exists, answers 409
+``{"error": "name_taken", ...}`` and writes nothing for that name, on every
+route (single and nested ``PUT``, a key of a ``POST`` body or form, list
+creation); in a ``POST`` of several keys the keys applied before it stay
+written and reach the subscribers. It was
+400 on the nested ``PUT`` and 500 on the others. The property's ``put`` or
+``post`` hook has run when the 409 is answered. In the library the condition
+raises ``ListNameTakenError`` (a ``ValueError``, as before).
+
+**``PUT /properties`` without a name is 405** with ``Allow: GET, POST,
+DELETE`` (an unhandled ``IndexError``, a 500, before).
+
+**``/meta/version`` is the application's version.** ``with_app_version("2.3.1")``
+sets it; unset it is the library's version, as before.
+
+The passphrase and the trustee
+------------------------------
+
+Two refusals close the way an ``admin`` peer could take an actor over and keep
+it after its trust was deleted. **Behavior change:** both.
+
+- ``GET /<actor_id>`` returns ``passphrase`` to the creator and the trustee
+  only. A peer, an ``admin`` one included, gets ``id``, ``creator`` and
+  ``trustee_root`` without it. *What to check:* a peer integration that read
+  the passphrase from the actor root no longer gets it; the owner hands it
+  over by other means if a trustee needs it.
+- ``PUT`` and ``DELETE /<actor_id>/trust/trustee`` (the trustee root, and
+  with ``creator`` the creator) answer 403 to every peer. Before, they were
+  authorised as ``/trust`` is, so an ``admin`` peer could set the trustee
+  root and rename the creator to ``trustee``; with the passphrase it had read,
+  that was trustee access no trust deletion ended. *What to check:* an
+  integration that set the trustee through an ``admin`` peer has the creator
+  set it. An ``admin`` peer keeps the rest of ``/trust``.
+
+A trust relationship can no longer be named ``creator``, ``trustee``,
+``owner`` or ``any``: a request or an initiation with such a name answers 400.
+The access table's ``creator`` and ``trustee`` rows never match a peer,
+whatever its relationship is named, so a peer whose trust was called
+``creator`` no longer reaches the creator's routes (``/www`` among them, which
+shows the passphrase). *What to check:* a trust type registered under one of
+those names (none should be) is renamed, and an existing trust row with such a
+relationship is deleted.
+
+**Operator step.** Nothing rotates a passphrase an ``admin`` peer of an earlier
+version may already hold. Where that matters, give the actor a new
+passphrase through the SDK (``Actor.modify(passphrase=...)``), and check
+``/meta/trustee_root`` and the creator for values you did not set.
+
+Other trust answers changed with them: ``approved`` in a trust ``PUT`` accepts
+``true`` only (``false``, ``null`` and anything else answer 400 with nothing
+changed; ``false`` answered 204 and did nothing); the answer to a trust
+request carries ``approved``, ``peer_approved`` and ``verified`` as JSON
+booleans, as a GET of the row does (a client that compared them with the
+string ``"true"`` compares with ``true``); and ``GET /permissions/<peer>``
+answers 404, not 500, for a relationship whose trust type is not registered.
+
+What a subscriber receives
+--------------------------
+
+Specification 1.5 says what a subscriber is told and what a receiver does;
+3.16 conforms. Every item is a **Behavior change** for a subscriber
+application; the check follows each. The full rules are in
+:doc:`../guides/subscriptions`, "What a Subscriber Is Told".
+
+- **Deletes reach every level.** A REST delete (and an empty ``PUT``, and the
+  web UI's delete) registers the encoded ``""`` the interface layer always
+  did: a subscription to the deleted name now receives ``""`` with a sequence
+  number (before, nothing), and a resource subscription receives ``""`` when
+  its key went with its parent. *Check:* a data hook that read the absence
+  of a diff as "unchanged" after a delete; sequence counting that assumed
+  deletes take no number.
+- **A nested write sends the parent's whole value** to a subscription above
+  the resource; before, ``{name: {key: value}}``, which a replica applied as
+  the whole value and lost the other keys. *Check:* a hook that read such a
+  diff as a partial patch now gets the whole value.
+- **The value after the hooks:** a ``PUT`` whose property hook transforms
+  the value sends what was stored, not the request body.
+- **A clear is one diff** naming every deleted property, one sequence and
+  one callback; it was a diff per name (and a second, dropped, registration).
+  Lists are not cleared. *Check:* a hook that expected one call per name.
+- **The callback timestamp** is ISO 8601 in UTC with ``Z``
+  (``2026-01-20T12:00:00.000000Z``), as the polls already sent it; callbacks
+  sent ``str()`` of the stored time and resync callbacks an offset. On
+  DynamoDB each diff now has its own time (the default was taken once per
+  process). *Check:* a parser that expected the space-separated form.
+- **A resync sweeps.** After a resync (pushed or polled) the replica no
+  longer holds what the baseline lacks; the resync is fetched at the stored
+  subscription's level, not the callback body's. At most once a minute per
+  subscription; inside that minute the resync is applied without the sweep
+  and the rebuild stays owed. *Check:* application data written into the
+  replica bucket (keep it elsewhere).
+- **A failed baseline fetch answers 503** with ``Retry-After``, records no
+  sequence and owes the rebuild; it was applied as an empty baseline. The next
+  callback runs an owed rebuild that is due, whatever its sequence. A
+  baseline is told failed by the answer's status and redirect, so an empty
+  baseline is empty and a property named ``error`` is data.
+- **A ``none`` subscription** is sent no resync callback; the resync waits as a
+  ``type: resync`` marker that the library's poll acts on. *Check:* a ``none``
+  subscriber that polls with its own code handles a diff of ``"type":
+  "resync"`` by re-reading the ``url``.
+- **The poll runs the data hooks** for what it applies when given the
+  application's configuration, which the gap resync now is (it ran none and
+  dropped the triggering callback). It no longer writes the diff's
+  ``timestamp`` into the data it applies (a whole-target replica held a
+  property named ``timestamp``). *Check:* a hook that now runs for polled
+  diffs.
+- **``{"sequence": 0}`` clears nothing** (it cleared the whole queue); a
+  callback with ``data`` and no integer ``sequence`` answers 400 (it was
+  dropped as a duplicate with 204); a granularity other than ``high``,
+  ``low`` or ``none`` answers 400 and the SDK refuses it before sending.
+
+Callback delivery
+-----------------
+
+**Callbacks of one write are sent concurrently.** The publisher sent each
+subscriber's callback in turn; now at most ``max_concurrent_callbacks`` (default
+4, read for the first time; it was 10 and read by nothing) go to subscribers on
+other hosts at once, and subscribers on the publisher's own host one at a time
+(``serialize_own_host_callbacks``). Each subscription's sequence still orders
+its diffs. *What to check:* a FastAPI deployment whose subscribers call it back
+through another origin (a low-granularity fetch) sizes
+``with_thread_pool_workers`` to at least the simultaneous writes times one plus
+the bound; the default pool of ten holds two such writes.
+**Behavior change.**
+
+**Two new settings, by deployment shape**, set with
+``with_callback_delivery()`` (which does not turn on incoming processing) or
+``with_subscription_processing()``. ``callback_delivery_budget_seconds``
+(off by default) caps the time one request spends delivering its callbacks,
+shared by every diff it registers:
+sends not started are skipped and sends in flight end with it, the diffs are
+stored either way. ``serialize_own_host_callbacks`` (default ``True``) can be
+turned off where every request has its own function instance. A deployment
+behind a gateway with a response limit keeps ``with_sync_callbacks()``, sets the
+budget under the limit and turns the switch off; a long-running server keeps
+the defaults. See :doc:`../quickstart/deployment`, "Callback Delivery by
+Deployment Shape".
+
+**Removed.** ``FanOutManager`` and ``FanOutResult`` (``actingweb.fanout``,
+``actingweb.interface``) and the settings ``max_payload_for_high_granularity``,
+``circuit_breaker_threshold`` and ``circuit_breaker_cooldown``: none was on the
+publish path. Importing the names raises ``ImportError``, and passing a
+setting to ``with_subscription_processing()`` raises ``RuntimeError``, both
+naming this section. The library does not act on a subscriber's 429 or 503
+(the specification makes back-off optional); the stored diff and polling are
+the recovery.
+
+**A missed resync is sent again** on the next resume whenever the write waited
+for its callbacks (off the event loop, or ``with_sync_callbacks()``): a resync
+that was refused, timed out, or answered 503 by a subscriber that could not
+fetch its baseline is recorded. Before, that happened only with
+``with_sync_callbacks()``.
+
+**``Actor.last_response_code``** is no longer written by callback sends (it
+held the last subscriber's answer, overwritten by each); trust and peer calls
+still set it. *What to check:* code that read it after a write to learn how a
+callback went.
+
+Specification 1.5
+-----------------
+
+3.16 announces specification version 1.5 (``/meta/actingweb/version``; it
+announced ``1.0``) and conforms to it; the specification's own changelog
+(:doc:`../protocol/actingweb-spec`, "Version 1.5") lists every normative
+difference from 1.4. The answers that changed, by endpoint, with who is
+affected and the section that says what to check:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 20 26 12 18
+
+   * - Request
+     - Before
+     - After
+     - Affects
+     - Check in
+   * - ``GET /properties/<list>/<n>``
+     - the whole list
+     - item ``n``; 404 out of range
+     - client
+     - `List items by path, and text values`_
+   * - ``PUT``/``DELETE /properties/<list>/<n>``
+     - a nested key under a list name (400, 404)
+     - replace (or append at the length) / remove item ``n``
+     - client
+     - `List items by path, and text values`_
+   * - ``POST /properties/<list>``
+     - 400
+     - 201 with ``Location``, one item appended
+     - client
+     - `List items by path, and text values`_
+   * - A write over a name of the other kind
+     - 400 or 500
+     - 409 ``name_taken``
+     - client
+     - `List items by path, and text values`_
+   * - ``GET /properties/<text value>``, scalar ``/meta`` paths
+     - ``application/json`` (Flask ``text/html`` on ``/meta``)
+     - ``text/plain``
+     - client, peer
+     - `List items by path, and text values`_
+   * - ``PUT /properties`` (no name)
+     - 500
+     - 405
+     - client
+     - `List items by path, and text values`_
+   * - ``/meta/actingweb/supported``
+     - ``subscriptionbatch``; permission tags only with caching
+     - no ``subscriptionbatch``; ``permissioncallback`` and
+       ``permissionquery`` always
+     - peer
+     - `Advertised option tags`_
+   * - ``/meta/actingweb/version``
+     - ``1.0``
+     - ``1.5``
+     - peer
+     - this section
+   * - ``/callbacks/<name>`` (no hook, authenticated)
+     - 200 ``false``
+     - 403
+     - peer, third party
+     - `Peer paths are bound to their peer`_
+   * - ``POST /callbacks/<name>`` without credentials
+     - 401
+     - 401, or the hook's answer when it is registered with
+       ``allow_anonymous``
+     - third party
+     - :doc:`../reference/hooks-reference`
+   * - ``/www/<unknown path>`` (no ``www`` hook, or the hook returns
+       ``False`` or ``None``)
+     - 200 ``False``
+     - 404
+     - browser
+     - :doc:`../guides/web-ui`
+   * - ``GET /<actor_id>`` as a peer
+     - with ``passphrase``
+     - without it
+     - peer, operator
+     - `The passphrase and the trustee`_
+   * - ``PUT``/``DELETE /trust/trustee`` as a peer
+     - admitted for ``admin``
+     - 403
+     - peer, operator
+     - `The passphrase and the trustee`_
+   * - A trust named ``creator``, ``trustee``, ``owner``, ``any``
+     - accepted
+     - 400
+     - peer
+     - `The passphrase and the trustee`_
+   * - Trust ``PUT`` with ``approved`` not true
+     - 204, nothing changed
+     - 400
+     - client
+     - `The passphrase and the trustee`_
+   * - The answer to a trust request
+     - flags as strings
+     - flags as booleans
+     - peer
+     - `The passphrase and the trustee`_
+   * - ``GET /permissions/<peer>``, unregistered type
+     - 500
+     - 404
+     - peer
+     - `The passphrase and the trustee`_
+   * - A delete, a clear, a nested write, a hook's transform
+     - see the section
+     - deletes at every level, one diff, the whole parent, the stored value
+     - subscriber
+     - `What a subscriber receives`_
+   * - Callback and resync ``timestamp``
+     - ``str()`` / an offset
+     - ISO 8601, UTC, ``Z``
+     - subscriber
+     - `What a subscriber receives`_
+   * - ``PUT /subscriptions/<peer>/<id>`` ``{"sequence": 0}``
+     - cleared the queue
+     - clears nothing
+     - subscriber
+     - `What a subscriber receives`_
+   * - A subscription with another granularity
+     - accepted
+     - 400
+     - subscriber
+     - `What a subscriber receives`_
+   * - A callback with data and no ``sequence``
+     - 204, dropped
+     - 400
+     - publisher
+     - `What a subscriber receives`_
+   * - A resync whose baseline cannot be fetched
+     - applied as empty
+     - 503 with ``Retry-After``
+     - publisher
+     - `What a subscriber receives`_
+   * - Resume of a ``none`` subscription
+     - a resync callback
+     - a ``type: resync`` marker in its queue
+     - subscriber
+     - `What a subscriber receives`_
+   * - Callbacks of one write
+     - one after another
+     - concurrently, bounded per write
+     - operator
+     - `Callback delivery`_
+
+Changes 3.16 made before specification 1.5 was written, which a second
+implementation also checks: callbacks without credentials answer 401 and a
+peer reaches only its own paths (`Peer paths are bound to their peer`_), a
+repeated trust request is a re-pair, and a grant's stated rule denies what it
+does not match (`Grants hold at every level`_, `Every other way in`_).
 
 What stays the same
 ===================

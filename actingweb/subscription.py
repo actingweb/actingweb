@@ -13,6 +13,26 @@ from actingweb.db import (
 
 from .db.exceptions import DbError
 
+# The granularities a subscription may have (specification 1.5: anything
+# else answers 400 and is refused before it is sent).
+GRANULARITIES = frozenset({"high", "low", "none"})
+
+
+def wire_timestamp(value: Any) -> str:
+    """A diff's or a callback's ``timestamp`` as the wire carries it: ISO 8601
+    in UTC with ``Z`` and microseconds (``2026-11-15T10:00:00.000000Z``), the
+    form both polls use (3.16, specification 1.5: callbacks sent ``str()`` of
+    the stored value, and resync callbacks an offset). A naive value is
+    taken as UTC; text is passed through."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, datetime.datetime):
+        value = datetime.datetime.now(datetime.UTC)
+    if value.tzinfo is not None:
+        value = value.astimezone(datetime.UTC).replace(tzinfo=None)
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")

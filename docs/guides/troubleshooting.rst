@@ -212,17 +212,12 @@ Subscription Callbacks Not Delivered
 - **Symptom**: Property changes on the publisher are not reaching subscribers.
 - **Causes and fixes**:
 
-  1. **Circuit breaker is open**: Check the circuit breaker status for the peer:
-
-     .. code-block:: python
-
-        from actingweb.fanout import FanOutManager
-        manager = FanOutManager(actor)
-        status = manager.get_circuit_breaker_status(peer_id)
-        if status == "OPEN":
-            # Peer is unavailable, reset if issue resolved
-            manager.reset_circuit_breaker(peer_id)
-
+  1. **The callback failed and was not retried**: the sender logs ``Callback
+     seq=N to <peer> failed`` or ``returned <status>``. It does not retry: the
+     diff is stored, so the subscriber catches up at its next callback (the
+     gap) or when it polls; an undelivered resync is sent again on the next
+     resume. A write cut by ``callback_delivery_budget_seconds`` logs ``not
+     sent: the delivery budget ran out``.
   2. **Peer URL unreachable**: Verify the peer's callback URL is accessible and responding.
   3. **Trust not approved**: Ensure the trust relationship is approved on both sides.
   4. **Subscription target mismatch**: Verify the subscription target matches what you're publishing.
@@ -348,26 +343,62 @@ Repeated rebuild warnings for one subscription
   5. **A publisher older than 3.16** sends REST list edits as scalars; a scalar for
      a list's name is out of step. Upgrade the publisher.
 
-Subscriber Returning 429 (Too Many Requests)
---------------------------------------------
+A Subscriber Refuses Callbacks (400 or 503)
+-------------------------------------------
 
-- **Symptom**: Publisher receives 429 responses when sending callbacks.
+- **Symptom**: the publisher logs callbacks answered 400 or 503.
 - **Causes and fixes**:
 
-  1. **Pending queue full**: The subscriber's ``max_pending`` limit was exceeded:
+  1. **Pending queue full** (400): the subscriber's ``max_pending`` was
+     exceeded. Raise it (``app.with_subscription_processing(max_pending=200)``,
+     default 100) or keep its data hooks fast.
+  2. **In progress or a failed resync fetch** (503 with ``Retry-After``):
+     another delivery of the sequence is running, or a resync's baseline
+     could not be fetched. Nothing to do: the diff is stored and the
+     subscriber recovers on its next callback or poll; a resync is sent again
+     on the next resume.
+  3. **Malformed** (400): data without an integer ``sequence``, or an unknown
+     callback type, from a sender that is not this library.
 
-     .. code-block:: python
+Writes Time Out Behind a Gateway
+--------------------------------
 
-        # On subscriber, increase if needed:
-        app.with_subscription_processing(max_pending=200)  # Default is 100
+- **Symptom**: on a function platform behind a gateway with a response limit
+  (30 s, say), a write that has subscribers times out at the gateway while the
+  function keeps running, and a client that retries the write produces a
+  second diff.
+- **Cause**: with ``with_sync_callbacks()`` the write waits for its callbacks,
+  and a subscriber that hangs costs up to 15 s per send.
+- **Fix**: set ``callback_delivery_budget_seconds`` under the gateway's limit
+  and turn ``serialize_own_host_callbacks`` off when every request has its own
+  function instance; see :doc:`../quickstart/deployment`.
 
-  2. **Processing too slow**: The subscriber's hook is blocking. Keep hooks fast or offload work.
-  3. **Publisher retry strategy**: Implement exponential backoff when receiving 429:
+A Replica Is Missing Names After a Resync
+-----------------------------------------
 
-     .. code-block:: python
+- **Symptom**: after a publisher resumed (or a gap resync), names the
+  subscriber's replica held are gone, and the data hook was not told which.
+- **Cause**: since 3.16 a resync removes from the replica what the
+  publisher's baseline no longer has (it was deleted while suspended, or the
+  peer's grant no longer covers it). The hook gets the baseline, not the
+  removed names.
+- **Fix**: nothing, when the publisher deleted them. If the baseline is
+  narrower than expected, check the grant the publisher gives this peer. A
+  replica bucket holds only what the peer sent: keep the application's own
+  data elsewhere.
 
-        # FanOutManager handles retries automatically
-        # For custom implementations, wait before retrying
+A Resync Answers 503
+--------------------
+
+- **Symptom**: a resync callback answers 503 with ``Retry-After``; the log
+  says ``Failed to fetch resync baseline``.
+- **Cause**: the subscriber could not fetch the baseline (the publisher was
+  unreachable, answered an error, or redirected). Since 3.16 that is not
+  applied as an empty baseline: the sequence stays and the rebuild is owed.
+- **Fix**: none needed when the publisher is reachable again: the next
+  callback runs the owed rebuild once a minute has passed since the last
+  attempt, a poll runs it too, and a 3.16 publisher sends the resync again on
+  its next resume.
 
 Sequence Gaps Not Resolving
 ---------------------------

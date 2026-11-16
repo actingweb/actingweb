@@ -4,6 +4,7 @@ from typing import Any
 
 from actingweb.actor import resync_marker_url
 from actingweb.handlers import base_handler
+from actingweb.subscription import GRANULARITIES, wire_timestamp
 
 from ..access_decision import (
     evaluator_or_none,
@@ -197,6 +198,11 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Missing target")
             return
+        if not isinstance(granularity, str) or granularity not in GRANULARITIES:
+            # Refused before it is sent (3.16, specification 1.5).
+            if self.response:
+                self.response.set_status(400, "Unknown granularity")
+            return
 
         # Use SubscriptionManager to create remote subscription
         remote_loc = actor_interface.subscriptions.subscribe_to_peer(
@@ -327,6 +333,12 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
         except (ValueError, RecursionError):
             if self.response:
                 self.response.set_status(400, "No json body")
+            return
+        if not isinstance(granularity, str) or granularity not in GRANULARITIES:
+            # high, low or none (3.16, specification 1.5; anything else was
+            # stored and then never delivered).
+            if self.response:
+                self.response.set_status(400, "Unknown granularity")
             return
         if peerid != auth_result.auth_obj.acl["peerid"]:
             logger.warning(
@@ -461,7 +473,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
             pairs.append(
                 {
                     "sequence": diff["sequence"],
-                    "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    "timestamp": wire_timestamp(diff["timestamp"]),
                     **_served(myself, peerid, sub_dict, diff.get("diff"), snapshot),
                 }
             )
@@ -516,11 +528,13 @@ class SubscriptionHandler(base_handler.BaseHandler):
                     400, "Error in json body and no GET parameters"
                 )
                 return
+        # A number, or a string of one (a query parameter); anything else,
+        # ``true`` and ``null`` included, is 400 (specification 1.5; null
+        # raised a 500 and ``true`` cleared through 1).
         try:
-            if not isinstance(seq, int):
-                seqnr = int(seq)
-            else:
-                seqnr = seq
+            if isinstance(seq, bool) or not isinstance(seq, int | str):
+                raise ValueError(seq)
+            seqnr = seq if isinstance(seq, int) else int(seq)
         except ValueError:
             self.response.set_status(400, "Sequence does not contain a number")
             return
@@ -540,7 +554,10 @@ class SubscriptionHandler(base_handler.BaseHandler):
             self.response.set_status(404, "Subscription does not exist")
             return
 
-        sub_with_diffs.clear_diffs(seqnr=seqnr)
+        if seqnr > 0:
+            # ``{"sequence": 0}`` clears nothing (3.16, specification 1.5);
+            # ``clear_diffs(0)`` keeps its internal meaning, "all".
+            sub_with_diffs.clear_diffs(seqnr=seqnr)
         if self.response:
             self.response.set_status(204)
         return
@@ -703,7 +720,7 @@ class SubscriptionDiffHandler(base_handler.BaseHandler):
             "id": myself.id,
             "peerid": peerid,
             "subscriptionid": subid,
-            "timestamp": diff["timestamp"].strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "timestamp": wire_timestamp(diff["timestamp"]),
             "target": sub_dict["target"],
             "subtarget": sub_dict["subtarget"],
             "resource": sub_dict["resource"],

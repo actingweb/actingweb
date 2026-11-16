@@ -75,7 +75,9 @@ class _Diffs:
             ),
         ]
 
-    def _record(self, target=None, subtarget=None, resource=None, blob=None) -> None:
+    def _record(
+        self, target=None, subtarget=None, resource=None, blob=None, **_: Any
+    ) -> None:
         self.calls.append(
             {
                 "target": target,

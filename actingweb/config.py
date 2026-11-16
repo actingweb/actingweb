@@ -57,6 +57,15 @@ LEGACY_LOOKUP_REMOVED = (
 )
 
 
+FANOUT_REMOVED = (
+    "{what}: FanOutManager and its settings (max_payload_for_high_granularity, "
+    "circuit_breaker_threshold, circuit_breaker_cooldown) were removed in "
+    "3.16; they were never on the publish path. Callbacks are sent by the "
+    "library's sender, bounded by max_concurrent_callbacks. Remove the "
+    'setting or import, and see docs/migration/v3.16.rst "Callback delivery".'
+)
+
+
 def _handle_removed_lookup_switch(what: str, enabled: bool) -> None:
     """Refuse the removed legacy-lookup switch; warn on its redundant form.
 
@@ -161,8 +170,9 @@ class Config:
         # Only applies when peer_permissions_caching is enabled
         self.auto_delete_on_revocation: bool = False
         # When True, automatically notify peers when their permissions change
-        # Sends a callback to /callbacks/permissions/{actor_id} on the peer
-        # Only applies when peer_permissions_caching is enabled
+        # Sends a callback to /callbacks/permissions/{actor_id} on the peer,
+        # whether or not peer_permissions_caching is on (that setting is about
+        # what this actor caches of peers' grants, not what it sends)
         self.notify_peer_on_change: bool = True
         #########
         # Configurable ActingWeb settings for this app
@@ -430,7 +440,9 @@ class Config:
         # ActingWeb settings for this app
         #########
         # This app follows the actingweb specification specified
-        self.aw_version = "1.0"
+        # The specification version this library conforms to (3.16: it
+        # announced 1.0).
+        self.aw_version = "1.5"
 
         self.mcp: bool = kwargs.get("mcp", False)
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
@@ -531,16 +543,16 @@ class Config:
         ``with_oauth()``) cannot leave a stale tag. A tag is advertised only
         when the path or behaviour it names exists: ``www`` needs the web UI,
         ``oauth`` needs a configured provider, and ``sessions``,
-        ``onewaytrust``, ``callbackcompression``, ``proxy`` and the
-        subscription health tags are never advertised (no route or no
-        support).
+        ``onewaytrust``, ``callbackcompression``, ``proxy``,
+        ``subscriptionbatch`` and the subscription health tags are never
+        advertised (no route or no support; ``subscriptionbatch`` was
+        advertised until 3.16 and is defined nowhere).
         """
         options = [
             "callbacks",
             "trust",
             "subscriptions",
             "subscriptionresync",  # resync callbacks (ActingWeb v1.4)
-            "subscriptionbatch",  # batched subscription callbacks
             "actions",
             "resources",
             "methods",
@@ -555,11 +567,12 @@ class Config:
             options.append("trustpermissions")
         if getattr(self, "mcp", False):
             options.append("mcp")
-        if getattr(self, "peer_permissions_caching", False):
-            # permissioncallback: receives permission change notifications;
-            # permissionquery: GET /{actor_id}/permissions/{peer_id}
-            options.append("permissioncallback")
-            options.append("permissionquery")
+        # Both endpoints are always served (3.16; they were advertised only
+        # with peer permission caching): permissioncallback receives
+        # permission change notifications at /callbacks/permissions/{peer_id},
+        # permissionquery answers GET /{actor_id}/permissions/{peer_id}.
+        options.append("permissioncallback")
+        options.append("permissionquery")
         return sorted(options)
 
     @property

@@ -88,7 +88,8 @@ SubscriptionManager Async Methods
             target: str,
             subtarget: str = "",
             resource: str = "",
-            granularity: str = "high"
+            granularity: str = "high"  # "high", "low" or "none"; anything
+                                        # else is refused before sending
         ) -> Optional[str]  # Returns subscription URL
 
         async def unsubscribe(

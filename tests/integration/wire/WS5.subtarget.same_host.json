@@ -33,11 +33,16 @@
          "data": "{\"v\": 1}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "\"\"",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
         }
        ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 1,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "p",
        "target": "properties"
@@ -49,7 +54,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 1,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "p",
        "target": "properties"
@@ -73,12 +78,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 1,
+        "last_seq": 2,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 2
        }
       ],
       "peer_permissions": {
@@ -148,11 +153,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "p": {
-         "v": 1
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -160,7 +161,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 1,
+        "sequence": 2,
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties"
@@ -187,7 +188,39 @@
    "wire": [
     {
      "auth": "basic:<A.creator>",
-     "children": [],
+     "children": [
+      {
+       "auth": "bearer:trust:A-B",
+       "children": [
+        {
+         "actor": "<B>",
+         "data": "",
+         "event": "subscription_data",
+         "peer": "<A>",
+         "sequence": 2,
+         "target": "properties",
+         "type": "diff"
+        }
+       ],
+       "headers": {},
+       "host": "wire_app",
+       "method": "POST",
+       "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
+       "query": "",
+       "request": {
+        "data": "",
+        "granularity": "high",
+        "id": "<A>",
+        "sequence": 2,
+        "subscriptionid": "<sub1>",
+        "subtarget": "p",
+        "target": "properties",
+        "timestamp": "<ts:iso-z>"
+       },
+       "response": null,
+       "status": 204
+      }
+     ],
      "headers": {},
      "host": "wire_app",
      "method": "DELETE",
@@ -232,11 +265,16 @@
          "data": "{\"v\": 1}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
+        },
+        {
+         "data": "\"\"",
+         "sequence": 2,
+         "timestamp": "<ts:stored>"
         }
        ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 1,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "p",
        "target": "properties"
@@ -248,7 +286,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 1,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "p",
        "target": "properties"
@@ -272,12 +310,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 1,
+        "last_seq": 2,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 1
+        "version": 2
        }
       ],
       "peer_permissions": {
@@ -347,11 +385,7 @@
       },
       "replica": {
        "lists": {},
-       "scalars": {
-        "p": {
-         "v": 1
-        }
-       }
+       "scalars": {}
       },
       "subscriptions": [
        {
@@ -359,7 +393,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 1,
+        "sequence": 2,
         "subscriptionid": "<sub1>",
         "subtarget": "p",
         "target": "properties"

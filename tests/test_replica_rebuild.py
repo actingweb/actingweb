@@ -616,6 +616,11 @@ def test_a_subtarget_answering_404_is_gone() -> None:
         ({}, b"blue", 200, "Application/JSON; charset=utf-8", False, "blue"),
         ({}, b"blue", 200, "application/jsonx", False, None),
         ({}, b"blue", 200, "", False, None),
+        # Specification 1.5: a value that is not JSON is labelled
+        # text/plain by a 3.16 publisher; still not through a redirect.
+        ({}, b"blue", 200, "text/plain; charset=utf-8", False, "blue"),
+        ({}, b"blue", 200, "Text/Plain", False, "blue"),
+        ({}, b"blue", 200, "text/plain", True, None),
     ],
 )
 def test_a_single_propertys_baseline_is_what_the_wire_says(
@@ -681,3 +686,35 @@ class TestIteration27OutsideVoice:
                 PEER, "properties", subtarget="notes"
             )
         assert got is None
+
+
+class TestVerification2026_11_16:
+    """thoughts/verifications/2026-11-16-spec-1-5-3.md (B1): a rebuild that
+    settled returns the baseline it applied, for the callback that ran it to
+    tell the hooks; one that did not settle returns none, and the rebuild
+    itself tells no hook (every path would, before it knows it settled)."""
+
+    def test_a_settled_rebuild_returns_its_baseline(self, env: _Env) -> None:
+        env.baselines = [{"status": "paid"}]
+        result = env.rebuild(force=True)
+        assert result.success
+        assert result.baseline == {"status": "paid"}
+
+    def test_an_unsettled_rebuild_returns_no_baseline(self, env: _Env) -> None:
+        env.sequences = [5, 6, 7, 8, 9, 10]  # keeps moving: stays owed
+        env.baselines = [{"status": "paid"}]
+        result = env.rebuild(force=True)
+        assert not result.success
+        assert result.baseline is None
+
+    def test_the_rebuild_itself_tells_no_hook(self, env: _Env) -> None:
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        seen: list[Any] = []
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            subscription_data_hooks={"*": [lambda *a: seen.append(a)]},
+        )
+        env.baselines = [{"status": "paid"}]
+        assert env.rebuild(config=config, force=True).success
+        assert seen == []

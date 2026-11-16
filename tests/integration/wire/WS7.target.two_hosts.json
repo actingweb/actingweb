@@ -33,7 +33,7 @@
       {
        "diffs": [
         {
-         "data": "{\"transformed\": \"blue\"}",
+         "data": "{\"transformed\": \"BLUE\"}",
          "sequence": 1,
          "timestamp": "<ts:stored>"
         }
@@ -153,7 +153,7 @@
        "lists": {},
        "scalars": {
         "transformed": {
-         "value": "blue"
+         "value": "BLUE"
         }
        }
       },
@@ -197,7 +197,7 @@
         {
          "actor": "<B>",
          "data": {
-          "transformed": "blue"
+          "transformed": "BLUE"
          },
          "event": "subscription_data",
          "peer": "<A>",
@@ -213,14 +213,14 @@
        "query": "",
        "request": {
         "data": {
-         "transformed": "blue"
+         "transformed": "BLUE"
         },
         "granularity": "high",
         "id": "<A>",
         "sequence": 1,
         "subscriptionid": "<sub1>",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 204

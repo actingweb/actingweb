@@ -83,6 +83,29 @@ Delete the actor afterwards with `curl -X DELETE -u qa@example.test:<passphrase>
 localhost:5055/<id>`, or drop the `demoqa` tables with the container
 (`docker compose -f docker-compose.test.yml down -v`).
 
+## Webhooks from third parties
+
+`sms_webhook` and `payment_webhook` (`shared_hooks/app/callback_hooks.py`)
+are registered with `allow_anonymous=True`, so a provider can `POST` to
+`/<actor_id>/callbacks/sms_webhook` or `/payment_webhook` without the actor's
+credentials. Each hook then authenticates the caller itself, on every
+request (an authenticated peer reaches a callback hook too): the
+`X-Webhook-Secret` header must equal `DEMO_WEBHOOK_SECRET`, compared in
+constant time. Anything else is refused and nothing is written (403 for an
+anonymous request; an authenticated caller gets the hook's `false` with
+200), and with `DEMO_WEBHOOK_SECRET` unset every request is refused. A production hook
+verifies the provider's own signature over `data["raw_body"]` instead.
+
+```bash
+export DEMO_WEBHOOK_SECRET=$(openssl rand -hex 16)
+curl -s -X POST localhost:5055/<id>/callbacks/sms_webhook \
+  -H "X-Webhook-Secret: $DEMO_WEBHOOK_SECRET" \
+  -d 'From=%2B4712345678&Body=hello&MessageSid=m1'
+```
+
+`email_verify` is a link a browser opens (a `GET`), which the flag does not
+admit; it stays authenticated, so it works for a user signed in to the web UI.
+
 ## The `/nuke` endpoint
 
 `application.py` registers `GET /nuke?secret=<NUKE_SECRET>`, which deletes

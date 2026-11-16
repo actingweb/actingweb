@@ -704,6 +704,16 @@ The PUT endpoint now accepts permission updates alongside traditional trust rela
      }
    }
 
+``approved`` accepts ``true`` only (a JSON boolean, or the string ``"true"``
+a form sends); ``false``, ``null`` or any other value answers 400 with nothing
+changed (3.16; ``false`` was read as absent and answered 204). A trust is not
+un-approved by a PUT: delete it. The answers to a trust request carry
+``approved``, ``peer_approved`` and ``verified`` as JSON booleans, as a GET
+of the row does (they were the strings ``"true"`` and ``"false"``). Both
+permission endpoints (``/trust/{relationship}/{peerid}/permissions`` and
+``/permissions/{peerid}``) answer 404 for a relationship whose trust type is
+not registered (the second answered 500).
+
 Permission Management API
 -------------------------
 
@@ -875,7 +885,7 @@ ActingWeb applications supporting the unified access control system automaticall
    GET /myapp/actor123/meta/actingweb/supported
    
    # Response includes:
-   actions,callbacks,listproperties,methods,nestedproperties,oauth,resources,subscriptionbatch,subscriptionresync,subscriptions,trust,trustpermissions,www
+   actions,callbacks,listproperties,methods,nestedproperties,oauth,permissioncallback,permissionquery,resources,subscriptionresync,subscriptions,trust,trustpermissions,www
 
 The presence of ``trustpermissions`` indicates support for:
 

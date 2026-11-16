@@ -504,17 +504,32 @@ Use the standard subscription callback endpoint:
            "sequence": 1,
            "target": "properties",
            "data": {"status": "active"},
-           "timestamp": "2026-01-20T12:00:00Z"
+           "timestamp": "2026-01-20T12:00:00.000000Z"  # ISO 8601, UTC, Z
        }
 
        response = client.post(
-           f"/{subscriber_id}/callbacks",
+           f"/{subscriber_id}/callbacks/subscriptions/{publisher_id}/{subscription_id}",
            json=callback_data,
-           auth=(peer_token, "")  # Trust token from subscription
+           headers={"Authorization": f"Bearer {trust_secret}"},
        )
 
-       # 201 = processed, 200 = duplicate, 202 = pending, 429 = backpressure
-       assert response.status_code in [200, 201, 202]
+       # 204: processed, a duplicate, or held behind a gap; 503 with
+       # Retry-After: try again (in progress, or a resync whose baseline
+       # could not be fetched); 400: malformed (data without a sequence)
+       assert response.status_code == 204
+
+Testing Callback Delivery
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``tests/test_callback_sender.py`` tests the sender without a server: it
+patches ``requests.post`` (which ``actingweb.callback_sender`` calls) with a
+fake that counts requests in flight under a lock, sleeps, and answers 204, and
+asserts the peak (the bound, one for own-host subscribers) rather than wall
+times, which vary under xdist. ``tests/integration/test_callback_delivery_shapes.py``
+covers the deployment shapes on the wire apps (a black-hole socket for a
+subscriber that never answers). The wire recordings send one at a time
+(``_one_at_a_time``), because the recorder nests a request under the most
+recently opened one.
 
 Testing Sequence Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -573,6 +573,9 @@ class Scenario:
         # their (random) subscription ids, so a row that has them sorts each
         # run of sibling callbacks by the subscriber's name.
         self.sort_callbacks = False
+        # Subscription ids named in this order before the recording is read
+        # (spec-1-5 Phase 4: concurrent sends make first appearance vary).
+        self.subid_order: list[str] = []
         # Rows about cleanup: also snapshot each actor's stores directly
         # (``_snapshot_stores``), not only through its live rows.
         self.snapshot_stores = False
@@ -638,7 +641,9 @@ class Scenario:
         return result
 
     def recording(self) -> dict[str, Any]:
-        return normalise({"steps": self.steps}, self.names, self.secrets)
+        return normalise(
+            {"steps": self.steps}, self.names, self.secrets, self.subid_order
+        )
 
 
 _CALLBACK_PATH = re.compile(r"^/([0-9a-f]{32})/callbacks/subscriptions/")
@@ -956,7 +961,10 @@ class Normaliser:
 
 
 def normalise(
-    recording: dict[str, Any], names: dict[str, str], secrets: dict[str, str]
+    recording: dict[str, Any],
+    names: dict[str, str],
+    secrets: dict[str, str],
+    subid_order: list[str] | None = None,
 ) -> dict[str, Any]:
     """Replace ids, hosts, secrets and timestamps with names; fail on survivors."""
     norm = Normaliser(
@@ -964,6 +972,8 @@ def normalise(
     )
     for port_host, name in _wire_hosts().items():
         norm.host(port_host, name)
+    for subid in subid_order or []:
+        norm._sub(subid)  # noqa: SLF001
     norm.collect_subids(recording)
     out = norm.walk(recording)
     text = json.dumps(out)

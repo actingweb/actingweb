@@ -209,11 +209,10 @@ class TestFullStateIsTwoDiffs:
                 "_increment_subscription_sequence",
                 side_effect=lambda p, s: next(seqs),
             ),
-            mock.patch.object(
-                actor,
-                "_send_resync_callback_sync",
-                side_effect=lambda url, payload, secret, peer: (
-                    payloads.append(payload) or True
+            mock.patch(
+                "actingweb.callback_sender.send_sync",
+                side_effect=lambda send, deadline=None: (
+                    payloads.append(json.loads(send.body)) or 204
                 ),
             ),
         ):
@@ -321,11 +320,10 @@ class TestVerification2:
                 "actingweb.actor._resync_url",
                 side_effect=lambda c, a, t, st: f"{t}/{st}" if st else t,
             ),
-            mock.patch.object(
-                actor,
-                "_send_resync_callback_sync",
-                side_effect=lambda url, payload, secret, peer: (
-                    payloads.append(payload) or True
+            mock.patch(
+                "actingweb.callback_sender.send_sync",
+                side_effect=lambda send, deadline=None: (
+                    payloads.append(json.loads(send.body)) or 204
                 ),
             ),
         ):
@@ -422,3 +420,25 @@ class TestVerification3:
         lst.sweep_span_orphans()
         for call in actor_.register_diffs.call_args_list:
             assert json.loads(call.kwargs["blob"])["spanned"] is True
+
+
+class TestADeleteMarkerThroughTheFilter:
+    """Verification 2026-11-16 (M6): the encoded ``""`` (spec-1-5 Phase 3)
+    passes the one filter where the peer may read the name, and is dropped
+    where it may not, at both levels."""
+
+    def test_an_allowed_name_keeps_its_delete(self, actor: Any) -> None:
+        out = actor.filter_subscription_blob(
+            "p1", WHOLE, json.dumps({"plain": "", "notes": ""})
+        )
+        assert out is not None and json.loads(out) == {"plain": "", "notes": ""}
+        sub = {"target": "properties", "subtarget": "plain"}
+        assert actor.filter_subscription_blob("p1", sub, json.dumps("")) == '""'
+
+    def test_an_excluded_name_loses_its_delete(self, actor: Any) -> None:
+        out = actor.filter_subscription_blob(
+            "p1", WHOLE, json.dumps({"fake/secret": "", "plain": ""})
+        )
+        assert out is not None and json.loads(out) == {"plain": ""}
+        sub = {"target": "properties", "subtarget": "x", "resource": "secret"}
+        assert actor.filter_subscription_blob("p1", sub, json.dumps("")) is None

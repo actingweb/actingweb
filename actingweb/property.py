@@ -5,7 +5,7 @@ from actingweb.db import get_actor, get_property, get_property_list
 from actingweb.db.exceptions import DbError
 
 from .identifiers import first_control_character
-from .list_core import _V2_RANK_MARKER, _v2_is_rank
+from .list_core import _V2_RANK_MARKER, ListNameTakenError, _v2_is_rank
 from .property_list import _V1_INDEX_RE, ListProperty
 from .property_list_span import aux_partition
 
@@ -344,7 +344,7 @@ class PropertyStore:
                     config=self.__dict__["_config"],
                 )
                 if list_store.exists(k):
-                    raise ValueError(
+                    raise ListNameTakenError(
                         f"Cannot create property '{k}': a list with this name already exists. "
                         f"Delete the list first or use a different name."
                     )

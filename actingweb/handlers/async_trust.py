@@ -9,6 +9,7 @@ operations without blocking the event loop.
 import json
 import logging
 
+from actingweb.access_table import is_reserved_relationship
 from actingweb.handlers.trust import TrustHandler
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ class AsyncTrustHandler(TrustHandler):
             relationship = self.request.get("relationship")
         if len(url) == 0:
             self.response.set_status(400, "Missing peer URL")
+            return
+        if is_reserved_relationship(relationship):
+            # A role or an access-table keyword, never a peer (3.16).
+            self.response.set_status(400, "Reserved relationship name")
             return
 
         # Use developer API - ActorInterface with TrustManager

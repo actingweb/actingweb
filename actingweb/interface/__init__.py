@@ -8,7 +8,6 @@ with improved developer experience.
 from ..attribute_list_store import AttributeListStore
 from ..callback_processor import CallbackProcessor, CallbackType, ProcessResult
 from ..deletion import DeletionStatus, get_deletion_status
-from ..fanout import FanOutManager, FanOutResult
 from ..peer_capabilities import PeerCapabilities
 from ..remote_storage import RemotePeerStore, get_remote_bucket
 from ..subscription_config import SubscriptionProcessingConfig
@@ -89,8 +88,6 @@ __all__ = [
     "RemotePeerStore",
     "get_remote_bucket",
     "PeerCapabilities",
-    "FanOutManager",
-    "FanOutResult",
     "SubscriptionProcessingConfig",
     # Sync API types
     "SubscriptionSyncResult",
@@ -98,3 +95,13 @@ __all__ = [
     "PeerSyncResult",
     "SubscriptionInfo",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """``FanOutManager`` and ``FanOutResult`` were removed in 3.16: their
+    import raises with the migration pointer instead of a bare error."""
+    if name in ("FanOutManager", "FanOutResult"):
+        from ..config import FANOUT_REMOVED
+
+        raise ImportError(FANOUT_REMOVED.format(what=f"actingweb.interface.{name}"))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

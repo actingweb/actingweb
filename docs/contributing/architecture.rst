@@ -388,9 +388,14 @@ and receives callbacks when Actor B's data changes.
 
     Actor B (publisher)                              Actor A (subscriber)
     ───────────────────                              ────────────────────
-    Property changed (PUT /properties/foo)
+    Property changed (PUT /properties/foo; the value stored after the hooks;
+    a delete is the encoded "" from every writer; a nested write passes the
+    parent's whole value as ``whole``; a clear registers one diff for every
+    deleted name before deleting)
     or list edited (build_list_diff(): {"list", "operation", "length", ...})
-      └─> register_diffs(target="properties", subtarget="foo")
+      └─> previous = previous_for_resource_subscribers(...)  # read only when
+      │     a resource-level subscription exists (memoised subscription list)
+      └─> register_diffs(target="properties", subtarget="foo", previous=...)
             ├─> Check if subscription suspended
             ├─> Get subscriptions (callback=False - inbound)
             └─> For each subscription:
@@ -518,7 +523,7 @@ The following table maps components to their implementation files:
 +---------------------------+------------------------------------------------+----------------------------------+
 | Peer permissions          | ``actingweb/peer_permissions.py``              | Cache what peers grant us        |
 +---------------------------+------------------------------------------------+----------------------------------+
-| Fan-out                   | ``actingweb/fanout.py``                        | Parallel delivery, circuit break |
+| Callback sender           | ``actingweb/callback_sender.py``               | Concurrent delivery, per write   |
 +---------------------------+------------------------------------------------+----------------------------------+
 | Suspension                | ``actingweb/db/*/subscription_suspension.py``  | Pause diff registration          |
 +---------------------------+------------------------------------------------+----------------------------------+

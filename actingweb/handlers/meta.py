@@ -158,4 +158,7 @@ class MetaHandler(base_handler.BaseHandler):
                 self.response.set_status(404)
             return
         if self.response:
+            # A scalar path is text (3.16: Flask labelled it text/html and
+            # FastAPI sent no label).
+            self.response.headers["Content-Type"] = "text/plain; charset=utf-8"
             self.response.write(out)

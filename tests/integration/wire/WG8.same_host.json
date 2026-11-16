@@ -926,7 +926,7 @@
         "subscriptionid": "<sub1>",
         "subtarget": "settings",
         "target": "properties",
-        "timestamp": "<ts:space>"
+        "timestamp": "<ts:iso-z>"
        },
        "response": null,
        "status": 403

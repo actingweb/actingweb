@@ -2,6 +2,7 @@
 Simplified property store interface for ActingWeb actors.
 """
 
+import contextlib
 import json
 import logging
 from collections.abc import Iterator
@@ -83,18 +84,40 @@ class PropertyStore:
             logger.warning(f"Error executing property hook for {key}: {e}")
             return value
 
-    def _register_diff(self, key: str, value: Any, resource: str = "") -> None:
+    def _previous(self, key: str | None) -> Any:
+        """What ``key`` holds before a write (all properties for None), read
+        only when a resource-level subscriber needs it (3.16)."""
+        if not self._actor or not hasattr(
+            self._actor, "previous_for_resource_subscribers"
+        ):
+            return None
+        read = (
+            (lambda: self._core_store[key])
+            if key is not None
+            else (lambda: self.to_dict())
+        )
+        return self._actor.previous_for_resource_subscribers("properties", key, read)
+
+    def _register_diff(
+        self, key: str, value: Any, resource: str = "", previous: Any = None
+    ) -> None:
         """Register a diff for subscription notifications."""
         if not self._actor:
             return
 
         try:
-            blob = json.dumps(value) if value is not None else ""
+            # None is a delete: the encoded ``""`` every writer sends (3.16;
+            # a raw ``""`` was dropped before it reached a subscriber).
+            blob = json.dumps(value if value is not None else "")
+            kwargs: dict[str, Any] = {}
+            if previous is not None:
+                kwargs["previous"] = previous
             self._actor.register_diffs(
                 target="properties",
                 subtarget=key,
                 resource=resource or None,
                 blob=blob,
+                **kwargs,
             )
         except DbError:
             # The value is written; the caller answers 503 so the subscriber's
@@ -112,16 +135,19 @@ class PropertyStore:
         # Execute pre-store hook
         transformed = self._execute_property_hook(key, "put", value, [key])
 
+        previous = self._previous(key)
+
         # Store the value
         self._core_store[key] = transformed
 
         # Register diff for subscribers
-        self._register_diff(key, transformed)
+        self._register_diff(key, transformed, previous=previous)
 
     def __delitem__(self, key: str) -> None:
         """Delete property by key with diff registration."""
+        previous = self._previous(key)
         self._core_store[key] = None
-        self._register_diff(key, "")
+        self._register_diff(key, "", previous=previous)
 
     def __contains__(self, key: str) -> bool:
         """Check if property exists."""
@@ -203,14 +229,70 @@ class PropertyStore:
             self[key] = value
 
     def clear(self) -> None:
-        """Clear all properties with diff registration."""
-        keys = list(self.keys())
-        for key in keys:
-            del self[key]
+        """Clear all properties: one diff carrying every deleted name, then
+        the deletes (3.16, specification 1.5; a diff per name and a second,
+        empty, registration before). Lists are not properties here and stay.
 
-        # Also register a "clear all" diff
-        if self._actor and keys:
-            self._actor.register_diffs(target="properties", subtarget=None, blob="")
+        The diff is registered from a snapshot of the names before anything
+        is deleted: a fault registering it raises with nothing deleted, and
+        a fault in a delete after it raises with the subscribers told of
+        deletes a retry finishes (which registers again, a no-op for a
+        replica). The other order would lose the notification for good.
+        A caller that gets an exception from ``clear()`` calls it again: some
+        subscribers may already have been told.
+
+        Its callbacks are sent after the deletes (``deferred_callbacks``): a
+        subscriber that reads this actor back on the callback (a rebuild it
+        owes) finds the names gone. A name whose value changed after the
+        snapshot (another write) is not deleted, and a diff with its value
+        follows the clear's, so the subscribers end where the actor does;
+        a write that lands between that check and the delete is still lost,
+        as with any clear.
+        """
+        snapshot = self.to_dict()
+        if not snapshot:
+            return
+        actor = self._actor
+        defer = (
+            actor.deferred_callbacks()
+            if actor is not None
+            and callable(getattr(type(actor), "deferred_callbacks", None))
+            else contextlib.nullcontext()
+        )
+        with defer:
+            self._clear_snapshot(snapshot)
+
+    def _clear_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if self._actor:
+            previous = (
+                self._actor.previous_for_resource_subscribers(
+                    "properties", None, lambda: snapshot
+                )
+                if hasattr(self._actor, "previous_for_resource_subscribers")
+                else None
+            )
+            kwargs: dict[str, Any] = {}
+            if previous is not None:
+                kwargs["previous"] = previous
+            self._actor.register_diffs(
+                target="properties",
+                subtarget=None,
+                blob=json.dumps(dict.fromkeys(snapshot, "")),
+                **kwargs,
+            )
+        now = self.to_dict()
+        for key, value in snapshot.items():
+            if key not in now:
+                continue  # already gone
+            if now[key] != value:
+                # Written after the snapshot: kept, and told after the
+                # clear's diff (verification M3).
+                if self._actor:
+                    self._actor.register_diffs(
+                        target="properties", subtarget=key, blob=now[key]
+                    )
+                continue
+            self._core_store[key] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary with one backend read.

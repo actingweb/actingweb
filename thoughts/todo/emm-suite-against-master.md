@@ -52,7 +52,22 @@ baseline's failures by name and nothing else:
   (`thoughts/verifications/2026-11-14-attribute-list-v2-port-7.md`, which
   says why the two library commits after `a98690a` were not re-run).
 
-Still to run: `email-as-creator-at-write-time`, `spec-1-5`.
+- `email-as-creator-at-write-time` (environment 9, on `844695a` and again
+  on `515f09a` after its iteration): the baseline's failures, nothing new.
+  Before each, `actingweb-unique-creators creator-to-email` on the
+  environment's database (the start-up check refuses Emm's flag-on
+  application without its marker): nothing to move, the marker written.
+  Emm's role grants no `dynamodb:ConditionCheckItem`, which uniqueness
+  already needed and the rename's marker check needs too; its IAM coverage
+  test does not look for it (an adoption item on Emm's side)
+  (`thoughts/verifications/2026-11-15-email-as-creator-at-write-time-2.md`).
+
+- `spec-1-5` (environment 9, on `2f1a891`, `creator-to-email` first:
+  nothing to move): the baseline's failures, nothing new.
+
+Still to run: `3-16-release-validation` (the last; it deletes
+this file). A run now starts with `creator-to-email` (dry run, then
+`--apply`) on the environment's database before the preview server.
 
 ## How a run is done
 

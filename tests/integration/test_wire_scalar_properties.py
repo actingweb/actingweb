@@ -178,3 +178,96 @@ def test_ws9_subtarget(wire_pair, topology):
     s.step("set (SDK)", set_value)
     s.step("delete (SDK)", delete_value)
     check("WS9.subtarget", s.recording(), variant=topology)
+
+
+# ---------------------------------------------------------------------------
+# spec-1-5, Phase 3: the clear, a failed resync fetch, the resync sweep
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_ws10_clear_with_a_list(wire_pair, topology):
+    """WS10.target: ``DELETE /properties`` with two properties and a list at
+    A: one diff naming the two properties; the list stays, at A and at B."""
+    s = wire_pair(topology, grant=["*"])
+    a = s.publisher
+    _seed(s, {"one": {"v": 1}, "two": "2"})
+    r = requests.post(
+        f"{a.url}/properties", json={"notes": {"_type": "list"}}, auth=a.basic
+    )
+    assert r.status_code == 201, r.text
+    r = requests.post(
+        f"{a.url}/properties/notes/items",
+        json={"action": "add", "item_value": "kept"},
+        auth=a.basic,
+    )
+    assert r.status_code == 201, r.text
+    s.step(
+        "delete all properties",
+        lambda: requests.delete(f"{a.url}/properties", auth=a.basic),
+    )
+    check("WS10.target", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_ws11_resync_fetch_fails(wire_pair, topology):
+    """WS11.target: a resync whose baseline fetch fails at B: 503, B's
+    sequence unmoved and the rebuild owed; A's next write makes B rebuild,
+    and B holds both writes."""
+    from unittest import mock
+
+    from actingweb.interface.subscription_manager import SubscriptionManager
+
+    from .test_wire_peer_paths import _replica_settles
+
+    s = wire_pair(topology, grant=["*"])
+    a = s.publisher
+    s.step("suspend", lambda: a.interface().subscriptions.suspend("properties"))
+    s.step("put x", lambda: _put(a, "x", {"v": 1}))
+    real = SubscriptionManager._fetch_and_transform_baseline
+    failed: list[int] = []
+
+    def fail_once(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if not failed:
+            failed.append(1)
+            return None
+        return real(self, *args, **kwargs)
+
+    with mock.patch.object(
+        SubscriptionManager, "_fetch_and_transform_baseline", fail_once
+    ):
+        s.step("resume", lambda: a.interface().subscriptions.resume("properties"))
+        s.step(
+            "put y",
+            lambda: _put(a, "y", {"v": 2}),
+            settle=_replica_settles(
+                s,
+                lambda r: (
+                    r["scalars"].get("x") == {"v": 1}
+                    and r["scalars"].get("y") == {"v": 2}
+                ),
+            ),
+        )
+    assert failed == [1]
+    check("WS11.target", s.recording(), variant=topology)
+
+
+@pytest.mark.parametrize("topology", TOPOLOGIES)
+def test_ws12_resync_sweeps(wire_pair, topology):
+    """WS12.target: B holds x; A deletes it while suspended (no diff), then
+    resumes: B's resync baseline lacks x, and the sweep removes it."""
+    from .test_wire_peer_paths import _replica_settles
+
+    s = wire_pair(topology, grant=["*"])
+    a = s.publisher
+    _seed(s, {"x": {"v": 1}, "y": {"v": 2}})
+    s.step("suspend", lambda: a.interface().subscriptions.suspend("properties"))
+    s.step("delete x", lambda: _delete(a, "x"))
+    s.step(
+        "resume",
+        lambda: a.interface().subscriptions.resume("properties"),
+        settle=_replica_settles(
+            s, lambda r: "x" not in r["scalars"] and r["scalars"].get("y") == {"v": 2}
+        ),
+    )
+    check("WS12.target", s.recording(), variant=topology)

@@ -26,12 +26,52 @@ Example usage:
 
 import hmac
 import logging
+import os
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qsl
 
 from actingweb.interface.actor_interface import ActorInterface
 
 logger = logging.getLogger(__name__)
+
+# The shared secret a third party sends with a webhook, and the header it
+# arrives in. Unset, every anonymous webhook request is refused.
+WEBHOOK_SECRET_ENV = "DEMO_WEBHOOK_SECRET"
+WEBHOOK_SECRET_HEADER = "x-webhook-secret"
+
+
+def webhook_caller_verified(data: dict[str, Any]) -> bool:
+    """Whether a webhook request carries the configured shared secret
+    (compared in constant time). Checked for every request, authenticated
+    or not: an authenticated peer of any relationship reaches a callback
+    hook too, and only the provider knows the secret. With no secret
+    configured every request is refused."""
+    expected = os.environ.get(WEBHOOK_SECRET_ENV, "")
+    if not expected:
+        logger.warning(f"Refused a webhook: {WEBHOOK_SECRET_ENV} is not configured")
+        return False
+    headers = {str(k).lower(): str(v) for k, v in (data.get("headers") or {}).items()}
+    given = headers.get(WEBHOOK_SECRET_HEADER, "")
+    if hmac.compare_digest(given.encode(), expected.encode()):
+        return True
+    logger.warning("Refused a webhook: the shared secret did not match")
+    return False
+
+
+def webhook_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """The request's fields: the JSON object the library parsed, or a
+    form-encoded body (``raw_body``), which providers such as Twilio send."""
+    fields = {
+        k: v
+        for k, v in data.items()
+        if k not in ("anonymous", "headers", "raw_body", "method")
+    }
+    raw = data.get("raw_body")
+    if not fields and isinstance(raw, bytes | str):
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        fields = dict(parse_qsl(text))
+    return fields
 
 
 def register_callback_hooks(app):
@@ -54,7 +94,9 @@ def register_callback_hooks(app):
         works for a user signed in to the web UI, whose session authenticates
         it, or for an API call with the actor's credentials. An anonymous
         click answers 401; a link that must work without a session belongs
-        on an application route, not under /callbacks.
+        on an application route, not under /callbacks. It is not registered
+        with ``allow_anonymous``: that admits a POST only, and a link a
+        browser opens is a GET.
 
         Parameters:
             token: Verification token from the email link
@@ -100,7 +142,7 @@ def register_callback_hooks(app):
                 "message": "Invalid or expired verification token",
             }
 
-    @app.callback_hook("sms_webhook")
+    @app.callback_hook("sms_webhook", allow_anonymous=True)
     def handle_sms_webhook(
         actor: ActorInterface, name: str, data: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -125,14 +167,19 @@ def register_callback_hooks(app):
             Register https://your-app.com/{actor_id}/callbacks/sms_webhook
             with Twilio. Incoming SMS to your number triggers this callback.
 
-        Since ActingWeb 3.16 every /callbacks request is authenticated, so a
-        provider calling without the actor's credentials receives 401 and this
-        hook does not run. Point a third-party webhook at an application route
-        that verifies the provider's signature, not at /callbacks.
+        Registered with ``allow_anonymous=True``: the provider POSTs without
+        the actor's credentials, and this hook authenticates it by the shared
+        secret in the ``X-Webhook-Secret`` header, which must equal
+        ``DEMO_WEBHOOK_SECRET`` (unset, every anonymous request is refused).
+        A production hook verifies the provider's own signature over
+        ``data["raw_body"]`` instead.
         """
-        sender = data.get("From", data.get("from", "unknown"))
-        body = data.get("Body", data.get("body", ""))
-        message_id = data.get("MessageSid", data.get("message_id", ""))
+        if not webhook_caller_verified(data):
+            return False
+        fields = webhook_fields(data)
+        sender = fields.get("From", fields.get("from", "unknown"))
+        body = fields.get("Body", fields.get("body", ""))
+        message_id = fields.get("MessageSid", fields.get("message_id", ""))
 
         logger.info(
             f"SMS webhook for actor {actor.id}: from={sender}, body={body[:50]}..."
@@ -160,7 +207,7 @@ def register_callback_hooks(app):
             "actor_id": actor.id,
         }
 
-    @app.callback_hook("payment_webhook")
+    @app.callback_hook("payment_webhook", allow_anonymous=True)
     def handle_payment_webhook(
         actor: ActorInterface, name: str, data: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -179,14 +226,14 @@ def register_callback_hooks(app):
         Returns:
             Acknowledgment response for the payment provider
 
-        Security note: In production, verify webhook signatures!
-
-        Since ActingWeb 3.16 every /callbacks request is authenticated, so a
-        provider calling without the actor's credentials receives 401 and this
-        hook does not run. Point a third-party webhook at an application route
-        that verifies the provider's signature, not at /callbacks.
+        Registered with ``allow_anonymous=True`` and authenticated by the
+        shared secret, as ``sms_webhook`` is. In production, verify the
+        provider's signature over ``data["raw_body"]`` (for Stripe, the
+        ``Stripe-Signature`` header).
         """
-        event_type = data.get("type", "unknown")
+        if not webhook_caller_verified(data):
+            return False
+        event_type = webhook_fields(data).get("type", "unknown")
 
         logger.info(f"Payment webhook for actor {actor.id}: type={event_type}")
 

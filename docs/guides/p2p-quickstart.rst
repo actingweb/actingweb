@@ -104,6 +104,8 @@ block:
 
    @app.subscription_data_hook("properties")
    def on_properties_changed(actor, peer_id, target, data, sequence, callback_type):
+       # A delete arrives as "" ({"name": ""} for this whole-target
+       # subscription); treat "" as absent.
        print(f"[{actor.id}] update from {peer_id} ({callback_type} #{sequence}): {data}")
 
 Run It
@@ -156,6 +158,7 @@ needs ``jq``):
      -d "{\"url\": \"http://localhost:5000/$actor_a_id\", \"relationship\": \"friend\"}"
 
    # Actor B subscribes to actor A's properties, authenticated as actor B's owner
+   # (granularity "high", "low" or "none"; any other value is 400)
    curl -s -u "b@example.com:$actor_b_pass" -X POST "http://localhost:5000/$actor_b_id/subscriptions" \
      -H 'Content-Type: application/json' \
      -d "{\"peerid\": \"$actor_a_id\", \"target\": \"properties\", \"granularity\": \"high\"}"
@@ -188,10 +191,11 @@ Production Notes
 
 - On Lambda/serverless, call ``.with_sync_callbacks()`` so subscription
   callbacks complete before the function freezes -- async fire-and-forget
-  callbacks can otherwise be lost. See ``docs/quickstart/deployment.rst``.
-- For back-pressure, gap detection, circuit-breaker behavior, and fan-out
-  tuning, see :doc:`subscriptions` -- this quickstart uses the library's
-  defaults throughout.
+  callbacks can otherwise be lost. Behind a gateway with a response limit,
+  also set ``callback_delivery_budget_seconds`` under it and turn
+  ``serialize_own_host_callbacks`` off. See ``docs/quickstart/deployment.rst``.
+- For gap detection and callback delivery tuning, see :doc:`subscriptions` --
+  this quickstart uses the library's defaults throughout.
 
 Where to Go Next
 -----------------

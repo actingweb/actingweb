@@ -32,7 +32,10 @@ Core Identity
   backslash, interior whitespace or control character is rejected at
   startup.
 - ``proto``: URL scheme (``https://`` recommended).
-- ``version``: Populated from library version; can be displayed to clients.
+- ``version``: The application's version, served at ``/meta/version`` and in
+  the ``/meta`` object (``with_app_version("2.3.1")``, 3.16). Unset, it is the
+  ActingWeb library's version, as before; the specification defines it as the
+  application's, so an application should set its own.
 
 Runtime Switches
 ----------------
@@ -44,7 +47,8 @@ Runtime Switches
 - ``force_email_prop_as_creator``: A vouched actor's ``creator`` equals its stored ``_internal`` email (``with_email_as_creator()``; default ``True`` on a bare ``Config()``, ``False`` on ``ActingWebApp`` until the builder is called). Since 3.16 a write of that email to another address renames the creator in the same atomic operation, and a load is one read of the actor row; a write of an address another actor holds raises ``CreatorTaken``. A deployment with actors runs ``actingweb-unique-creators creator-to-email --apply`` before the first start, and again after the deploy: the application refuses to start until it has (``EmailAsCreatorNotReady``; an empty store marks itself ready). Not the ``email`` property, which has not been the source since 2017. See :doc:`../migration/v3.16` ("The creator follows the stored email").
 - ``open_factory``: Whether the actor factory (``POST /``) accepts requests (``with_open_factory()``; default ``True``). ``False`` closes the factory for an OAuth-only deployment: ``POST /`` answers 403 (the JSON error body, or the error page for a form), ``trustee_root`` instantiation and the form fallback are closed with it, and so is the existing-creator form redirect (which goes to ``/login`` and names no actor id since 3.16). Sign-in through OAuth is then the only way to get an actor. A deviation from the protocol's mandatory factory; a basic-auth deployment that needs the factory form login keeps it open. A value assigned on the Config survives until ``with_open_factory()`` is called, after which the builder's value wins. "Factory" here means the actor factory (``POST /``), not the authenticator factory functions. See :doc:`../reference/security`.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
-- ``sync_subscription_callbacks``: Force synchronous subscription callbacks (``with_sync_callbacks()``). **Required for Lambda/serverless deployments** where async fire-and-forget callbacks may be lost when the function freezes. Affects both diff callbacks and resync callbacks. Do NOT enable in local/container deployments to avoid blocking and self-deadlock. See :doc:`deployment` for details.
+- ``sync_subscription_callbacks``: Wait for subscription callbacks on a running event loop too (``with_sync_callbacks()``). **Required for Lambda/serverless deployments** where tasks may be lost when the function freezes. Affects both diff callbacks and resync callbacks. Off the loop a write always waits; on a running loop the setting blocks the loop while callbacks are sent, so leave it off there. See :doc:`deployment` for details.
+- ``max_concurrent_callbacks``, ``callback_delivery_budget_seconds``, ``serialize_own_host_callbacks`` (``with_subscription_processing()``, 3.16): one write's callbacks to subscribers on other hosts are sent at most ``max_concurrent_callbacks`` at a time (default 4), subscribers on the publisher's own host one at a time unless ``serialize_own_host_callbacks=False``, and ``callback_delivery_budget_seconds`` (off by default) caps the time one request spends delivering them. ``with_callback_delivery()`` sets these three without turning on incoming subscription processing. A FastAPI deployment whose subscribers call it back through another origin sizes ``with_thread_pool_workers`` to at least the simultaneous writes times one plus the bound. ``max_payload_for_high_granularity``, ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` are removed and raise ``RuntimeError``. See :doc:`deployment`, "Callback Delivery by Deployment Shape".
 - ``list_item_span_threshold`` and ``list_item_max_bytes``: Property-list item size limits, in bytes of the item's encoded JSON (``with_list_item_limits(span_threshold=..., max_bytes=...)``). ``list_item_max_bytes`` is the largest item the library stores: a larger one raises ``ListItemTooLargeError`` before anything is written, and the REST handlers answer 413. ``list_item_span_threshold`` is the largest item one row holds on a backend with a row cap; an item over it is refused there as well, since the backend would reject the row. The defaults depend on the backend:
 
   .. list-table::
@@ -1117,7 +1121,9 @@ Permission Callbacks
 
 When a peer modifies permissions granted to your actor, they can send a permission
 callback to notify you immediately. This requires the ``permissioncallback`` option
-to be advertised in the peer's ``/meta/actingweb/supported`` endpoint.
+to be advertised in the peer's ``/meta/actingweb/supported`` endpoint. Since 3.16
+an ActingWeb actor advertises ``permissioncallback`` and ``permissionquery``
+whenever it serves the endpoints, which is always, not only with caching on.
 
 The callback is sent to::
 

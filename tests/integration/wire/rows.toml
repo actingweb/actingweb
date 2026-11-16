@@ -696,14 +696,14 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 
 [rows."WG15"]
 test = "test_wire_grants.py::test_wg15_client_posts_the_form_itself"
-owners = ["grant-enforcement-per-route:3"]
+owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3"]
 exposure = false
 expected = "A client posts the authorize form itself (no nonce): with admin (listed on wire_oauth) and with mcp_client, a 302 to the provider each; the callback in the user's browser shows the confirmation page (no trust, no code); Decline sends the browser to the client with access_denied; no trust is created."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a client's level is the user's choice: anonymous registration refused admin and client_credentials, the form bound to the browser by a nonce cookie, a confirmation otherwise, the Apple button and the JSON form fixed (grant-enforcement-per-route:3)"]
 
 [rows."WG16"]
 test = "test_wire_grants.py::test_wg16_honest_flows"
-owners = ["grant-enforcement-per-route:3"]
+owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3"]
 exposure = false
 expected = "The user's browser: the form as JSON (now JSON, with form_nonce) and as HTML (a form_nonce input), each setting the nonce cookie; a POST with mcp_client and the GET callback: a code, the cookie cleared, the token (trust_type mcp_client) and tools/list; a POST choosing Apple and Apple's form-POST callback: a code; a second client's Google and Apple buttons followed with no type chosen: a code each, the trust mcp_client (the client default, not admin). No confirmation is asked."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a client's level is the user's choice: anonymous registration refused admin and client_credentials, the form bound to the browser by a nonce cookie, a confirmation otherwise, the Apple button and the JSON form fixed (grant-enforcement-per-route:3)"]

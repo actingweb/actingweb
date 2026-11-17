@@ -1236,9 +1236,13 @@ class SubscriptionManager:
         from ..callback_processor import CallbackProcessor
         from .actor_interface import ActorInterface
 
-        CallbackProcessor(actor=ActorInterface(self._core_actor)).settle_rebuild(
+        if not CallbackProcessor(actor=ActorInterface(self._core_actor)).settle_rebuild(
             peer_id, subscription_id, rebuilt=False, restart_interval=False
-        )
+        ):
+            logger.warning(
+                f"Owing the rebuild of {peer_id}:{subscription_id} lost every "
+                "compare-and-swap; it is not owed"
+            )
 
     def _rebuild_owed(self, peer_id: str, subscription_id: str) -> bool:
         """Whether this subscription's replica owes a rebuild (one that
@@ -1651,11 +1655,6 @@ class SubscriptionManager:
                     # a client's): handled as a resync, by a rebuild (3.16).
                     marker_seen = True
                     break
-                if diff.get("type") == "resync":
-                    # No replica and no data hook: a poll can tell nobody,
-                    # so the marker owes the rebuild for the next callback,
-                    # whose legacy hook may hear it (3.16).
-                    self._owe_rebuild(peer_id, subscription_id)
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 
@@ -1702,11 +1701,6 @@ class SubscriptionManager:
                     # a client's): handled as a resync, by a rebuild (3.16).
                     marker_seen = True
                     break
-                if diff.get("type") == "resync":
-                    # No replica and no data hook: a poll can tell nobody,
-                    # so the marker owes the rebuild for the next callback,
-                    # whose legacy hook may hear it (3.16).
-                    self._owe_rebuild(peer_id, subscription_id)
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 
@@ -2692,11 +2686,6 @@ class SubscriptionManager:
                     # a client's): handled as a resync, by a rebuild (3.16).
                     marker_seen = True
                     break
-                if diff.get("type") == "resync":
-                    # No replica and no data hook: a poll can tell nobody,
-                    # so the marker owes the rebuild for the next callback,
-                    # whose legacy hook may hear it (3.16).
-                    self._owe_rebuild(peer_id, subscription_id)
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 
@@ -2742,11 +2731,6 @@ class SubscriptionManager:
                     # a client's): handled as a resync, by a rebuild (3.16).
                     marker_seen = True
                     break
-                if diff.get("type") == "resync":
-                    # No replica and no data hook: a poll can tell nobody,
-                    # so the marker owes the rebuild for the next callback,
-                    # whose legacy hook may hear it (3.16).
-                    self._owe_rebuild(peer_id, subscription_id)
                 seq = diff.get("sequence", 0)
                 data = diff.get("data", {})
 

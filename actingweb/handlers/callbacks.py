@@ -222,9 +222,10 @@ class CallbacksHandler(base_handler.BaseHandler):
         replica covers it (3.16: a settled rebuild always tells; the hooks
         may hear this callback's diff first). With nothing to rebuild and
         nobody to tell, the debt is dropped instead. Returns whether the
-        rebuild settled (or was dropped); one that failed stays owed, and
-        the caller answers 503 only when the processor dropped this
-        callback's own change."""
+        rebuild settled (or was dropped); one that failed stays owed. The
+        callback answers as processed either way: the processor claims one
+        callback at a time, so its own change (or its place in the queue)
+        is kept."""
         from ..callback_processor import CallbackProcessor
         from ..interface.subscription_manager import SubscriptionManager
 
@@ -1579,21 +1580,9 @@ class CallbacksHandler(base_handler.BaseHandler):
             # replace the replica from a baseline (never sync_subscription(),
             # which would apply the retained diffs again first).
             if result == ProcessResult.REBUILD:
-                settled = self._run_rebuild_answer(
+                self._run_rebuild_answer(
                     config, actor_interface, peer_id, subscription_id, subscription
                 )
-                applied = processor.applied_through
-                if (
-                    not settled
-                    and isinstance(sequence, int)
-                    and applied is not None
-                    and sequence > applied
-                ):
-                    # A drained batch stopped for the rebuild below this
-                    # callback and dropped its change: 503, so it is sent
-                    # again (3.16). Its own change applied, it answers 204.
-                    self._callback_retry_later = True
-                    success = False
 
             # If resync was triggered, actively sync from publisher to resolve gap
             if result == ProcessResult.RESYNC_TRIGGERED:
@@ -1615,13 +1604,11 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Resync completed: {sync_result.diffs_processed} diffs, "
                             f"sequence now at {sync_result.final_sequence}"
                         )
-                        if not rebuilds_for(
-                            config, sub_target
-                        ) and self._hears_a_rebuild(config, sub_target):
-                            # The poll told data hooks only, and there are
-                            # none: the legacy hook missed the gap. Owe the
-                            # rebuild, which the next callback runs and
-                            # tells it (3.16).
+                        if legacy_hook:
+                            # The poll told data hooks only: the legacy hook
+                            # missed the gap. Owe the rebuild, which a later
+                            # callback (or this one's replay) runs and tells
+                            # every hook (3.16).
                             mgr._owe_rebuild(peer_id, subscription_id)  # noqa: SLF001
                         if (
                             isinstance(sequence, int)

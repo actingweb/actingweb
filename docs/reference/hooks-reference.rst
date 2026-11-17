@@ -245,9 +245,13 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   it. The next callback after the one-minute interval runs an owed
   rebuild and tells both kinds of hook; a poll runs it too and tells the
   data hooks only. A poll cannot see the legacy hook, so with no replica
-  and no data hook it leaves an owed rebuild for the next callback, and a
-  resync marker it polls, or a gap resync on the callback path, owes one
-  for it. A poll called without a configuration uses the application's
+  and no data hook it leaves an owed rebuild for the next callback. A gap
+  resync runs a poll on the callback path, which tells data hooks only:
+  with a legacy hook registered it then owes a rebuild, which a later
+  callback (or the replayed callback) runs and tells every hook. A resync
+  marker is only polled by a subscriber that gets no callbacks; with no
+  replica and no data hook it is applied as an empty diff and tells
+  nobody. A poll called without a configuration uses the application's
   (``with_subscription_processing()``), for its diffs and its baseline. The public
   ``rebuild_subscription()`` tells no hook: its caller does.
 - **Quiet and behind polls.** A quiet poll, with nothing to fetch and the
@@ -262,14 +266,13 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   hook gets the baseline, not the names removed.
 - **Answers.** A callback that ran an owed rebuild in place of its diff
   answers 503 when the rebuild does not settle, and its change is told by
-  the rebuild that later settles (the callback sent again may already be
-  recorded, and is then not told on its own). A callback whose own change
-  was applied answers 204 even when the rebuild after it does not settle;
-  that rebuild stays owed. One whose change a queued batch's rebuild
-  dropped (the batch stopped below it) answers 503 when that rebuild does
-  not settle, so it is sent again. Reserving or settling a rebuild uses
-  the callback state store, also without ``auto_storage``: a fault there
-  answers 503, also after the callback's own change was applied.
+  the rebuild that later settles. A callback whose own change was applied,
+  or is queued, answers 204 even when a rebuild after it does not settle;
+  that rebuild stays owed. This library's publisher does not resend a
+  callback answered 503: the change returns through a poll or a gap
+  resync. Reserving or settling a rebuild uses the callback state store,
+  also without ``auto_storage``: a fault there answers 503, also after the
+  callback's own change was applied.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

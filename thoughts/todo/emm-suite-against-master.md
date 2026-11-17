@@ -77,7 +77,9 @@ baseline's failures by name and nothing else:
   (after the second iteration) with the same counts and names; and on the
   uncommitted third, fourth and fifth iterations (`8bb63cf` with the
   working tree's `actingweb/` diff applied in the library worktree; run
-  after entries 20 and 26): the same counts and names each time. Emm's `properties` data hook sends its UI a
+  after entries 20 and 26): the same counts and names each time; and on
+  `320925d` (entries 11 to 37 committed, the library worktree checked out
+  at that commit): the same counts and names. Emm's `properties` data hook sends its UI a
   full-sync notification on `"resync"`: since this plan a poll that rebuilt
   the replica calls it (a quiet poll does not), and so does a callback that
   ran an owed rebuild.

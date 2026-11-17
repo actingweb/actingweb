@@ -566,17 +566,16 @@ def test_a_failed_resync_fetch_owes_a_rebuild_only_when_it_has_work(
 def _rebuild_answered(
     rebuilt: Any,
     *,
-    applied_through: int,
     auto_storage: bool = True,
     data_hook: bool = True,
     legacy_hook: bool = False,
     result: ProcessResult = ProcessResult.REBUILD,
     sync_result: Any = None,
+    owe: bool = False,
 ) -> tuple[Any, list[Any], list[Any], Any, Any]:
-    """A diff (sequence 3) whose processing answers ``result``; the
-    processor's last batch applied through ``applied_through``. Returns the
+    """A diff (sequence 3) whose processing answers ``result``. Returns the
     answer, the data and legacy hooks' calls, the rebuild mock and the
-    actor."""
+    actor. ``owe`` marks the rebuild owed first."""
     from actingweb.interface.hooks import HookRegistry
 
     config, actor = _setup()
@@ -594,8 +593,10 @@ def _rebuild_answered(
         )
 
     def process(self: Any, **_: Any) -> ProcessResult:
-        self.applied_through = applied_through
         return result
+
+    if owe:
+        _owe(actor)
 
     webobj = AWWebObj(
         url="https://test.example.com/x",
@@ -639,28 +640,12 @@ def _synced(success: bool, sequence: int, baseline: Any = None) -> Any:
     )
 
 
-@pytest.mark.parametrize(
-    "applied_through,status", [(3, 204), (2, 503)], ids=["applied", "dropped"]
-)
-def test_a_failed_rebuild_answers_503_when_the_callbacks_change_was_dropped(
-    applied_through: int, status: int
-) -> None:
-    """Re-run 6 (Issue 3): a drained batch that stops at an out-of-step
-    diff below this callback drops this callback's change; a 204 then lost
-    the retry."""
-    webobj, _, _, rebuild, _ = _rebuild_answered(
-        _synced(False, 0), applied_through=applied_through
-    )
-    rebuild.assert_called_once()
-    assert webobj.response.status_code == status
-
-
 def test_the_processors_rebuild_tells_no_covered_baseline() -> None:
     """Re-run 6 (Issue 6): the covered branch of the REBUILD answer."""
     covered = dataclasses.replace(
         _synced(True, 3, {"status": "paid"}), baseline_skipped=True
     )
-    webobj, seen, _, _, _ = _rebuild_answered(covered, applied_through=3)
+    webobj, seen, _, _, _ = _rebuild_answered(covered)
     assert webobj.response.status_code == 204
     assert [k for _, k in seen] == []
 
@@ -669,26 +654,37 @@ def test_a_rebuild_answer_nobody_hears_drops_the_debt() -> None:
     """Re-run 6 (Issue 6): no replica and no hook: no rebuild runs, and
     the debt is dropped instead of answered again on every callback."""
     _, _, _, rebuild, actor = _rebuild_answered(
-        _synced(True, 3, {}), applied_through=3, auto_storage=False, data_hook=False
+        _synced(True, 3, {}), auto_storage=False, data_hook=False
     )
     rebuild.assert_not_called()
     assert _state(actor)["owed"] is False
 
 
-def test_the_gap_resync_owes_a_rebuild_only_the_legacy_hook_hears() -> None:
-    """Re-run 6 (Issue 4): the gap resync's poll tells data hooks only; a
-    subscriber whose only hook is the legacy one owed nothing and never
-    heard the gap. It owes the rebuild now, for the next callback."""
+@pytest.mark.parametrize(
+    "storage,data_hook,legacy_hook,owed",
+    [
+        (False, False, True, True),
+        (True, True, True, True),
+        (True, False, False, False),
+        (False, True, False, False),
+    ],
+    ids=["legacy only", "replica, data and legacy", "replica only", "data only"],
+)
+def test_the_gap_resync_owes_a_rebuild_when_a_legacy_hook_hears(
+    storage: bool, data_hook: bool, legacy_hook: bool, owed: bool
+) -> None:
+    """Re-run 6 (Issue 4), re-run 7 (Issue 1): the gap resync's poll tells
+    data hooks only, so a registered legacy hook never heard the gap,
+    whatever else the subscriber has. The rebuild is owed for it."""
     _, _, _, _, actor = _rebuild_answered(
         _synced(True, 9),
-        applied_through=0,
-        auto_storage=False,
-        data_hook=False,
-        legacy_hook=True,
+        auto_storage=storage,
+        data_hook=data_hook,
+        legacy_hook=legacy_hook,
         result=ProcessResult.RESYNC_TRIGGERED,
         sync_result=_synced(True, 9),
     )
-    assert _state(actor)["owed"] is True
+    assert _state(actor)["owed"] is owed
 
 
 def _state(actor: Any) -> Any:

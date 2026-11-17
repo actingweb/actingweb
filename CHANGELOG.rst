@@ -1045,10 +1045,11 @@ CHANGED
   minute. Without ``auto_storage`` the same holds when a hook hears it (a
   data hook for the target or ``"*"``, or the legacy ``subscription``
   callback hook). A baseline another subscription's replica covers is not
-  told. A callback whose own change was applied answers 204 when the
-  rebuild after it does not settle (that rebuild stays owed), unless the
-  callback state store faults, which answers 503; one whose change a
-  queued batch's rebuild dropped answers 503, so it is sent again. **Behavior change:** a data hook can
+  told. A callback whose own change was applied, or is queued, answers
+  204 when a rebuild after it does not settle (that rebuild stays owed),
+  unless the callback state store faults, which answers 503. A gap resync
+  owes a rebuild when the legacy hook is registered, since its poll tells
+  data hooks only. **Behavior change:** a data hook can
   be called with ``"resync"`` and the whole baseline in place of the diff
   that arrived, or right after it.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
@@ -1394,8 +1395,7 @@ CHANGED
   ``subscription`` hook, which a ``"*"`` callback hook counts as); so a
   subscriber without ``auto_storage`` now rebuilds, telling only, when
   such a hook is registered, and a poll leaves a rebuild only the legacy
-  hook would hear for the next callback (a polled resync marker and a gap
-  resync owe one for it). ``sync_subscription()`` and
+  hook would hear for the next callback. ``sync_subscription()`` and
   ``sync_peer()`` without a configuration use the application's; they
   used the defaults, which keep a replica. **Check:** a data hook can now
   be called with a whole baseline, sometimes right after a diff it covers;

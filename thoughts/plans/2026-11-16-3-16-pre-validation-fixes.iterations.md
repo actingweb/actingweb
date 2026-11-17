@@ -149,3 +149,18 @@ hook event and nothing else. Ownership commits `4e19295` and `bafc726`,
 then re-recorded, each identical on a second DynamoDB run and on
 PostgreSQL. Full tier on the batch's tree: DynamoDB 8,069 passed,
 PostgreSQL 7,841 passed, docs clean. Not re-verified.
+
+## 2026-11-17, after verification thoughts/verifications/2026-11-17-3-16-pre-validation-fixes-5.md
+
+Scope: its Issues 1 to 6 (owner: revert entries 34 and 35, close Issue 1
+in code).
+
+38. **[Decision changed] Entry 35 reverted: no 503 for a "dropped" callback** — the processor claims one callback at a time and prunes only that one, so a delivered callback's change is never dropped by a batch's rebuild; the 503 fired only for a callback still queued. `CallbackProcessor.applied_through` and the branch are gone; the docs say a callback whose change was applied, or is queued, answers 204, and that this library's publisher does not resend on 503 (`actingweb/callback_processor.py`, `actingweb/handlers/callbacks.py`, `hooks-reference.rst`, `CHANGELOG.rst`). Why: re-run 7, Issues 3 and 4. AC: none. Spec: none.
+39. **[Decision changed] Entry 34 reverted: a polled marker owes nothing a poll cannot tell** — markers are stored only for subscribers that get no callbacks, so the debt was never collected; with no replica and no data hook a marker is applied as an empty diff and tells nobody, as the docs now say (`actingweb/interface/subscription_manager.py`, the four sites). Why: re-run 7, Issue 2. Test: `tests/test_replica_rebuild.py::TestAPollTellsTheDataHooks::test_a_polled_marker_owes_nothing_a_poll_cannot_tell` (replaces entry 34's). AC: none. Spec: none.
+40. **[Bug fix] A gap resync owes a rebuild whenever the legacy hook is registered** — its poll tells data hooks only, so a subscriber with a replica or a data hook and the legacy hook missed the gap there; the rebuild is now owed whatever `rebuilds_for` says, and a later callback (or the replayed one) runs and tells every hook (`actingweb/handlers/callbacks.py`, `hooks-reference.rst`, `CHANGELOG.rst`, `v3.16.rst`). Why: re-run 7, Issue 1 (Medium). Test: `tests/test_subscriber_receiver_1_5.py::test_the_gap_resync_owes_a_rebuild_when_a_legacy_hook_hears` (four shapes; the replica-data-and-legacy case red under entry 36's rule). AC: none. Spec: none.
+41. **[Verification fix] A lost owe is logged; the drop-the-debt test owes first** — `_owe_rebuild` logs a warning when `settle_rebuild` loses every compare-and-swap; `test_a_rebuild_answer_nobody_hears_drops_the_debt` marks the debt before the callback, so it fails without the drop. Why: re-run 7, Issues 5 and 6. AC: none. Spec: none.
+
+**After the batch:** Full tier on the batch's tree: DynamoDB 8,070
+passed, PostgreSQL 7,842 passed, docs clean; no wire recording changed.
+`ruff format` then rewrapped one condition in `_owe_rebuild`; the four
+subscription test modules re-run green. Not re-verified.

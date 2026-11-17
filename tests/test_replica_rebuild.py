@@ -976,18 +976,19 @@ class TestAPollTellsTheDataHooks:
         assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
-    def test_a_polled_marker_owes_a_rebuild_a_poll_cannot_tell(
+    def test_a_polled_marker_owes_nothing_a_poll_cannot_tell(
         self, env: _Env, loop: bool
     ) -> None:
-        """Re-run 6 (Issue 2): with no replica and no data hook the marker
-        was applied as an empty diff and cleared; the legacy hook never
-        heard the state. It is owed now, for the next callback."""
+        """Re-run 7 (Issue 2): markers are stored only for subscribers that
+        get no callbacks, so a debt owed for a callback's legacy hook was
+        never collected. With no replica and no data hook a polled marker
+        is applied as an empty diff and owes nothing."""
         from actingweb.subscription_config import SubscriptionProcessingConfig
 
         config = SubscriptionProcessingConfig(enabled=True, auto_storage=False)
         marker = [{"sequence": 5, "type": "resync", "url": "https://p/x", "data": {}}]
         assert _poll(env, config, marker, loop=loop).success
-        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is False
 
     @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
     def test_a_poll_leaves_a_rebuild_only_the_legacy_hook_hears_owed(

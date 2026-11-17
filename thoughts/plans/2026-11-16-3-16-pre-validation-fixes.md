@@ -1,7 +1,7 @@
 ---
 status: done
 approved: 2026-11-16 by Greger Wedel
-verified: thoughts/verifications/2026-11-16-3-16-pre-validation-fixes-2.md
+verified: thoughts/verifications/2026-11-17-3-16-pre-validation-fixes-4.md
 iterations: thoughts/plans/2026-11-16-3-16-pre-validation-fixes.iterations.md
 ---
 
@@ -193,7 +193,14 @@ order in `thoughts/todo/INDEX.md` ("Planned for 3.16") gains this plan as
   [Updated 2026-11-16, owner: a poll that rebuilt it; a quiet poll, with
   nothing to fetch, calls no hook.] [Updated 2026-11-16, iteration 2: quiet
   means level with the publisher's sequence; with nothing to fetch but the
-  subscriber behind, the baseline is told.]
+  subscriber behind, the baseline is told.] [Updated 2026-11-17, iterations
+  11-13 and 16-17: behind runs a rebuild, also without `auto_storage` when a
+  data hook for the target or `"*"` is registered, and a rebuild such a
+  subscriber owes runs on its next poll or callback and is told; a baseline another subscription covers is not told; a
+  failed behind rebuild is attempted again at most once a minute.] [Updated 2026-11-17, entries 28-30, owner after the
+  audit: a settled rebuild tells its baseline wherever it runs, also after
+  a list diff it was told first; a covered baseline never; a rebuild is
+  owed or run only when it has work.]
 - **AC-9** - A poll whose rebuild did not settle calls no data hook.
 - **AC-10** - On the async poll, a coroutine data hook is scheduled on the
   caller's loop and runs there.

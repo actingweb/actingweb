@@ -226,26 +226,50 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   resync's poll included, 3.16; it ran for none), once per sequence, with
   ``callback_type`` ``"diff"`` or ``"resync"``. ``data`` never carries a
   ``timestamp`` key the publisher did not send.
-- A poll that rebuilt the replica from a baseline (an owed rebuild, a
-  polled resync marker, a diff that could not be applied, or diffs that
-  were all applied already) calls the hook once with the baseline, the
-  sequence recorded and ``"resync"`` (3.16; it was told nothing). A quiet
-  poll, with nothing to fetch and the recorded sequence level with the
-  publisher's, refreshes the replica without calling the hook: that is the
-  state it already heard about. With nothing to fetch but the subscriber
-  behind (after a gap resync discarded queued callbacks, say; asked only
-  with ``auto_sequence``), the poll runs a rebuild: the hook is called with
-  its baseline, an empty one included. A coroutine hook of the async poll
-  is scheduled on the caller's loop. A poll tells the data hooks only: the
-  legacy ``subscription`` callback hook is told on the callback path.
+- **A rebuild tells its baseline** (3.16). A subscriber rebuilds from the
+  publisher's baseline when a rebuild is owed (a resync whose fetch failed,
+  a list diff the replica could not apply, a rebuild that did not settle),
+  a resync marker is polled, a poll was behind the publisher with nothing
+  to fetch, or a poll's diffs were all applied already. A rebuild that
+  settled calls the hook once with the baseline, the sequence recorded and
+  ``"resync"``, also after a list diff it was told first (the diffs after
+  that one were never run, and the baseline is how it hears them). Not
+  told: a baseline another subscription's replica covers (that
+  subscription's callbacks tell the same change), and a rebuild that did
+  not settle (it stays owed and tells when it runs again).
+- **Who runs it.** A rebuild has work when there is a replica
+  (``auto_storage``) or a hook that hears it: a data hook for the
+  subscription's target or ``"*"``, or, on the callback path, the legacy
+  ``subscription`` callback hook (a ``"*"`` callback hook counts). Only
+  then is one owed or run; a callback that finds a debt nobody hears drops
+  it. The next callback after the one-minute interval runs an owed
+  rebuild and tells both kinds of hook; a poll runs it too and tells the
+  data hooks only. A poll cannot see the legacy hook, so with no replica
+  and no data hook it leaves an owed rebuild for the next callback, and a
+  resync marker it polls, or a gap resync on the callback path, owes one
+  for it. A poll called without a configuration uses the application's
+  (``with_subscription_processing()``), for its diffs and its baseline. The public
+  ``rebuild_subscription()`` tells no hook: its caller does.
+- **Quiet and behind polls.** A quiet poll, with nothing to fetch and the
+  recorded sequence level with the publisher's, refreshes the replica
+  without calling the hook: that is the state it already heard about. With
+  nothing to fetch but the subscriber behind (after a gap resync discarded
+  queued callbacks, say; with ``auto_sequence``), the poll runs a rebuild,
+  an empty baseline included. A rebuild that failed is attempted again
+  after a minute; a poll inside that minute fails with ``error_code`` 429.
+  A coroutine hook of the async poll is scheduled on the caller's loop.
 - After a resync the replica no longer holds what the baseline lacks; the
   hook gets the baseline, not the names removed.
-- A callback that arrives while a rebuild of the replica is owed (after a
-  resync whose fetch failed) runs the rebuild instead of being applied.
-  When the rebuild settles, the hook, and the legacy ``subscription``
-  callback hook, is told the baseline once with ``"resync"`` (3.16): the
-  callback's change is in it. A rebuild that does not settle tells no hook;
-  the callback answers 503 and is told when it is sent again.
+- **Answers.** A callback that ran an owed rebuild in place of its diff
+  answers 503 when the rebuild does not settle, and its change is told by
+  the rebuild that later settles (the callback sent again may already be
+  recorded, and is then not told on its own). A callback whose own change
+  was applied answers 204 even when the rebuild after it does not settle;
+  that rebuild stays owed. One whose change a queued batch's rebuild
+  dropped (the batch stopped below it) answers 503 when that rebuild does
+  not settle, so it is sent again. Reserving or settling a rebuild uses
+  the callback state store, also without ``auto_storage``: a fault there
+  answers 503, also after the callback's own change was applied.
 - See :doc:`../guides/subscriptions` for the full auto-processing
   configuration and the operation table.
 

@@ -999,7 +999,7 @@ topologies = ["same_host", "two_hosts"]
 owners = ["attribute-list-v2-port:3", "attribute-list-v2-port:4", "spec-1-5:3", "3-16-pre-validation-fixes:2"]
 exposure = false
 expected = "An item over the 390,000-byte span threshold, appended and updated: the diffs are references ({bytes, spanned: true}, no value); B cannot apply either, logs it out of step (asserted by the test) and rebuilds its list from the baseline, which carries the item."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 a spanned reference is out of step and rebuilds the replica (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)"]
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-13 a spanned reference is out of step and rebuilds the replica (attribute-list-v2-port:3)", "2026-11-13 list edits over REST and the web UI send list diffs, a full state is a clear then an extend (attribute-list-v2-port:4)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-17 a settled rebuild tells its baseline, also after the list diff it could not apply: B's data hook hears it as a resync (3-16-pre-validation-fixes:2)"]
 
 [rows."WL14.target"]
 test = "test_wire_list_properties.py::test_wl14_target"
@@ -1066,8 +1066,8 @@ test = "test_wire_delivery.py::test_wd7_granularity_none"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3", "3-16-pre-validation-fixes:2"]
 exposure = false
-expected = "Granularity none: the write stores a diff and sends nothing. B's SDK sync_peer polls A's queue, clears it with PUT {sequence}, then fetches GET /properties, /methods and /actions; B holds x; A's queue empty. No timestamp property in the replica (spec-1-5:3)."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a poll no longer writes the diff's timestamp into the replica (spec-1-5:3)"]
+expected = "Granularity none: the write stores a diff and sends nothing. B's SDK sync_peer polls A's queue, clears it with PUT {sequence}, then fetches GET /properties, /methods and /actions; B holds x, and B's data hook hears the diff (the poll uses the application's configuration); A's queue empty. No timestamp property in the replica (spec-1-5:3)."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a poll no longer writes the diff's timestamp into the replica (spec-1-5:3)", "2026-11-17 a poll without a configuration uses the application's: B's data hook hears the polled diff (3-16-pre-validation-fixes:2)"]
 
 [rows."WD9"]
 test = "test_wire_delivery.py::test_wd9_gap_resync"
@@ -1082,8 +1082,8 @@ test = "test_wire_delivery.py::test_wd11_resume_none"
 topologies = ["same_host", "two_hosts"]
 owners = ["spec-1-5:3", "3-16-pre-validation-fixes:2"]
 exposure = false
-expected = "Granularity none: suspend, a write (nothing queued while suspended), resume: no resync callback; a type resync marker waits in the queue (spec-1-5:3); B's poll acts on it as a resync (GET /properties), A's queue is cleared and B holds x."
-reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a none subscription is sent no resync callback; the marker waits in its queue and B's poll applies it (spec-1-5:3)"]
+expected = "Granularity none: suspend, a write (nothing queued while suspended), resume: no resync callback; a type resync marker waits in the queue (spec-1-5:3); B's poll acts on it as a resync (GET /properties), A's queue is cleared, B holds x, and B's data hook hears the baseline as a resync."
+reason = ["2026-11-11 first recording (subscription-wire-baseline:1)", "2026-11-15 callback and resync timestamps in the polls' form, ISO 8601 with Z (spec-1-5:3)", "2026-11-15 a none subscription is sent no resync callback; the marker waits in its queue and B's poll applies it (spec-1-5:3)", "2026-11-17 the poll and its baseline use the application's configuration: B's data hook hears the marker's rebuild as a resync (3-16-pre-validation-fixes:2)"]
 
 [rows."WD13"]
 test = "test_wire_delivery.py::test_wd13_two_subscribers_on_the_second_host"

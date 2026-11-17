@@ -1040,10 +1040,17 @@ CHANGED
   baseline and answers for itself; neither the subscription data hooks nor
   the legacy ``subscription`` callback hook saw its change. When that
   rebuild settles, both are told the baseline once, with ``"resync"``; a
-  rebuild that does not settle tells neither, and the callback (answered
-  503) is told when it is sent again. **Behavior change:** a data hook can
+  rebuild that does not settle tells neither and answers 503, stays owed,
+  and is told by the rebuild the next callback or poll runs after one
+  minute. Without ``auto_storage`` the same holds when a hook hears it (a
+  data hook for the target or ``"*"``, or the legacy ``subscription``
+  callback hook). A baseline another subscription's replica covers is not
+  told. A callback whose own change was applied answers 204 when the
+  rebuild after it does not settle (that rebuild stays owed), unless the
+  callback state store faults, which answers 503; one whose change a
+  queued batch's rebuild dropped answers 503, so it is sent again. **Behavior change:** a data hook can
   be called with ``"resync"`` and the whole baseline in place of the diff
-  that arrived.
+  that arrived, or right after it.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
   nothing (it cleared the queue); a callback with ``data`` and no integer
   ``sequence`` answers 400 (it was dropped with 204); a granularity other
@@ -1364,25 +1371,37 @@ CHANGED
   a target other than ``properties`` nothing changes: pass the subtarget's
   whole value without ``resource``.
 
-- **Behavior change: a poll calls the data hooks with ``"resync"`` when it
-  rebuilt the replica.** ``sync_subscription()`` (and its async form, and
-  ``sync_peer``) with ``auto_storage`` rebuilds the replica from a baseline
-  when a rebuild is owed, a resync marker is polled, a diff could not be
-  applied, or everything fetched was applied already. The subscription
-  data hooks heard nothing of it; they are now called once with the
-  baseline, the sequence recorded and ``"resync"`` (the result's
-  ``baseline``, ``target`` and ``subtarget`` carry the same). Not told: a
-  quiet poll (nothing to fetch and the recorded sequence level with the
-  publisher's: its refresh of the replica is the state the hooks already
-  heard about; with sequence tracking, a poll with nothing to fetch that
-  was behind, as after a gap resync, runs a rebuild, which is told and
-  deletes what the publisher no longer holds), a baseline that was skipped
-  or had an entry
-  that failed to store, a rebuild that did not settle, and a rebuild after
-  a list diff the same poll already told. The legacy ``subscription``
-  callback hook is not told by a poll, as before. **Check:** a data hook
-  can now be called with a whole baseline from a poll; make it safe to
-  receive the same state it has seen.
+- **Behavior change: a rebuild tells the data hooks its baseline,
+  wherever it runs.** A subscriber rebuilds from a baseline when a
+  rebuild is owed (a resync whose fetch failed, a list diff the replica
+  could not apply, a rebuild that did not settle), a resync marker is
+  polled, a poll is behind the publisher with nothing to fetch (as after a
+  gap resync), or a poll's diffs were all applied already. The data hooks
+  heard nothing when a poll rebuilt or when a callback's own list diff
+  caused the rebuild; they are now called once with the baseline, the
+  sequence recorded and ``"resync"`` whenever the rebuild settled, also
+  right after the list diff they were told: the diffs after it were never
+  run, and the rebuild clears them on the publisher (the poll result's
+  ``baseline``, ``target`` and ``subtarget`` carry the same). The legacy
+  ``subscription`` callback hook hears it on the callback path only. Not
+  told: a quiet poll (nothing to fetch and the recorded sequence level
+  with the publisher's), a baseline another subscription's replica covers
+  (on every path), a baseline partly stored, and a rebuild that did not
+  settle (it stays owed; one that failed is attempted again after a
+  minute, and a poll inside that minute fails with code 429). A rebuild is
+  owed or run only when it has work: a replica, or a hook that hears it (a
+  data hook for the target or ``"*"``; on the callback path the legacy
+  ``subscription`` hook, which a ``"*"`` callback hook counts as); so a
+  subscriber without ``auto_storage`` now rebuilds, telling only, when
+  such a hook is registered, and a poll leaves a rebuild only the legacy
+  hook would hear for the next callback (a polled resync marker and a gap
+  resync owe one for it). ``sync_subscription()`` and
+  ``sync_peer()`` without a configuration use the application's; they
+  used the defaults, which keep a replica. **Check:** a data hook can now
+  be called with a whole baseline, sometimes right after a diff it covers;
+  make it safe to receive the same state it has seen. Code that relied on
+  ``sync_peer()`` keeping a replica without a configuration must configure
+  ``auto_storage`` or pass one.
 
 - **Behavior change: the receiver refuses some list names and ``list:``
   scalars.** A list a diff would create whose name has a control

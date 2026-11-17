@@ -30,7 +30,11 @@ application with ``with_email_as_creator`` also item 25.
    ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
    once (which creates the tables and stops), runs
    ``actingweb-unique-creators enable --apply``, and starts again; with no
-   actors yet the refusal says so in one line. To keep the old behaviour, call
+   actors yet the refusal says so in one line. The same holds for a CI job
+   or test script on a fresh local database: ``enable`` does not create the
+   actor table itself (a wrong prefix must not read as an empty store), so
+   import or start the application once first, then ``enable``, then start
+   the server the tests use. To keep the old behaviour, call
    ``with_unique_creator(False)``. **On PostgreSQL it also does not start
    until ``alembic upgrade head`` has applied revision ``a7b8c9d0e1f2``**
    (``AttributeSchemaNotReady``; see `Attribute lists and list diffs`_).
@@ -629,6 +633,14 @@ the returned count against the number of subscribers.
   read raises now; pass ``strict=False`` to keep checking ``loaded``.
 - A hook that must degrade instead of failing the request on a fault: catch
   ``DbError`` inside the hook.
+- An ``except Exception`` around a write in a route or handler of your own
+  that answers 500 (or reports "not saved"): let ``DbError`` through, and
+  the integration answers 503 with ``Retry-After``, which a client retries.
+- Tests whose doubles write values the store cannot serialize (a mock
+  object as an attribute's value): 3.15 swallowed the error and the write
+  returned ``False``, which such a test rarely checked, so it passed with
+  nothing stored. 3.16 raises ``DbError`` (500 or 503 depending on the
+  caller); give the double concrete values.
 
 Verified provider addresses
 ---------------------------
@@ -1056,6 +1068,43 @@ auto-creation is off) before step 4, plus ``ConditionCheckItem`` on the
 actor table, and give the role that runs the command ``CreateTable`` and
 ``Scan`` on it as well. Without them the startup
 check cannot read the table and the application refuses to start.
+
+What 3.16 adds to a role that lists actions, in one place (each is
+explained where its section is):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Table
+     - Actions the application role needs
+     - Why
+   * - ``<prefix>_creators`` (new)
+     - ``GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``;
+       ``DescribeTable`` unless auto-creation is off
+     - Creator uniqueness (this step)
+   * - ``<prefix>_actors``
+     - ``ConditionCheckItem``
+     - The creator claim is one transaction with the actor row; with
+       reverse lookup on (any indexed property), an indexed write checks
+       the actor row whatever the uniqueness setting
+   * - ``<prefix>_properties``
+     - ``ConditionCheckItem``
+     - With reverse lookup on: an indexed write that claims a free lookup
+       row checks the property row in the same transaction
+   * - ``<prefix>_property_lookup_v2``
+     - ``BatchGetItem``, ``PutItem``
+     - The startup check reads the readiness markers at every start
+       (`One reverse-lookup mechanism`_)
+   * - ``<prefix>_attributes``
+     - ``ConditionCheckItem``, ``PutItem``, ``DeleteItem``
+     - With ``with_email_as_creator``: the rename is one transaction over
+       the actors, creators and attributes tables
+
+IAM has no ``TransactWriteItems`` action: a DynamoDB transaction is
+authorised through the item actions it performs plus ``ConditionCheckItem``
+for its condition checks. A policy audit that maps the library's
+``TransactWrite`` calls to ``TransactWriteItems`` looks for an action that
+does not exist and misses ``ConditionCheckItem``.
 
 1. ``actingweb-unique-creators report`` lists actors sharing a creator
    (including addresses that differ only by case) and exits 1 if there are
@@ -2309,20 +2358,45 @@ what is stored, filtered by the subscriber's grant only. For a target other
 than ``properties`` the library has no store to read: pass the subtarget's
 whole value without ``resource``.
 
-**A poll calls the data hooks when it rebuilt the replica.** With
-``auto_storage``, ``sync_subscription()`` rebuilds the replica from a
-baseline when a rebuild is owed, a resync marker is polled, a diff could not
-be applied, or everything fetched was applied already. A subscription data
-hook was told nothing; it is now called once with the baseline, the
-sequence recorded and ``"resync"``. A quiet poll (nothing to fetch, and the
-recorded sequence level with the publisher's) tells nothing: its refresh of
-the replica is the state the hook already heard about. With sequence
-tracking, a poll with nothing to fetch that was behind the publisher, as
-after a gap resync, runs a rebuild, which is told. Neither does a rebuild that did not settle, a baseline that was
-skipped or partly stored, or a rebuild after a list diff the same poll
-already told. The legacy ``subscription`` callback hook is told on the
-callback path only, as before. *What to check:* a data hook can now receive
-a whole baseline from a poll; make it safe to be given state it has seen.
+**A rebuild tells the data hooks its baseline, wherever it runs.** A
+subscriber rebuilds from the publisher's baseline when a rebuild is owed
+(a resync whose fetch failed, a list diff the replica could not apply, a
+rebuild that did not settle), a resync marker is polled, a poll is behind
+the publisher with nothing to fetch (as after a gap resync), or a poll's
+diffs were all applied already. A data hook was told nothing when a poll
+rebuilt, and nothing when a callback's own list diff caused the rebuild;
+it is now called once with the baseline, the sequence recorded and
+``"resync"`` whenever the rebuild settled, also after the list diff it was
+told first: the diffs after that one were never run, and the rebuild
+clears them on the publisher. The legacy ``subscription`` callback hook
+hears it on the callback path, as before; a poll tells data hooks only.
+Not told: a quiet poll (nothing to fetch, and the recorded sequence level
+with the publisher's: its refresh is the state the hook already heard
+about), a baseline another subscription's replica covers (on every path;
+that subscription's callbacks tell the same change), a baseline partly
+stored, and a rebuild that did not settle (it stays owed).
+
+A rebuild is owed or run only when it has work: a replica
+(``auto_storage``), or a hook that hears it (a data hook for the
+subscription's target or ``"*"``, or the legacy ``subscription`` callback
+hook, which a ``"*"`` callback hook also counts as). A subscriber without
+a replica now rebuilds too when such a hook is registered: on a behind
+poll, on a polled resync marker, and on the next callback after a failed
+resync fetch, telling its baseline. A poll leaves a rebuild only the
+legacy hook would hear for the next callback, and a polled resync marker
+or a gap resync owes one for it. A rebuild that failed is
+attempted again after a minute, and a poll inside that minute fails with
+code 429. ``sync_subscription()`` and ``sync_peer()`` called without a
+configuration use the application's (``with_subscription_processing()``);
+they used the defaults, which keep a replica.
+
+*What to check:* a data hook can now receive a whole baseline from a poll
+or a callback, sometimes right after a diff it covers; make it safe to be
+given state it has seen. A caller of ``sync_subscription()`` that treats a
+failed result as fatal should retry a 429 later. Code that called
+``sync_peer()`` without a configuration and relied on its replica must
+configure ``auto_storage`` in ``with_subscription_processing()``, or pass
+the configuration.
 
 Removed: CallbackOauthHandler
 -----------------------------

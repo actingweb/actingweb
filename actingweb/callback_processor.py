@@ -146,6 +146,9 @@ class CallbackProcessor:
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff_base
         self._state_bucket = "_callback_state"
+        # The sequence the last batch applied through: a batch stopped for
+        # a rebuild drops the callbacks after it, possibly the delivered one.
+        self.applied_through: int | None = None
 
     def _get_state_key(self, peer_id: str, subscription_id: str) -> str:
         """Get attribute key for callback state."""
@@ -813,6 +816,7 @@ class CallbackProcessor:
         # stopped for a rebuild advances through the callback that stopped
         # it; the rest of it is pruned (the rebuild supersedes it).
         new_last_seq = stop_at if stop_at is not None else batch[-1].sequence
+        self.applied_through = new_last_seq
         written = False
         try:
             recorded = self._update_last_seq(peer_id, subscription_id, new_last_seq)
@@ -871,8 +875,9 @@ class CallbackProcessor:
             ):
                 return ProcessResult.REBUILD, False
         elif claimed_row.get("rebuild_owed") and self._rebuild_due(claimed_row):
-            # Owed from an out-of-step diff inside the interval: the next
-            # callback after it rebuilds.
+            # Owed from before (an out-of-step diff inside the interval, a
+            # resync whose fetch failed, a behind poll's failed rebuild): the
+            # next callback after it rebuilds.
             return ProcessResult.REBUILD, False
 
         return ProcessResult.PROCESSED, written and stop_at is None

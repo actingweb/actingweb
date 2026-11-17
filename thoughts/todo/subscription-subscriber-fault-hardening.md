@@ -149,3 +149,11 @@ and position).
   traffic. Make the sequence write conditional on the claim still being
   current; prune the queue through the resync's sequence instead of
   clearing it, and drain after the resync records its sequence.
+- **Duplicate diffs under a publisher sequence that is not an integer come
+  back on every poll** (`SubscriptionManager._poll_subscription[_async]`,
+  the duplicate-diffs path; verification
+  `2026-11-17-3-16-pre-validation-fixes`, Issue 3). Since 3.16 such a
+  sequence is neither recorded nor used to clear, and the hooks are not
+  told, but the baseline is still fetched and applied on each poll. A
+  broken or hostile publisher only; clearing up to the highest diff
+  sequence fetched would end it.

@@ -334,6 +334,20 @@ def test_an_existing_trust_with_another_relationship_returns_a_notice(
     assert _shown(TRUST_LIST_NOTICES["trust_exists"]) in site.get(location)[2]
 
 
+def test_whitespace_around_a_typed_url_still_names_the_stored_peer(
+    site: _Site,
+) -> None:
+    """Re-run 2 (Issue 4): the match refuses what the library refuses as a
+    base URI, whitespace included, and the form did not strip what was
+    typed, so a pasted URL with a trailing space made a second trust."""
+    baseuri = site.trust("peer1", approved=True, peer_approved=True, verified=True)
+    with mock.patch.object(TrustManager, "create_relationship") as create:
+        status, location = site.submit(peer_url=f"  {baseuri} \n", trust_type="admin")
+    create.assert_not_called()
+    assert status == 302
+    assert location == f"{site.www}/trust?notice=trust_exists"
+
+
 def test_nothing_from_the_query_string_is_rendered(site: _Site) -> None:
     """A link from another site cannot prefill the form or put text on the
     page: a known code shows the library's text, anything else nothing."""

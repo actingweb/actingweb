@@ -1076,7 +1076,8 @@ class WwwHandler(base_handler.BaseHandler):
         redirect (3.16; a failure was a bare 400 or 500 page): to the trust
         list on success or when the peer already has a trust, to the form
         with a message code otherwise."""
-        peer_url = self.request.get("peer_url")
+        # Typed or pasted: surrounding whitespace is not part of the URL.
+        peer_url = (self.request.get("peer_url") or "").strip()
         relationship = (
             self.request.get("relationship") or self.config.default_relationship
         )

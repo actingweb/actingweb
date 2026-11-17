@@ -3962,7 +3962,12 @@ class Actor:
             # landed (3.16).
             self.subs_list = None
 
-        if result and covered and peerid:
+        processing = getattr(self.config, "_subscription_config", None)
+        # Only a replica has anything to rebuild: without one, the covered
+        # subscriptions' diffs were applied and told all along. With no
+        # processing configuration a poll keeps a replica (the defaults).
+        keeps_replica = processing is None or bool(processing.auto_storage)
+        if result and covered and peerid and keeps_replica:
             self._owe_covered_rebuilds(peerid, covered)
 
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss

@@ -102,7 +102,6 @@ __all__ = [
     "PropertyListStorage",
     "build_list_diff",
     "diff_reference",
-    "fit_full_state",
     "spanned_reference",
 ]
 
@@ -301,51 +300,6 @@ def _as_reference(
     ):
         raise ValueError("list diff reference is itself over the span threshold")
     return reference
-
-
-def fit_full_state(
-    state: dict[str, Any], config: Any, *, list_keys: set[str] | None = None
-) -> dict[str, Any]:
-    """A subscription full-state blob made to fit the diff row: each nested
-    list diff over the span threshold becomes a reference
-    (``diff_reference``), and while the whole blob is still over the
-    threshold the largest remaining list diffs become references too,
-    largest first. Scalar properties are never altered (a blob too large
-    for its scalars alone fails to store as before). Without a threshold
-    the state is returned unchanged."""
-    span_threshold = getattr(config, "list_item_span_threshold", None)
-    if (
-        not isinstance(span_threshold, int)
-        or isinstance(span_threshold, bool)
-        or span_threshold <= 0
-    ):
-        return state
-    out = dict(state)
-    # With list_keys (the caller knows which keys are lists) a scalar
-    # property shaped like a list diff is never touched; without, the shape
-    # decides.
-    lists = [
-        key
-        for key, value in out.items()
-        if isinstance(value, dict)
-        and "list" in value
-        and "operation" in value
-        and (list_keys is None or key in list_keys)
-    ]
-    for key in lists:
-        out[key] = diff_reference(out[key], config)
-    if encoded_size(json.dumps(out)) <= span_threshold:
-        return out
-    by_size = sorted(
-        (key for key in lists if not out[key].get("spanned")),
-        key=lambda key: encoded_size(json.dumps(out[key])),
-        reverse=True,
-    )
-    for key in by_size:
-        out[key] = _as_reference(out[key], None)
-        if encoded_size(json.dumps(out)) <= span_threshold:
-            break
-    return out
 
 
 def spanned_reference(

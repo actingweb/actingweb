@@ -7,7 +7,7 @@
   </div>
   <h1>New trust relationship</h1>
 
-  {% if error %}<div class="aw-error">{{ error }}</div>{% endif %}
+  {% if error %}<div class="aw-error" role="alert">{{ error }}</div>{% endif %}
 
   <form action="{{ form_action|default('') }}" method="{{ form_method|default('POST') }}">
     <label for="peer_url">Peer URL</label>

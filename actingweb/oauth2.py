@@ -279,8 +279,8 @@ class GoogleOAuth2Provider(OAuth2Provider):
         provider_config: dict[str, Any] | None = None,
     ):
         oauth_config = provider_config or config.oauth or {}
-        # Only use redirect_uri from explicit provider_config (e.g. mobile apps),
-        # not from config.oauth which has a different default path.
+        # The redirect_uri of the provider's own entry (with_oauth, or a
+        # mobile variant); else the path both integrations serve.
         custom_redirect = provider_config.get("redirect_uri") if provider_config else ""
         google_config = {
             "client_id": oauth_config.get("client_id", ""),

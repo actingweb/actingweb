@@ -118,3 +118,42 @@ and position).
   object; the baseline path reads the raw body (`_subtarget_value`) and is
   not affected. Found by the codex review of spec-1-5 Phase 1 (2026-11-15);
   predates it, and is independent of the `text/plain` label that phase added.
+- **The pending queue is bounded by count, not by bytes**
+  (`CallbackProcessor._add_pending`, `max_pending`, 100 by default): the
+  queue is one attribute row, and DynamoDB's row limit is 400 KB, so a few
+  large queued diffs can fail the write (a 503 since the pre-validation
+  plan, where it was a silent loss). A byte bound, or one row per queued
+  callback. Recorded by `2026-11-16-3-16-pre-validation-fixes` (finding 33).
+- **State cleanup races a delivery that is taking queued callbacks**
+  (`CallbackProcessor.clear_state` against `_drain`): a subscription deleted
+  while a delivery prunes the queue can have its queue row written back
+  after the delete. The drain's claim reads a state row that is gone and
+  ends, so no handler runs; the row is an orphan until the peer's state is
+  cleared. Recorded by the same plan; not tested.
+- **A queued callback whose handler faults every time blocks the queue**
+  (`CallbackProcessor`, since the pre-validation plan): while the next
+  callback in line is itself queued the gap timeout does not fire (a resync
+  there cleared callbacks already answered), so a head that raises `DbError`
+  on every drain is retried by each delivery and later callbacks queue behind
+  it until the queue is full. A poll or a resync callback still recovers it.
+  A bound on the attempts per queued callback, then the resync.
+- **A resync is not fenced against a diff in progress, and takes no care of
+  what is queued above it** (`CallbackProcessor._handle_resync[_sync]`;
+  verification `2026-11-16-3-16-pre-validation-fixes`, Issue 7). A diff's
+  handler that finishes after a resync landed writes its older sequence
+  over the resync's (`_finish_batch`, the sequence write is unconditional).
+  The resync clears the whole queue, a callback above its own sequence
+  included, and does not drain what is queued after the clear. Since 3.16 a
+  resume always sends a resync, so suspend, bulk write, resume, one more
+  write can leave a quiet subscription without the last write until later
+  traffic. Make the sequence write conditional on the claim still being
+  current; prune the queue through the resync's sequence instead of
+  clearing it, and drain after the resync records its sequence.
+- **Duplicate diffs under a publisher sequence that is not an integer come
+  back on every poll** (`SubscriptionManager._poll_subscription[_async]`,
+  the duplicate-diffs path; verification
+  `2026-11-17-3-16-pre-validation-fixes`, Issue 3). Since 3.16 such a
+  sequence is neither recorded nor used to clear, and the hooks are not
+  told, but the baseline is still fetched and applied on each poll. A
+  broken or hostile publisher only; clearing up to the highest diff
+  sequence fetched would end it.

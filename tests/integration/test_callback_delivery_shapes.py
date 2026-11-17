@@ -127,20 +127,12 @@ def test_two_simultaneous_writes_with_fetching_subscribers_complete(
     assert requests.get(f"{a.url}/meta/id").status_code == 200
 
 
-@pytest.mark.xfail(
-    # Not strict: the race is timing-dependent and passes now and then
-    # (it XPASSed on CI, Python 3.11 with DynamoDB, PR #178).
-    strict=False,
-    reason=(
-        "Pre-existing, not the sender's: two concurrent low-granularity "
-        "writes leave one subscriber without one of them until its next "
-        "callback or poll (fails with the serial sender of Phase 3 too). "
-        "thoughts/todo/low-granularity-concurrent-writes-replica.md"
-    ),
-)
 def test_two_simultaneous_low_granularity_writes_reach_every_replica(
     wire_pair: Any,
 ) -> None:
+    """A subscriber that receives the second write's callback while it is
+    handling the first queues it, and takes it when the first is recorded
+    (3.16: it stayed queued until later traffic)."""
     a, subs, _results = _two_writes(wire_pair)
 
     def all_hold() -> bool:

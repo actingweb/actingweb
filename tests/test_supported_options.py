@@ -138,7 +138,7 @@ def test_the_two_guides_show_the_same_list_the_code_builds() -> None:
 
 def test_redirect_uri_follows_the_given_host_not_the_default() -> None:
     config = Config(fqdn="x.example", proto="https://")
-    assert config.oauth["redirect_uri"] == "https://x.example/oauth"
+    assert config.oauth["redirect_uri"] == "https://x.example/oauth/callback"
 
 
 def test_a_callers_own_redirect_uri_wins() -> None:

@@ -63,7 +63,44 @@ baseline's failures by name and nothing else:
   (`thoughts/verifications/2026-11-15-email-as-creator-at-write-time-2.md`).
 
 - `spec-1-5` (environment 9, on `2f1a891`, `creator-to-email` first:
-  nothing to move): the baseline's failures, nothing new.
+  nothing to move): the baseline's failures, nothing new. Not re-run for
+  its four iteration commits (merged as #178, `e928e5b`), against gate 2's
+  rule; verification `2026-11-16-spec-1-5-2` deferred it. The release
+  validation's run on `master` covers them, so a new failure there may be
+  theirs.
+
+- `3-16-pre-validation-fixes` (environment 9, on `d62021b`,
+  `creator-to-email` first: nothing to move): the same six failures by name
+  as the `spec-1-5` run, nothing new. Run again on `3fb93ab` (the branch
+  after its verification's iteration): PostgreSQL 3 failed, 7,405 passed;
+  DynamoDB lane 3 failed, 54 passed; the same six by name; and on `ab11326`
+  (after the second iteration) with the same counts and names; and on the
+  uncommitted third, fourth and fifth iterations (`8bb63cf` with the
+  working tree's `actingweb/` diff applied in the library worktree; run
+  after entries 20 and 26): the same counts and names each time; and on
+  `320925d` (entries 11 to 37 committed, the library worktree checked out
+  at that commit): the same counts and names; and on `1a68f1d` (entries
+  38 to 41) and `e6a8976` (entries 42 to 45): the same counts and names. Emm's `properties` data hook sends its UI a
+  full-sync notification on `"resync"`: since this plan a poll that rebuilt
+  the replica calls it (a quiet poll does not), and so does a callback that
+  ran an owed rebuild.
+
+**Running it: the PostgreSQL lane needs the environment's preview server.**
+Emm's `tests/integration/mcp/` tests call `http://localhost:50<env>`; with
+no server they error (125 connection refusals on 2026-11-17), which reads
+as a regression until the log is opened. Start
+`scripts/preview-start.sh 9 --no-ngrok` in Emm's worktree first, stop it
+after. The DynamoDB lane (`scripts/test-backends.sh 9`) starts its own.
+
+**What the runs taught the migration guide** (2026-11-17): the adoption
+items Emm needed are now each in `docs/migration/v3.16.rst`, and the guide
+gained what was missing: one table of the DynamoDB permissions 3.16 adds
+(with the note that IAM has no `TransactWriteItems` action), the
+fresh-database order for CI and test scripts, the `except Exception`
+around a write that turns a 503 into a 500, test doubles that passed
+because 3.15 swallowed a failed write, and a hooks-only subscriber's
+`"resync"` and the poll's 429. The research note's open question about a
+standing list of IAM actions is answered by that table.
 
 Still to run: `3-16-release-validation` (the last; it deletes
 this file). A run now starts with `creator-to-email` (dry run, then

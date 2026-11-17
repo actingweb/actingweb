@@ -17,7 +17,7 @@ database enforces, binds every peer to its own paths, and adds ``prompt``
 to the SPA sign-in. It also conforms to specification 1.5, which changes
 what subscribers are told and several answers, sends a write's callbacks
 concurrently, and removes ``FanOutManager``. Most applications need to check
-only the first three items, item 11, item 18 and items 26 to 30; an
+only the first three items, item 11, item 18 and items 26 to 32; an
 application with ``with_email_as_creator`` also item 25.
 
 .. warning::
@@ -30,7 +30,11 @@ application with ``with_email_as_creator`` also item 25.
    ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
    once (which creates the tables and stops), runs
    ``actingweb-unique-creators enable --apply``, and starts again; with no
-   actors yet the refusal says so in one line. To keep the old behaviour, call
+   actors yet the refusal says so in one line. The same holds for a CI job
+   or test script on a fresh local database: ``enable`` does not create the
+   actor table itself (a wrong prefix must not read as an empty store), so
+   import or start the application once first, then ``enable``, then start
+   the server the tests use. To keep the old behaviour, call
    ``with_unique_creator(False)``. **On PostgreSQL it also does not start
    until ``alembic upgrade head`` has applied revision ``a7b8c9d0e1f2``**
    (``AttributeSchemaNotReady``; see `Attribute lists and list diffs`_).
@@ -42,6 +46,8 @@ application with ``with_email_as_creator`` also item 25.
    ``with_subscription_processing()``, or imports ``FanOutManager`` or
    ``FanOutResult``, does not start**: the setting raises ``RuntimeError`` and
    the import ``ImportError``, both naming `Callback delivery`_. Remove them.
+   **An application that imports ``actingweb.handlers.callback_oauth`` does
+   not start either** (see `Removed: CallbackOauthHandler`_).
 
 1. **An actor created before 3.16 with no marker is cleaned at its first
    sign-in after the upgrade.** That covers the factory, the email form,
@@ -216,6 +222,16 @@ application with ``with_email_as_creator`` also item 25.
     size a FastAPI handler pool for it; behind a gateway with a response
     limit set ``with_callback_delivery(callback_delivery_budget_seconds=...)``.
     The protocol changes are tabled in `Specification 1.5`_.
+31. **A subscription data hook is called with a whole baseline from a
+    poll, a resume always sends a resync, and a resource notification sends
+    the whole value** (see `Subscribers: resume, resource notifications and
+    polls`_): make the data hook safe to be given a whole baseline by a
+    poll; check a subscriber older than 3.10 or not this library; write
+    a property before ``notify_subscribers(resource=...)``.
+32. **``CallbackOauthHandler`` is removed, the default OAuth2
+    ``redirect_uri`` is ``/oauth/callback``, and the web UI's new-trust form
+    answers a failure with a redirect** (see `Removed:
+    CallbackOauthHandler`_ and `The web UI's trust pages`_).
 
 
 What changed and why
@@ -617,6 +633,14 @@ the returned count against the number of subscribers.
   read raises now; pass ``strict=False`` to keep checking ``loaded``.
 - A hook that must degrade instead of failing the request on a fault: catch
   ``DbError`` inside the hook.
+- An ``except Exception`` around a write in a route or handler of your own
+  that answers 500 (or reports "not saved"): let ``DbError`` through, and
+  the integration answers 503 with ``Retry-After``, which a client retries.
+- Tests whose doubles write values the store cannot serialize (a mock
+  object as an attribute's value): 3.15 swallowed the error and the write
+  returned ``False``, which such a test rarely checked, so it passed with
+  nothing stored. 3.16 raises ``DbError`` (500 or 503 depending on the
+  caller); give the double concrete values.
 
 Verified provider addresses
 ---------------------------
@@ -1044,6 +1068,43 @@ auto-creation is off) before step 4, plus ``ConditionCheckItem`` on the
 actor table, and give the role that runs the command ``CreateTable`` and
 ``Scan`` on it as well. Without them the startup
 check cannot read the table and the application refuses to start.
+
+What 3.16 adds to a role that lists actions, in one place (each is
+explained where its section is):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Table
+     - Actions the application role needs
+     - Why
+   * - ``<prefix>_creators`` (new)
+     - ``GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``;
+       ``DescribeTable`` unless auto-creation is off
+     - Creator uniqueness (this step)
+   * - ``<prefix>_actors``
+     - ``ConditionCheckItem``
+     - The creator claim is one transaction with the actor row; with
+       reverse lookup on (any indexed property), an indexed write checks
+       the actor row whatever the uniqueness setting
+   * - ``<prefix>_properties``
+     - ``ConditionCheckItem``
+     - With reverse lookup on: an indexed write that claims a free lookup
+       row checks the property row in the same transaction
+   * - ``<prefix>_property_lookup_v2``
+     - ``BatchGetItem``, ``PutItem``
+     - The startup check reads the readiness markers at every start
+       (`One reverse-lookup mechanism`_)
+   * - ``<prefix>_attributes``
+     - ``ConditionCheckItem``, ``PutItem``, ``DeleteItem``
+     - With ``with_email_as_creator``: the rename is one transaction over
+       the actors, creators and attributes tables
+
+IAM has no ``TransactWriteItems`` action: a DynamoDB transaction is
+authorised through the item actions it performs plus ``ConditionCheckItem``
+for its condition checks. A policy audit that maps the library's
+``TransactWrite`` calls to ``TransactWriteItems`` looks for an action that
+does not exist and misses ``ConditionCheckItem``.
 
 1. ``actingweb-unique-creators report`` lists actors sharing a creator
    (including addresses that differ only by case) and exits 1 if there are
@@ -1993,9 +2054,11 @@ v2 list: updates by ascending index, appends, a run of them as one
 the batch (``Actor.request_resync``: the list's for a subscription to it,
 the whole target's for a subscription to the whole target). A REST or
 web-UI delete is ``delete`` by index with ``old_item``: the replica deletes
-the one equal item, or the one at the index among equal ones. A peer without resync support receives a list's
-full state as a ``clear`` and then an ``extend``, under consecutive sequence
-numbers. A list diff is filtered as a unit: it reaches a subscriber that may
+the one equal item, or the one at the index among equal ones. A resume
+sends every subscriber a resync callback, whatever tags it advertises: the
+full state as ordinary diffs, which a peer cached without
+``subscriptionresync`` was sent, is gone (see "Subscribers: resume, resource
+notifications and polls" below). A list diff is filtered as a unit: it reaches a subscriber that may
 read the list's name, whole.
 
 **The receiver.** A list diff applies only to the key it arrived under. A
@@ -2261,6 +2324,128 @@ held the last subscriber's answer, overwritten by each); trust and peer calls
 still set it. *What to check:* code that read it after a write to learn how a
 callback went.
 
+Subscribers: resume, resource notifications and polls
+-----------------------------------------------------
+
+**A resume always sends a resync callback.** After
+``resume_subscriptions()`` the publisher read each subscriber's cached option
+tags and, for one cached without ``subscriptionresync``, sent the full
+subscribed state as ordinary diffs. That path stored scalars as text, kept
+properties that had been deleted, and raised for a subscription to a single
+property, so it is removed: every subscriber with a callback endpoint gets a
+callback of type ``resync`` and fetches the baseline under its own grant (a
+``none`` subscription and a peer without an endpoint still get the marker
+they poll). Every version of this library since 3.10 advertises the tag and
+already received a resync whenever its tags were not cached. *What to
+check:* a subscriber on a version before 3.10, or an implementation that
+does not know ``type: "resync"``, gets no state as diffs after a resume and
+re-reads on its own schedule. ``PeerCapabilities
+.supports_resync_callbacks_cached()`` and
+``actingweb.property_list.fit_full_state`` are removed;
+``supports_resync_callbacks()`` stays.
+
+**``notify_subscribers(resource=...)`` sends the whole stored value above
+the resource.** ``actor.subscriptions.notify_subscribers("properties", data,
+subtarget=s, resource=r)`` sent a subscriber at target or subtarget level
+``{r: data}``. A receiver applies a value at those levels whole, so its
+replica lost the other keys of ``s``. Such a subscriber is now sent the
+value of ``s`` as the store holds it when the call is made, less what its
+grant excludes; a subscriber at resource level is sent ``data``, as before.
+*What to check:* write the property before notifying; a subscriber that
+relied on the partial ``{r: data}`` receives the whole value; a publisher
+that passed data its store does not hold (redacted or computed) now sends
+what is stored, filtered by the subscriber's grant only. For a target other
+than ``properties`` the library has no store to read: pass the subtarget's
+whole value without ``resource``.
+
+**A rebuild tells the data hooks its baseline, wherever the library runs
+it.** A
+subscriber rebuilds from the publisher's baseline when a rebuild is owed
+(a resync whose fetch failed, a list diff the replica could not apply, a
+rebuild that did not settle), a resync marker is polled, a poll is behind
+the publisher with nothing to fetch (as after a gap resync); a poll whose
+diffs were all applied already refreshes the replica from the baseline
+(with ``auto_storage``) and tells it the same way. A data hook was told
+nothing when a poll
+rebuilt, and nothing when a callback's own list diff caused the rebuild;
+it is now called once with the baseline, the sequence recorded and
+``"resync"`` whenever the rebuild settled, also after the list diff it was
+told first: the diffs after that one were never run, and the rebuild
+clears them on the publisher. The legacy ``subscription`` callback hook
+hears it on the callback path; a poll tells data hooks only.
+Not told: a quiet poll (nothing to fetch, and the recorded sequence level
+with the publisher's: its refresh is the state the hook already heard
+about), a baseline another subscription's replica covers (on every path;
+that subscription's callbacks tell the same change), a baseline partly
+stored, and a rebuild that did not settle (it stays owed).
+
+A rebuild is owed or run only when it has work: a replica
+(``auto_storage``), or a hook that hears it (a data hook for the
+subscription's target or ``"*"``, or the legacy ``subscription`` callback
+hook, which a ``"*"`` callback hook also counts as). A subscriber without
+a replica now rebuilds too when such a hook is registered: on a behind
+poll and on a polled resync marker (with a data hook), and on the next
+callback after a failed
+resync fetch, telling its baseline. A poll leaves a rebuild only the
+legacy hook would hear for the next callback. What a poll does, a gap
+resync's included, reaches data hooks only: the legacy ``subscription``
+callback hook hears the callbacks it processes and the rebuilds the
+callback path runs, so
+an application that must hear every change uses
+``subscription_data_hook``. A rebuild that failed is
+attempted again after a minute, and a poll inside that minute fails with
+code 429. ``sync_subscription()`` and ``sync_peer()`` called without a
+configuration use the application's (``with_subscription_processing()``);
+they used the defaults, which keep a replica.
+
+*What to check:* a data hook can now receive a whole baseline from a poll
+or a callback, sometimes right after a diff it covers; make it safe to be
+given state it has seen. A caller of ``sync_subscription()`` that treats a
+failed result as fatal should retry a 429 later. Code that called
+``sync_peer()`` without a configuration and relied on its replica must
+configure ``auto_storage`` in ``with_subscription_processing()``, or pass
+the configuration.
+
+Removed: CallbackOauthHandler
+-----------------------------
+
+``actingweb.handlers.callback_oauth.CallbackOauthHandler`` redirected an
+OAuth2 ``code`` to a per-actor ``/<actor id>/oauth`` path. Neither
+integration routed it, and specification 1.5 no longer defines that path.
+The class is removed; importing the module raises ``ImportError`` naming
+this section. *What to check:* remove the import. The OAuth2 callback is
+served at ``/oauth/callback`` by ``integrate_flask`` and
+``integrate_fastapi``.
+
+**The default ``redirect_uri`` is ``/oauth/callback``.** ``with_oauth()``
+and ``Config`` defaulted ``redirect_uri`` to ``<proto><fqdn>/oauth``, which
+is not the callback on either integration: a request there is answered as
+an unauthenticated browser's, with a redirect to the provider. An
+application that called ``with_oauth()`` without a ``redirect_uri`` sent
+its provider that URI, so the provider's redirect back, with its ``code``,
+started the sign-in again instead of finishing it; one that passed
+``/oauth/callback`` itself was not affected. The default is now ``<proto><fqdn>/oauth/callback``.
+*What to check:* register ``<proto><fqdn>/oauth/callback`` with the
+provider if ``/oauth`` was registered; nothing changes for an application
+that passes its own ``redirect_uri``, which still wins.
+
+The web UI's trust pages
+------------------------
+
+The trust list's status now covers both sides (``Active``, ``Waiting for
+peer``, ``Awaiting your approval``, ``Awaiting both``, ``Unverified``); it
+showed this actor's approval only. The dashboard links to the new-trust
+form. ``POST /<actor_id>/www/trust/new`` answers every outcome with a 302:
+a failure was a bare 400 or 500 page with text, and is now a redirect to
+the form with ``?error=<code>``; a submit for a peer this actor already
+approved a trust with goes to the list with a notice: ``trust_repaired``
+when the relationship is the same (it is paired again with a new secret, as
+before) and ``trust_exists`` when it is another (nothing is changed).
+*What to check:* a client that read the 400's text; an application with its
+own ``aw-actor-www-trust.html`` can show ``trust.status_label`` and
+``notice`` (see :doc:`../guides/web-ui`), and one with its own
+``aw-actor-www-trust-new.html`` already receives ``error``.
+
 Specification 1.5
 -----------------
 
@@ -2335,6 +2520,11 @@ affected and the section that says what to check:
        ``False`` or ``None``)
      - 200 ``False``
      - 404
+     - browser
+     - :doc:`../guides/web-ui`
+   * - ``POST /www/trust/new`` that fails
+     - 400 with text (500 with the exception's text)
+     - 302 to the form with ``?error=<code>``
      - browser
      - :doc:`../guides/web-ui`
    * - ``GET /<actor_id>`` as a peer

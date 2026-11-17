@@ -93,6 +93,19 @@ class TestModuleExports:
         with pytest.raises(ImportError, match="v3.16"):
             importlib.import_module("actingweb.fanout")
 
+    def test_the_removed_callback_oauth_module_raises_its_pointer(self) -> None:
+        import importlib
+
+        import pytest
+
+        with pytest.raises(ImportError, match=r"docs/migration/v3\.16\.rst"):
+            importlib.import_module("actingweb.handlers.callback_oauth")
+        # The package no longer lists it.
+        assert (
+            "callback_oauth"
+            not in importlib.import_module("actingweb.handlers").__all__
+        )
+
     def test_the_removed_settings_raise_their_pointer(self) -> None:
         import pytest
 

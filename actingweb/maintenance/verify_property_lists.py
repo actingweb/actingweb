@@ -619,13 +619,18 @@ def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
                 and not row.get("resource")
                 and (row.get("subtarget") or "") in ("", list_attr.name)
             ):
-                processor.settle_rebuild(
+                if processor.settle_rebuild(
                     peer_id,
                     str(row.get("subscriptionid") or ""),
                     rebuilt=False,
                     lists=[list_attr.name],
-                )
-                marked += 1
+                ):
+                    marked += 1
+                else:
+                    logger.warning(
+                        f"Marking the rebuild of {peer_id}:"
+                        f"{row.get('subscriptionid')} lost every compare-and-swap"
+                    )
         return marked
     except Exception as e:  # folds DbError: the list is deleted; logged
         logger.error(f"Marking the rebuild of {bucket} faulted: {e}")

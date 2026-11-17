@@ -1076,10 +1076,16 @@
      },
      "queue": [
       {
-       "diffs": [],
+       "diffs": [
+        {
+         "data": "{\"notes\": {\"list\": \"notes\", \"operation\": \"append\", \"length\": 1, \"item\": {\"n\": 1}, \"index\": 0}}",
+         "sequence": 1,
+         "timestamp": "<ts:stored>"
+        }
+       ],
        "granularity": "high",
        "peer": "<B>",
-       "sequence": 3,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -1091,7 +1097,7 @@
        "granularity": "high",
        "peerid": "<B>",
        "resource": "",
-       "sequence": 3,
+       "sequence": 2,
        "subscriptionid": "<sub1>",
        "subtarget": "",
        "target": "properties"
@@ -1115,12 +1121,12 @@
      "B": {
       "callback_state": [
        {
-        "last_seq": 3,
+        "last_seq": 2,
         "pending_count": 0,
         "pending_sequences": [],
         "resync_pending": false,
         "subscriptionid": "<sub1>",
-        "version": 3
+        "version": 4
        }
       ],
       "peer_permissions": {
@@ -1198,7 +1204,7 @@
        },
        "scalars": {
         "y": {
-         "value": "{\"v\": 2}"
+         "v": 2
         }
        }
       },
@@ -1208,7 +1214,7 @@
         "granularity": "high",
         "peerid": "<A>",
         "resource": "",
-        "sequence": 3,
+        "sequence": 2,
         "subscriptionid": "<sub1>",
         "subtarget": "",
         "target": "properties"
@@ -1241,79 +1247,20 @@
        },
        "host": "wire_app",
        "method": "GET",
-       "path": "/<A>/subscriptions/<B>/<sub1>/2",
+       "path": "/<A>/properties",
        "query": "",
        "request": null,
        "response": {
-        "data": {
-         "notes": {
-          "length": 0,
-          "list": "notes",
-          "operation": "clear"
-         }
+        "notes": {
+         "_list": true,
+         "count": 1
         },
-        "id": "<A>",
-        "peerid": "<B>",
-        "resource": "",
-        "sequence": 2,
-        "subscriptionid": "<sub1>",
-        "subtarget": "",
-        "target": "properties",
-        "timestamp": "<ts:iso-z>"
+        "y": {
+         "v": 2
+        }
        },
        "status": 200
       },
-      {
-       "actor": "<B>",
-       "data": {
-        "notes": {
-         "length": 0,
-         "list": "notes",
-         "operation": "clear"
-        }
-       },
-       "event": "subscription_data",
-       "peer": "<A>",
-       "sequence": 2,
-       "target": "properties",
-       "type": "diff"
-      },
-      {
-       "auth": "bearer:trust:A-B",
-       "children": [],
-       "headers": {},
-       "host": "wire_app",
-       "method": "PUT",
-       "path": "/<A>/subscriptions/<B>/<sub1>",
-       "query": "",
-       "request": {
-        "sequence": 2
-       },
-       "response": null,
-       "status": 204
-      }
-     ],
-     "headers": {},
-     "host": "wire_app",
-     "method": "POST",
-     "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
-     "query": "",
-     "request": {
-      "granularity": "low",
-      "id": "<A>",
-      "sequence": 2,
-      "subscriptionid": "<sub1>",
-      "subtarget": "",
-      "target": "properties",
-      "timestamp": "<ts:iso-z>",
-      "url": "http://<wire_app>/<A>/subscriptions/<B>/<sub1>/2"
-     },
-     "response": null,
-     "status": 204
-    },
-    {
-     "auth": "bearer:trust:A-B",
-     "children": [
       {
        "auth": "bearer:trust:A-B",
        "children": [],
@@ -1322,68 +1269,36 @@
        },
        "host": "wire_app",
        "method": "GET",
-       "path": "/<A>/subscriptions/<B>/<sub1>/3",
+       "path": "/<A>/properties/notes",
        "query": "",
        "request": null,
-       "response": {
-        "data": {
-         "notes": {
-          "items": [
-           {
-            "n": 1
-           }
-          ],
-          "length": 1,
-          "list": "notes",
-          "operation": "extend"
-         },
-         "y": "{\"v\": 2}"
-        },
-        "id": "<A>",
-        "peerid": "<B>",
-        "resource": "",
-        "sequence": 3,
-        "subscriptionid": "<sub1>",
-        "subtarget": "",
-        "target": "properties",
-        "timestamp": "<ts:iso-z>"
-       },
+       "response": [
+        {
+         "n": 1
+        }
+       ],
        "status": 200
       },
       {
        "actor": "<B>",
        "data": {
         "notes": {
+         "_list": true,
          "items": [
           {
            "n": 1
           }
-         ],
-         "length": 1,
-         "list": "notes",
-         "operation": "extend"
+         ]
         },
-        "y": "{\"v\": 2}"
+        "y": {
+         "v": 2
+        }
        },
        "event": "subscription_data",
        "peer": "<A>",
-       "sequence": 3,
+       "sequence": 2,
        "target": "properties",
-       "type": "diff"
-      },
-      {
-       "auth": "bearer:trust:A-B",
-       "children": [],
-       "headers": {},
-       "host": "wire_app",
-       "method": "PUT",
-       "path": "/<A>/subscriptions/<B>/<sub1>",
-       "query": "",
-       "request": {
-        "sequence": 3
-       },
-       "response": null,
-       "status": 204
+       "type": "resync"
       }
      ],
      "headers": {},
@@ -1392,14 +1307,15 @@
      "path": "/<B>/callbacks/subscriptions/<A>/<sub1>",
      "query": "",
      "request": {
-      "granularity": "low",
+      "granularity": "high",
       "id": "<A>",
-      "sequence": 3,
+      "sequence": 2,
       "subscriptionid": "<sub1>",
       "subtarget": "",
       "target": "properties",
       "timestamp": "<ts:iso-z>",
-      "url": "http://<wire_app>/<A>/subscriptions/<B>/<sub1>/3"
+      "type": "resync",
+      "url": "http://<wire_app>/<A>/properties"
      },
      "response": null,
      "status": 204

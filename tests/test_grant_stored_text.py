@@ -200,6 +200,108 @@ class TestListDiffObjects:
         )
         assert out is not None and json.loads(out) == blob
 
+    def test_a_stored_value_under_a_list_key_is_filtered_beneath_it(
+        self, actor
+    ) -> None:
+        """A subscriber to one property is sent its whole stored value
+        (3.16). A key named ``list:<x>`` in it that is not a list diff is
+        part of that object: an exclusion beneath it holds (it passed
+        whole)."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["*"],
+                    "operations": ["read"],
+                    "excluded_patterns": ["settings/list:notes/private"],
+                }
+            },
+        )
+        blob = {"theme": "x", "list:notes": {"private": 1, "open": 2}}
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "settings"},
+            json.dumps(blob),
+            snapshot=grant,
+        )
+        assert out is not None
+        assert json.loads(out) == {"theme": "x", "list:notes": {"open": 2}}
+
+    @pytest.mark.parametrize(
+        "value",
+        ["hunter2", 1, None, [1, 2], {"a": 1}, DIFF],
+        ids=["text", "number", "null", "array", "object", "list diff"],
+    )
+    @pytest.mark.parametrize("pattern", ["profile/list:secret", "*/list:secret"])
+    def test_a_list_key_the_grant_excludes_by_its_path_is_not_sent(
+        self, actor, value, pattern
+    ) -> None:
+        """Verification 2026-11-16 (Issue 1): the key was filtered beneath
+        itself only, so a subscriber to one property was sent a ``list:<x>``
+        key the grant excludes by name; a direct read is not."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["*"],
+                    "operations": ["read"],
+                    "excluded_patterns": [pattern],
+                }
+            },
+        )
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "profile"},
+            json.dumps({"name": "x", "list:secret": value, "list:open": "v"}),
+            snapshot=grant,
+        )
+        assert out is not None
+        assert json.loads(out) == {"name": "x", "list:open": "v"}
+
+    def test_a_grant_that_names_the_property_keeps_its_list_keys(self, actor) -> None:
+        """Verification re-run 1 (Issue 2): the check at the key's own path
+        asked the allow list, which a grant naming the property and not its
+        children fails for every ``list:`` key, while sibling keys were
+        sent. It asks the exclusions only, as it does for the siblings."""
+        from actingweb.permission_evaluator import GrantSnapshot
+
+        grant = GrantSnapshot(
+            actor_id="a1",
+            peer_id="p1",
+            has_row=True,
+            approved=True,
+            relationship="friend",
+            is_client=False,
+            permissions={
+                "properties": {
+                    "patterns": ["profile", "open", "secret"],
+                    "operations": ["read"],
+                }
+            },
+        )
+        blob = {"name": "x", "list:secret": "hunter2", "list:open": "v"}
+        out = actor.filter_subscription_blob(
+            "p1",
+            {"target": "properties", "subtarget": "profile"},
+            json.dumps(blob),
+            snapshot=grant,
+        )
+        assert out is not None and json.loads(out) == blob
+
     def test_an_excluded_list_is_still_dropped(self, actor) -> None:
         blob = {"list:secret": self.DIFF, "list:notes": self.DIFF}
         out = actor.filter_subscription_blob(
@@ -344,22 +446,14 @@ def test_a_view_withholds_and_refuses_a_value_too_deep(actor: Any) -> None:
 
 def test_text_beyond_the_parser_is_withheld_with_no_exclusion() -> None:
     """Re-run 4 (Issue 7): the rule holds whatever the grant: with no
-    exclusion stated the diff, the full state and the view still withhold
-    text nested beyond the parser, and plain text and JSON pass."""
-    from unittest import mock
-
+    exclusion stated the diff and the view still withhold text nested
+    beyond the parser, and plain text and JSON pass."""
     deep = "[" * 200_000 + "]" * 200_000
     none_excluded = {"patterns": ["*"]}
     assert Actor._diff_part(none_excluded, "p", deep) is _EMPTIED
     assert Actor._diff_part(None, "p", deep) is _EMPTIED
     assert Actor._diff_part(None, "p", "plain") == "plain"
     assert Actor._diff_part(None, "p", '{"a": 1}') == '{"a": 1}'
-    actor = object.__new__(Actor)
-    grant = TestApplicationTargetsAtDelivery._grant(True)
-    with mock.patch.object(Actor, "grant_for", return_value=grant):
-        assert actor._filter_full_state(
-            "p1", "", {"deep": deep, "color": "b"}, set()
-        ) == {"color": "b"}
 
 
 def test_bytes_are_read_as_the_parser_reads_them() -> None:

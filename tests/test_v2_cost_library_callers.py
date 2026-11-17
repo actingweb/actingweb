@@ -203,31 +203,6 @@ class TestTrustSharedPropertiesCost:
         assert shared_by_name["greeting"]["item_count"] == 0
 
 
-class TestFullStateSubscriptionCost:
-    def test_all_properties_fallback_issues_one_partition_query_per_source(
-        self, myself
-    ):
-        # get_properties() and list_all_with_rows() are each their own
-        # whole-partition dump (one for scalars, one -- reused across all
-        # lists -- for list contents); zero further per-list get_range
-        # calls beyond those two.
-        _, calls = _count_get_range(
-            lambda: myself._get_full_state_for_subscription("properties", None)
-        )
-        assert calls == [], f"expected zero get_range calls, got {len(calls)}"
-
-        result = myself._get_full_state_for_subscription("properties", None)
-        assert result["greeting"] == "hi"
-        assert result["notes"] == {
-            "list": "notes",
-            "operation": "extend",
-            "items": ["a", "b", "c"],
-            "length": 3,
-        }
-        assert result["todos"]["items"] == ["x", "y"]
-        assert result["tags"]["items"] == ["p"]
-
-
 class TestBulkItemsEndpointCost:
     def test_k_updates_and_deletes_issue_bounded_get_range_calls(self, myself, config):
         """k=3 updates + 2 deletes against a fresh 10-item list.

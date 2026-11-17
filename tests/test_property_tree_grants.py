@@ -199,65 +199,11 @@ def _grant(rules: dict[str, Any]):
     )
 
 
-def test_the_full_state_fallback_drops_excluded_children_at_their_paths() -> None:
-    """The fallback's state for a subtarget is wrapped one level deeper than
-    a diff (``{subtarget: value}``): filtered where it is built, at the
-    true paths; a list's state is not descended."""
-    import json as _json
-    from unittest import mock
-
-    from actingweb.actor import Actor
-
-    actor = object.__new__(Actor)
-    rules = _rules("settings/private", "notes/items")
-    with mock.patch.object(Actor, "grant_for", return_value=_grant(rules)):
-        state = {"settings": _json.dumps(SETTINGS)}
-        kept = actor._filter_full_state("p1", "settings", state, set())
-        assert _json.loads(kept["settings"]) == {"theme": "x", "deep": SETTINGS["deep"]}
-        whole = {
-            "settings": SETTINGS,
-            "notes": {"list": "notes", "operation": "extend", "items": [1]},
-        }
-        kept = actor._filter_full_state("p1", "", whole, {"notes"})
-        assert kept["settings"] == {"theme": "x", "deep": SETTINGS["deep"]}
-        assert kept["notes"] == whole["notes"]
-    with mock.patch.object(Actor, "grant_for", return_value=None):
-        # No grant to read: left to the pull filter, which sends nothing.
-        assert actor._filter_full_state("p1", "", whole, set()) == whole
-
-
 def _nested(depth: int) -> dict[str, Any]:
     value: dict[str, Any] = {"leaf": 1}
     for _ in range(depth):
         value = {"a": value}
     return value
-
-
-def test_the_full_state_fallback_leaves_out_a_value_too_deep() -> None:
-    """Re-run 2 of the grant-enforcement verification (Issue 2): a value too
-    deep to filter was sent as ``null``, which wipes the subscriber's copy.
-    It is left out; the rest is sent."""
-    import json as _json
-    from unittest import mock
-
-    from actingweb.actor import Actor
-
-    actor = object.__new__(Actor)
-    rules = _rules("settings/private")
-    deep = _nested(150)
-    with mock.patch.object(Actor, "grant_for", return_value=_grant(rules)):
-        kept = actor._filter_full_state(
-            "p1", "", {"deep": deep, "text": _json.dumps(deep), "color": "b"}, set()
-        )
-        assert kept == {"color": "b"}
-        assert actor._filter_full_state("p1", "deep", {"deep": deep}, set()) == {}
-    with mock.patch.object(
-        Actor, "grant_for", return_value=_grant({"patterns": ["*"]})
-    ):
-        # Nothing excluded: nothing walked, sent whole.
-        assert actor._filter_full_state("p1", "", {"deep": deep}, set()) == {
-            "deep": deep
-        }
 
 
 def test_a_diff_with_no_exclusion_passes_whatever_its_depth() -> None:

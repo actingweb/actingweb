@@ -33,7 +33,7 @@
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://wire-provider.example.test/authorize?response_type=code&client_id=wire-google-client&redirect_uri=http%3A%2F%2F<wire_oauth>%2Foauth&scope=openid+email+profile&state=<secret:provider_state>&access_type=offline&prompt=consent"
+      "location": "https://wire-provider.example.test/authorize?response_type=code&client_id=wire-google-client&redirect_uri=http%3A%2F%2F<wire_oauth>%2Foauth%2Fcallback&scope=openid+email+profile&state=<secret:provider_state>&access_type=offline&prompt=consent"
      },
      "host": "wire_oauth",
      "method": "POST",
@@ -78,7 +78,7 @@
      "auth": null,
      "children": [],
      "headers": {
-      "location": "https://wire-provider.example.test/authorize?response_type=code&client_id=wire-google-client&redirect_uri=http%3A%2F%2F<wire_oauth>%2Foauth&scope=openid+email+profile&state=<secret:provider_state>&access_type=offline&prompt=consent"
+      "location": "https://wire-provider.example.test/authorize?response_type=code&client_id=wire-google-client&redirect_uri=http%3A%2F%2F<wire_oauth>%2Foauth%2Fcallback&scope=openid+email+profile&state=<secret:provider_state>&access_type=offline&prompt=consent"
      },
      "host": "wire_oauth",
      "method": "POST",

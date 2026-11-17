@@ -6,6 +6,7 @@
     <a href="{{ actor_www|default('') }}">&larr; Dashboard</a>
   </div>
   <h1>Trust relationships</h1>
+  {% if notice %}<div class="aw-notice" role="status">{{ notice }}</div>{% endif %}
   <p><a class="aw-btn" href="{{ actor_www|default('') }}/trust/new">New trust</a></p>
 
   {% if trusts %}
@@ -36,8 +37,14 @@
               {% if t is mapping and t.get('has_custom_permissions') %}<span class="aw-badge">custom perms</span>{% endif %}
             </td>
             <td>
-              {% if approved %}<span class="aw-badge">approved</span>{% else %}<span class="aw-badge">pending</span>{% endif %}
-              {% if verified %}<span class="aw-badge">verified</span>{% elif not approved %}<span class="aw-badge">unverified</span>{% endif %}
+              {% set status_label = t.get('status_label') if t is mapping else None %}
+              {% if status_label %}
+                {# Both sides of the trust: this actor's approval and the peer's. #}
+                <span class="aw-badge">{{ status_label }}</span>
+              {% else %}
+                {% if approved %}<span class="aw-badge">approved</span>{% else %}<span class="aw-badge">pending</span>{% endif %}
+                {% if verified %}<span class="aw-badge">verified</span>{% elif not approved %}<span class="aw-badge">unverified</span>{% endif %}
+              {% endif %}
             </td>
             <td>
               <div class="aw-actions">
@@ -65,6 +72,14 @@
       </tbody>
     </table>
     </div>
+    <p class="aw-muted">
+      <strong>Active</strong>: both sides approved.
+      <strong>Waiting for peer</strong>: you approved, the peer has not yet approved or verified.
+      <strong>Awaiting your approval</strong>: the peer approved, you have not.
+      <strong>Awaiting both</strong>: neither side has approved.
+      <strong>Unverified</strong>: the request did not verify and cannot be
+      approved; create the trust toward the peer's URL to pair.
+    </p>
   {% else %}
     <p class="aw-muted">No trust relationships yet.</p>
   {% endif %}

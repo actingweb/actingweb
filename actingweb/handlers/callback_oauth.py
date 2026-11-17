@@ -1,15 +1,12 @@
-from actingweb.handlers import base_handler
+"""Removed in 3.16.
 
+``CallbackOauthHandler`` redirected ``?code=...&state=<actor id>`` to a
+per-actor ``/<actor id>/oauth`` path. Neither integration routed it, and
+specification 1.5 no longer defines that path: the OAuth2 callback is served
+at ``/oauth/callback``. Importing this module raises with the migration
+pointer; it is removed at the next major release.
+"""
 
-class CallbackOauthHandler(base_handler.BaseHandler):
-    def get(self):
-        if not self.request.get("code"):
-            self.response.set_status(400, "Bad request. No code.")
-            return
-        code = self.request.get("code")
-        actor_id = self.request.get("state")
-        scope = self.request.get("scope")
-        url = self.config.root + str(actor_id) + "/oauth?code=" + str(code)
-        if scope:
-            url += "&scope=" + scope
-        self.response.set_redirect(url)
+from actingweb.config import CALLBACK_OAUTH_REMOVED
+
+raise ImportError(CALLBACK_OAUTH_REMOVED)

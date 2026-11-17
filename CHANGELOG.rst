@@ -925,6 +925,14 @@ REMOVED
   ``docs/migration/v3.16.rst``, "Callback delivery". **Breaking:** remove the
   import or setting.
 
+- **``CallbackOauthHandler``** (``actingweb.handlers.callback_oauth``). It
+  was exported and documented but routed by neither integration, and
+  specification 1.5 no longer defines the per-actor ``/oauth`` path it
+  redirected to. Importing the module raises ``ImportError`` naming
+  ``docs/migration/v3.16.rst``, "Removed: CallbackOauthHandler".
+  **Breaking:** remove the import; the OAuth2 callback is served at
+  ``/oauth/callback``.
+
 - **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
   sequence number back after a diff could not be stored, which could hand
   the number to a second change. A number whose diff is not stored now stays
@@ -982,8 +990,7 @@ CHANGED
   resync that was refused, timed out or answered other than 2xx is recorded
   and sent on the next resume whenever the write waited for its callbacks
   (before, only with ``with_sync_callbacks()``; any 2xx now counts as
-  delivered, where 200 and 204 did). The full state of the fallback for a
-  peer without resync is not sent when its clear was not delivered.
+  delivered, where 200 and 204 did).
 - **Callback sends no longer set ``Actor.last_response_code``**; trust and
   peer calls still do. **Behavior change:** code that read it after a write.
 
@@ -1033,10 +1040,19 @@ CHANGED
   baseline and answers for itself; neither the subscription data hooks nor
   the legacy ``subscription`` callback hook saw its change. When that
   rebuild settles, both are told the baseline once, with ``"resync"``; a
-  rebuild that does not settle tells neither, and the callback (answered
-  503) is told when it is sent again. **Behavior change:** a data hook can
+  rebuild that does not settle tells neither and answers 503, stays owed,
+  and is told by the rebuild the next callback or poll runs after one
+  minute, to the hooks that path reaches (a poll tells data hooks only). Without ``auto_storage`` the same holds when a hook hears it (a
+  data hook for the target or ``"*"``, or the legacy ``subscription``
+  callback hook). A baseline another subscription's replica covers is not
+  told. A callback whose own change was applied, or is queued, answers
+  204 when a rebuild after it does not settle (that rebuild stays owed),
+  unless the callback state store faults, which answers 503. What a poll
+  does, a gap resync's included, reaches data hooks only; the legacy hook
+  hears the callbacks it processes and the callback path's rebuilds (use
+  ``subscription_data_hook`` to hear every change). **Behavior change:** a data hook can
   be called with ``"resync"`` and the whole baseline in place of the diff
-  that arrived.
+  that arrived, or right after it.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears
   nothing (it cleared the queue); a callback with ``data`` and no integer
   ``sequence`` answers 400 (it was dropped with 204); a granularity other
@@ -1290,12 +1306,105 @@ CHANGED
   synchronous callbacks the request waits for each reading subscriber's
   resync in turn.
 
-- **Behavior change: a peer without resync support receives ``clear`` then
-  ``extend``.** The full-state fallback sent each list as an ``extend``,
-  which a subscriber already holding the list appended to its copy. Each
-  list still carrying its items is now cleared under one sequence number and
-  the full state follows under the next. **Check:** a subscriber that loses
-  the second callback holds an empty list until the next change.
+- **Behavior change: the default OAuth2 ``redirect_uri`` is
+  ``/oauth/callback``.** ``with_oauth()`` and ``Config`` defaulted it to
+  ``<proto><fqdn>/oauth``, which is not the callback on either integration
+  (a request there is answered as an unauthenticated browser's: a redirect
+  to the provider), and a provider configured through ``with_oauth()``
+  without a ``redirect_uri`` sent it: the provider's redirect back, with
+  its ``code``, started the sign-in again instead of finishing it. The
+  default is now the path that handles the callback. **Check:** register ``<proto><fqdn>/oauth/callback`` with
+  the provider where ``/oauth`` was registered. A ``redirect_uri`` passed to
+  ``with_oauth()`` still wins, so an application that passed
+  ``/oauth/callback`` itself sees no change.
+
+- **Behavior change: the web UI's new-trust form answers every outcome with
+  a redirect, and the trust list shows both sides.** ``POST
+  /<actor_id>/www/trust/new`` answered a failure with a bare 400 page (or a
+  500 carrying the exception's text). It now redirects to the form with
+  ``?error=<code>``, and the form shows the library's fixed text for the
+  code: nothing from a request is rendered, the form is not prefilled, and
+  every failure on the peer's side has one message. A submit for a peer
+  this actor already approved a trust with redirects to the list with a
+  notice: with the same relationship it is paired again with a new secret,
+  as before, and the notice says so (it looked like a new trust); with
+  another relationship nothing is changed (it was a bare failure). The
+  stored base URI is matched without regard to host case, a default port
+  or a trailing slash; a URL the library would not accept as a peer's base
+  URI (userinfo, a query, a fragment, a port that is not a number) matches
+  no stored trust. When another actor now answers at the address, the
+  result is a trust with that actor and no "paired again" notice. The trust list's status reads from
+  both sides (``Active``, ``Waiting for peer``, ``Awaiting your approval``,
+  ``Awaiting both``, ``Unverified``); it showed this actor's approval only.
+  The dashboard links to the form. Template variables: ``status_label`` on
+  each trust row and ``notice`` on the list. **Check:** a client that read
+  the 400's text or status.
+
+- **Behavior change: a resume always sends a resync callback.** After
+  ``resume_subscriptions()`` (and for ``Actor.request_resync()``), a
+  subscriber whose cached option tags lacked ``subscriptionresync`` was
+  sent the full subscribed state as ordinary diffs instead. That path
+  doubled a replica's lists, stored scalars as text, kept deleted
+  properties, and raised for a subscription to a single property, losing
+  the resume. It is removed: every subscriber with a callback endpoint is
+  sent a callback of type ``resync`` and fetches the baseline under its own
+  grant, and the resume no longer reads the peer's capabilities. Every
+  version of this library since 3.10 advertises ``subscriptionresync`` and
+  already received a resync whenever its tags were not cached. **Check:**
+  a subscriber on a version before 3.10, or one that is not this library
+  and does not know ``type: "resync"``, no longer receives the state as
+  diffs after a resume: it re-reads the subscribed state on its own
+  schedule (specification 1.5 says so). ``PeerCapabilities
+  .supports_resync_callbacks()`` stays;
+  ``supports_resync_callbacks_cached()`` and
+  ``actingweb.property_list.fit_full_state`` are removed.
+
+- **Behavior change: ``notify_subscribers(resource=...)`` sends the whole
+  stored value above the resource.** ``actor.subscriptions
+  .notify_subscribers("properties", data, subtarget=s, resource=r)`` sent a
+  subscriber at target or subtarget level ``{r: data}``, which a receiver
+  applies as the whole value of ``s``: its replica lost the other keys. It
+  is now sent the value of ``s`` as stored when the call is made, less what
+  its grant excludes (the REST handlers already did this). The store is
+  read only when such a subscriber exists; a subscriber at resource level
+  is sent ``data`` as before. **Check:** write the property before
+  notifying; an application that relied on the partial shape, or that
+  passed data its store does not hold, sees the stored value instead. For
+  a target other than ``properties`` nothing changes: pass the subtarget's
+  whole value without ``resource``.
+
+- **Behavior change: a rebuild tells the data hooks its baseline,
+  wherever the library runs it.** A subscriber rebuilds from a baseline when a
+  rebuild is owed (a resync whose fetch failed, a list diff the replica
+  could not apply, a rebuild that did not settle), a resync marker is
+  polled, or a poll is behind the publisher with nothing to fetch (as after
+  a gap resync); a poll whose diffs were all applied already refreshes the
+  replica from the baseline (with ``auto_storage``) and tells it the same
+  way. The data hooks
+  heard nothing when a poll rebuilt or when a callback's own list diff
+  caused the rebuild; they are now called once with the baseline, the
+  sequence recorded and ``"resync"`` whenever the rebuild settled, also
+  right after the list diff they were told: the diffs after it were never
+  run, and the rebuild clears them on the publisher (the poll result's
+  ``baseline``, ``target`` and ``subtarget`` carry the same). The legacy
+  ``subscription`` callback hook hears it on the callback path only. Not
+  told: a quiet poll (nothing to fetch and the recorded sequence level
+  with the publisher's), a baseline another subscription's replica covers
+  (on every path), a baseline partly stored, and a rebuild that did not
+  settle (it stays owed; one that failed is attempted again after a
+  minute, and a poll inside that minute fails with code 429). A rebuild is
+  owed or run only when it has work: a replica, or a hook that hears it (a
+  data hook for the target or ``"*"``; on the callback path the legacy
+  ``subscription`` hook, which a ``"*"`` callback hook counts as); so a
+  subscriber without ``auto_storage`` now rebuilds, telling only, when
+  such a hook is registered, and a poll leaves a rebuild only the legacy
+  hook would hear for the next callback. ``sync_subscription()`` and
+  ``sync_peer()`` without a configuration use the application's; they
+  used the defaults, which keep a replica. **Check:** a data hook can now
+  be called with a whole baseline, sometimes right after a diff it covers;
+  make it safe to receive the same state it has seen. Code that relied on
+  ``sync_peer()`` keeping a replica without a configuration must configure
+  ``auto_storage`` or pass one.
 
 - **Behavior change: the receiver refuses some list names and ``list:``
   scalars.** A list a diff would create whose name has a control
@@ -1303,8 +1412,8 @@ CHANGED
   refused (logged with ``%r``); a stored list of any name can still be
   changed and deleted. A scalar key starting ``list:`` is refused.
 
-- **Behavior change: a list diff is filtered as a unit.** A list's diff (and
-  its full state) passes whole when the subscriber may read the list's name,
+- **Behavior change: a list diff is filtered as a unit.** A list's diff
+  passes whole when the subscriber may read the list's name,
   or not at all; an exclusion never removes ``operation`` or a key inside an
   item. A list is recognised by what its name is, so a scalar shaped like a
   list diff is filtered as any object.
@@ -2095,12 +2204,11 @@ CHANGED
   is sent as a reference.** A ``SubscriptionDiff`` row has the same row cap
   as a list item, and an ``update`` diff carries two values, so a diff over
   ``list_item_span_threshold`` (390,000 bytes on DynamoDB; off on
-  PostgreSQL) used to be lost or fail the full-state fallback. Such a diff
+  PostgreSQL) used to be lost. Such a diff
   now has its value fields (``item``, ``old_item``, ``value``, ``items``)
   removed and top-level ``"spanned": true`` and ``"bytes"`` added; this
   covers a spanned item, a large ``update``, an ``extend`` of many items,
-  the REST handlers' single-item diffs and the full-state fallback for a
-  peer without resync. The library's receiver does not apply a reference: it
+  and the REST handlers' single-item diffs. The library's receiver does not apply a reference: it
   logs a WARNING and answers ``{"success": false, "spanned": true}``; the
   subscriber re-reads the list. **Behavior change:** a pre-3.16 subscriber
   answers ``unknown operation`` to a reference and stores nothing; a
@@ -2709,6 +2817,42 @@ ADDED
 FIXED
 ~~~~~
 
+- **A callback that arrived while the previous one was being processed
+  stayed queued until later traffic.** A subscriber that received callback
+  N+1 while N was still being handled queued it, and nothing took it from
+  the queue: it was applied only when a later callback arrived after
+  ``gap_timeout_seconds`` (as a resync) or on the next poll, so a quiet
+  subscription could hold a stale replica indefinitely. Two writes at the
+  same moment were enough. Now the delivery that recorded N takes what was
+  queued behind it, one callback at a time (always the first; then at most
+  20 in all, and none once 5 seconds have passed since it began; the rest
+  is taken by the next delivery), and a delivery that queued its callback
+  looks once more after its write. A callback left at the head of the queue
+  is not a gap: it no longer triggers the gap resync, which cleared the
+  queue. A callback taken from the queue is run by the request that
+  takes it: its handler error is logged, and a database fault leaves it
+  queued, without changing that request's own answer. The cost is one more
+  read of the queue per callback received in order.
+
+- **A subscriber to one property could be sent a part its grant excludes
+  beneath a key named ``list:<x>``.** A subscription to a single property
+  is sent the property's whole stored value when something inside it
+  changes. A key in that value whose name starts with ``list:`` passed
+  whole once the bare name could be read, also when the grant excluded a
+  path beneath it (``settings/list:notes/private``); a subscription to the
+  whole target and a direct read filtered it. Such a key is now sent only
+  when the grant lets the subscriber read it at its own path too, and
+  passes whole only when its value is a list diff; anything else loses what
+  the grant excludes beneath it, as every other key does.
+
+- **A queued callback could be lost when two deliveries wrote the queue at
+  the same moment** (one adding, one removing what it had processed: the
+  queue was read, changed and written back). The queue is now written by
+  compare-and-swap, a sequence is queued once, and a queue write that
+  cannot be made answers 503 instead of 204, so the publisher keeps the
+  diff. A callback carrying a number that is not finite (``NaN``) is
+  refused (400) instead of queued.
+
 - **A publisher's property read fault wiped its subscribers' replicas.**
   ``GET /properties`` answered a read error other than a database fault
   with 200 and ``{}``, which a subscriber takes as the publisher's whole
@@ -2763,8 +2907,9 @@ FIXED
 
 - **``pop`` with a negative index was not applied by the replica.**
 
-- **A full state doubled a replica's list.** See the ``clear`` then
-  ``extend`` entry under CHANGED.
+- **A full state sent in place of a resync doubled a replica's list.** The
+  path is removed; see "a resume always sends a resync callback" under
+  CHANGED.
 
 - **List edits over REST reached a replica as scalars,** and a diff for a
   subtarget-level subscription was stored as top-level scalars. See the

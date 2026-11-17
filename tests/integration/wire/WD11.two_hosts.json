@@ -853,6 +853,19 @@
      },
      "response": null,
      "status": 204
+    },
+    {
+     "actor": "<B>",
+     "data": {
+      "x": {
+       "v": 1
+      }
+     },
+     "event": "subscription_data",
+     "peer": "<A>",
+     "sequence": 1,
+     "target": "properties",
+     "type": "resync"
     }
    ]
   }

@@ -36,9 +36,9 @@ from actingweb.permission_evaluator import (
     drop_excluded,
     exclusion_patterns,
     get_permission_evaluator,
+    path_excluded,
     withheld,
 )
-from actingweb.property_list import ListCorruptionError
 from actingweb.secret_compare import secret_digest_equals, secret_equals
 
 from . import callback_sender
@@ -3962,7 +3962,12 @@ class Actor:
             # landed (3.16).
             self.subs_list = None
 
-        if result and covered and peerid:
+        processing = getattr(self.config, "_subscription_config", None)
+        # Only a replica has anything to rebuild: without one, the covered
+        # subscriptions' diffs were applied and told all along. With no
+        # processing configuration a poll keeps a replica (the defaults).
+        keeps_replica = processing is None or bool(processing.auto_storage)
+        if result and covered and peerid and keeps_replica:
             self._owe_covered_rebuilds(peerid, covered)
 
         # Clean up RemotePeerStore AFTER successful deletion to avoid data loss
@@ -4000,12 +4005,17 @@ class Actor:
         processor = CallbackProcessor(actor=ActorInterface(self))  # type: ignore[arg-type]
         for sub in covered:
             try:
-                processor.settle_rebuild(
+                if not processor.settle_rebuild(
                     peerid,
                     str(sub.get("subscriptionid") or ""),
                     rebuilt=False,
                     lists=[str(sub.get("subtarget") or "")],
-                )
+                ):
+                    logger.warning(
+                        f"Marking the replica of {peerid}:"
+                        f"{sub.get('subscriptionid')} for a rebuild lost every "
+                        "compare-and-swap; it may not be owed"
+                    )
             except Exception as e:  # folds DbError: best effort, delete committed
                 logger.warning(
                     f"Could not mark the replica of {peerid}:"
@@ -4355,7 +4365,7 @@ class Actor:
                     )
                 )
             ):
-                # A list's diff (or its full state) passes whole once the
+                # A list's diff passes whole once the
                 # list may be read (3.16): decided by what the name is, its
                 # keys are not property paths an exclusion could name.
                 return as_text
@@ -4372,26 +4382,41 @@ class Actor:
             if resource:
                 kept_value = self._diff_part(rules, path, parsed)
             else:
-                # A resource-level write arrives as ``{resource: value}``:
-                # the value is the property's, kept whole except the parts
-                # the grant excludes, at their paths under the subtarget. A
-                # ``list:<name>`` key is a list, decided by its bare name.
+                # A resource-level write arrives as the property's value
+                # (whole since 3.16, or ``{resource: value}``): kept whole
+                # except the parts the grant excludes, at their paths under
+                # the subtarget. A ``list:<name>`` key is a list, decided by
+                # its bare name (fail closed: a grant under which the bare
+                # name cannot be read keeps the key back), and a key of this
+                # object, which an exclusion at its own path keeps back as
+                # it would any sibling key (exclusions only: the subtarget
+                # itself was allowed above, and siblings are not asked the
+                # allow list either).
                 lists = {
                     k: v
                     for k, v in parsed.items()
-                    if k.startswith("list:") and self._may_read(snapshot, k[5:])
+                    if k.startswith("list:")
+                    and self._may_read(snapshot, k[5:])
+                    and not path_excluded(rules, f"{subtarget}/{k}")
                 }
                 kept_value = self._diff_part(
                     rules,
                     subtarget,
                     {k: v for k, v in parsed.items() if not k.startswith("list:")},
                 )
-                if lists:
+                for key, value in lists.items():
                     # A list's diff object passes whole once its name may be
-                    # read (3.16): its keys are not property paths.
+                    # read (3.16): its keys are not property paths. Anything
+                    # else under such a key is part of the stored object (the
+                    # whole value is sent since 3.16) and loses what the
+                    # grant excludes beneath it, as any other key does.
+                    if not (isinstance(value, dict) and _list_diff_shaped(value)):
+                        value = self._diff_part(rules, f"{subtarget}/{key}", value)
+                        if value is _EMPTIED:
+                            continue
                     kept_value = {
                         **({} if kept_value is _EMPTIED else kept_value),
-                        **lists,
+                        key: value,
                     }
         except DbError:
             raise
@@ -4505,60 +4530,6 @@ class Actor:
             if part is not _EMPTIED:
                 kept[key] = part
         return kept
-
-    def _filter_full_state(
-        self,
-        peerid: str,
-        subtarget: str,
-        full_state: dict[str, Any],
-        list_keys: set[str],
-    ) -> dict[str, Any]:
-        """A full-state diff (``_get_full_state_for_subscription``) without
-        the parts the peer's grant excludes, at their true paths (3.16).
-
-        For a subtarget the state is wrapped one level deeper than a diff
-        (``{subtarget: value}``), so the pull filter, which still decides
-        whether the peer may read it at all, would look for the children at
-        the wrong paths. A list's state is not descended (a list's unit is
-        its name). With no grant to read, the state is left to the pull
-        filter, which then sends nothing."""
-        snapshot = self.grant_for(peerid)
-        if snapshot is None:
-            return full_state
-        rules = snapshot.rules(PermissionType.PROPERTIES)
-
-        def kept(path: str, value: Any) -> Any:
-            """The value filtered; ``_EMPTIED`` when it is too deep to
-            filter: the key is left out (a ``null`` would wipe the
-            subscriber's copy)."""
-            if path in list_keys:
-                return value
-            parsed = as_json_object(value)
-            if parsed is TOO_DEEP:
-                return _EMPTIED  # never to a peer, whatever its grant (3.16)
-            if not exclusion_patterns(rules):
-                return value
-            if parsed is not None:
-                filtered = drop_excluded(rules, path, parsed)
-                if withheld(parsed, filtered):
-                    return _EMPTIED
-                return value if filtered == parsed else json.dumps(filtered)
-            filtered = drop_excluded(rules, path, value)
-            return _EMPTIED if withheld(value, filtered) else filtered
-
-        out: dict[str, Any] = {}
-        for k, v in full_state.items():
-            if subtarget and k != subtarget:
-                out[k] = v
-                continue
-            part = kept(subtarget or k, v)
-            if part is not _EMPTIED:
-                out[k] = part
-        return out
-
-    # =========================================================================
-    # Subscription Suspension Management
-    # =========================================================================
 
     def is_subscription_suspended(
         self, target: str, subtarget: str | None = None
@@ -4742,8 +4713,8 @@ class Actor:
         call) is recorded, and the next ``request_resync()`` or
         ``resume_subscriptions()`` for the same target re-sends to it; an
         asynchronous send counts as sent once scheduled, so nothing is
-        recorded for it. A peer without resync support receives the full
-        state as a ``clear`` and then an ``extend`` for each list.
+        recorded for it. Every subscriber is sent a resync, whatever
+        option tags it advertises (3.16).
 
         Returns:
             The number of resync callbacks sent
@@ -5000,8 +4971,8 @@ class Actor:
     ) -> bool:
         """Send a resync callback to a single subscription.
 
-        Checks peer capability before sending resync. If peer doesn't support
-        the subscriptionresync option, falls back to low-granularity callback.
+        Every subscriber with a callback endpoint is sent a callback of type
+        ``resync``, whatever option tags it advertises (3.16).
 
         Respects the sync_subscription_callbacks configuration to determine
         whether to send callbacks synchronously (blocking) or asynchronously
@@ -5099,55 +5070,6 @@ class Actor:
             )
             return False
 
-        # Check if peer supports resync callbacks (use cached data only)
-        from .interface.actor_interface import ActorInterface
-        from .peer_capabilities import PeerCapabilities
-
-        actor_interface = ActorInterface(self)
-        caps = PeerCapabilities(actor_interface, peer_id)
-
-        # Use cached capabilities without blocking on network fetch
-        # If cache is expired or not available, assume support (optimistic)
-        supports_resync_cached = caps.supports_resync_callbacks_cached()
-        if supports_resync_cached is None:
-            # Cache expired or not available - assume support to avoid blocking
-            # This is optimistic but safe: if peer doesn't support resync,
-            # the receiver will process it as a regular low-granularity callback
-            supports_resync = True
-            logger.debug(
-                f"Capabilities not cached for peer {peer_id}, "
-                f"assuming resync support (optimistic)"
-            )
-
-            # Schedule background refresh to update cache for next time
-            # This doesn't block the current operation
-            try:
-                import asyncio
-
-                async def _refresh_capabilities():
-                    try:
-                        await caps.refresh_async()
-                        logger.debug(
-                            f"Background refresh of capabilities for {peer_id}"
-                        )
-                    except Exception as e:  # folds DbError: background capability-cache refresh, best-effort
-                        logger.debug(
-                            f"Background capability refresh failed for {peer_id}: {e}"
-                        )
-
-                loop = asyncio.get_running_loop()
-                loop.create_task(_refresh_capabilities())
-            except RuntimeError:
-                # No event loop - skip background refresh
-                # Next operation will still use optimistic approach
-                pass
-        else:
-            supports_resync = supports_resync_cached
-            logger.debug(
-                f"Using cached capability for peer {peer_id}: "
-                f"resync_supported={supports_resync}"
-            )
-
         # Increment sequence number
         new_seq = self._increment_subscription_sequence(peer_id, sub_id)
         if not new_seq:
@@ -5162,102 +5084,23 @@ class Actor:
             return False
         resource_url = _resync_url(self.config, self.id, target, sub_subtarget)
 
-        # Build callback payload - use resync type only if peer supports it
-        clear_payload: dict[str, Any] | None = None
-        if supports_resync:
-            # Resync callback per protocol spec v1.4
-            payload = {
-                "id": self.id,
-                "subscriptionid": sub_id,
-                "target": target,
-                "subtarget": sub_subtarget,
-                "sequence": new_seq,
-                "timestamp": wire_timestamp(datetime.now(UTC)),
-                "granularity": subscription.get("granularity", "high"),
-                "type": "resync",
-                "url": resource_url,
-            }
-            logger.debug(f"Sending resync callback to peer {peer_id} (supports resync)")
-        else:
-            # Fallback: create a full-state diff and send low-granularity callback
-            # Get the full current state
-            list_keys: set[str] = set()
-            full_state = self._get_full_state_for_subscription(
-                target, sub_subtarget, list_keys
-            )
-            # A list's full state is an "extend" diff nested under the list
-            # name. Over the span threshold, list diffs become references
-            # (the subscriber re-reads), per list and then largest first
-            # until the whole blob fits the diff row, so the store does not
-            # fail on the row cap.
-            from .property_list import fit_full_state
-
-            full_state = self._filter_full_state(
-                peer_id, sub_subtarget or "", full_state, list_keys
-            )
-            full_state = fit_full_state(full_state, self.config, list_keys=list_keys)
-
-            # 3.16: a peer that already holds a list would append the
-            # extend to its copy. Every list still carrying its items is
-            # cleared first, under its own sequence number, and the full
-            # state follows under the next; two callbacks, in order. A list
-            # that became a reference is re-read by the receiver: no clear.
-            clears = {
-                name: {"list": name, "operation": "clear", "length": 0}
-                for name in sorted(list_keys)
-                if isinstance(full_state.get(name), dict)
-                and "items" in full_state[name]
-            }
-            # Keyed by name at every level: the fallback serves receivers
-            # without resync support, mostly pre-3.16 ones, which apply a
-            # bare value at subtarget level as top-level keys. A 3.16
-            # receiver unwraps a keyed list state; a keyed scalar it stores
-            # as given until the next diff (the shape is ambiguous there).
-            if clears:
-                clear_url = self._store_subscription_diff(
-                    peer_id, sub_id, new_seq, clears
-                )
-                if not clear_url:
-                    return False
-                clear_payload = {
-                    "id": self.id,
-                    "subscriptionid": sub_id,
-                    "target": target,
-                    "subtarget": sub_subtarget,
-                    "sequence": new_seq,
-                    "timestamp": wire_timestamp(datetime.now(UTC)),
-                    "granularity": "low",
-                    "url": clear_url,
-                }
-                new_seq = self._increment_subscription_sequence(peer_id, sub_id)
-                if not new_seq:
-                    logger.warning(
-                        f"Subscription {sub_id} for {peer_id} is gone; no resync sent"
-                    )
-                    return False
-
-            # Store as a subscription diff
-            diff_url = self._store_subscription_diff(
-                peer_id, sub_id, new_seq, full_state
-            )
-            if not diff_url:
-                return False
-
-            # Send low-granularity callback with URL to subscription diff
-            payload = {
-                "id": self.id,
-                "subscriptionid": sub_id,
-                "target": target,
-                "subtarget": sub_subtarget,
-                "sequence": new_seq,
-                "timestamp": wire_timestamp(datetime.now(UTC)),
-                "granularity": "low",
-                "url": diff_url,
-            }
-            logger.info(
-                f"Peer {peer_id} does not support resync callbacks, "
-                f"creating full-state diff for low-granularity callback"
-            )
+        # Always a resync callback (3.16): the subscriber fetches the
+        # baseline under its own grant. No capability is read: every library
+        # since 3.10 advertises ``subscriptionresync``, and a subscriber that
+        # does not know the type re-reads on its own schedule (specification
+        # 1.5). The full state as ordinary diffs, which a peer cached without
+        # the tag was sent before, is gone.
+        payload = {
+            "id": self.id,
+            "subscriptionid": sub_id,
+            "target": target,
+            "subtarget": sub_subtarget,
+            "sequence": new_seq,
+            "timestamp": wire_timestamp(datetime.now(UTC)),
+            "granularity": subscription.get("granularity", "high"),
+            "type": "resync",
+            "url": resource_url,
+        }
 
         # Get trust secret for authentication (already fetched above)
         secret = trust_data.get("secret", "")
@@ -5276,10 +5119,8 @@ class Actor:
                 timeout=callback_sender.RESYNC_TIMEOUT,
             )
 
-        # The clear (when there is one) and then the state, in order, as one
-        # unit of the sender (3.16).
         unit = callback_sender.Unit(
-            sends=[prepared(b) for b in (clear_payload, payload) if b is not None],
+            sends=[prepared(payload)],
             own_host=callback_sender.is_own_host(
                 trust_data.get("baseuri", ""), self.config.root if self.config else ""
             ),
@@ -5293,197 +5134,6 @@ class Actor:
             wait=bool(getattr(self.config, "sync_subscription_callbacks", False)),
         )
         return bool(unit.delivered) if waited else True  # scheduled on the loop
-
-    def _get_full_state_for_subscription(
-        self,
-        target: str,
-        subtarget: str | None,
-        list_keys: set[str] | None = None,
-    ) -> dict[str, Any]:
-        """Get the full current state for a subscription target.
-
-        Args:
-            target: Subscription target (e.g., "properties")
-            subtarget: Optional subtarget (e.g., list name for property lists)
-            list_keys: When given, the keys of the result that are list diffs
-                are added to it, so a caller can tell a list from a scalar
-                property of the same shape (``fit_full_state``).
-
-        Returns:
-            Dict containing the full state
-        """
-        if target == "properties":
-            if subtarget:
-                # Specific property list or property
-                if hasattr(self, "property_lists") and self.property_lists:
-                    if self.property_lists.exists(subtarget):
-                        # It's a list - return all items
-                        list_attr = getattr(self.property_lists, subtarget)
-                        if list_keys is not None:
-                            list_keys.add(subtarget)
-                        reference, pairs = self._list_state_reference(
-                            subtarget, list_attr
-                        )
-                        if reference is not None:
-                            return {subtarget: reference}
-                        try:
-                            if pairs is not None:
-                                # The heads are in hand: resolve from them,
-                                # one range read in all.
-                                items = self._resolve_list_heads(list_attr, pairs)
-                            else:
-                                items = list(list_attr)
-                        except ListCorruptionError as e:
-                            logger.error(
-                                f"List '{subtarget}' is corrupted, cannot build "
-                                f"full-state resync for it: {e}"
-                            )
-                            return {}
-                        logger.debug(
-                            f"Getting full state for list '{subtarget}': {len(items)} items"
-                        )
-                        # Return as list operation format for diff
-                        return {
-                            subtarget: {
-                                "list": subtarget,
-                                "operation": "extend",
-                                "items": items,
-                                "length": len(items),
-                            }
-                        }
-
-                # Try as scalar property
-                prop_data = self.get_property(subtarget)
-                if prop_data is not None:
-                    logger.debug(f"Getting full state for property '{subtarget}'")
-                    return {subtarget: prop_data}
-                logger.warning(f"Subtarget '{subtarget}' not found as list or property")
-                return {}
-            else:
-                # All properties - get both scalars and lists.
-                # list_all_with_rows() pays for one whole-partition dump
-                # and returns it alongside the names, so every list's
-                # contents below are served from that dump
-                # (to_list_from_rows()) instead of a second whole-list
-                # Query per list -- this is the fallback path for peers
-                # that don't support incremental resync, so it is lower
-                # frequency than the web UI's equivalent fix but still one
-                # headless consumers actually reach.
-                result = {}
-                # Get scalar properties
-                all_props = self.get_properties()
-                if all_props:
-                    result.update(all_props)
-                # Get property lists
-                if hasattr(self, "property_lists") and self.property_lists:
-                    list_names, list_rows = self.property_lists.list_all_with_rows()
-                    for list_name in list_names:
-                        list_attr = getattr(self.property_lists, list_name)
-                        list_attr.prime_from_rows(list_rows)
-                        if list_keys is not None:
-                            list_keys.add(list_name)
-                        reference, _ = self._list_state_reference(
-                            list_name, list_attr, list_rows
-                        )
-                        if reference is not None:
-                            result[list_name] = reference
-                            continue
-                        try:
-                            items = list_attr.to_list_from_rows(list_rows)
-                        except ListCorruptionError as e:
-                            logger.error(
-                                f"List '{list_name}' is corrupted, skipping it "
-                                f"in full-state resync (other lists still "
-                                f"included): {e}"
-                            )
-                            continue
-                        result[list_name] = {
-                            "list": list_name,
-                            "operation": "extend",
-                            "items": items,
-                            "length": len(items),
-                        }
-                logger.debug(
-                    f"Getting full state for all properties: {len(result)} keys"
-                )
-                return result
-        return {}
-
-    @staticmethod
-    def _resolve_list_heads(list_attr: Any, pairs: list[tuple[Any, Any]]) -> list[Any]:
-        """The items for heads read with ``resolve=False``: plain items as
-        read, spanned ones through ``item_at``. An item deleted since the
-        heads were read is dropped (the delete won, as in ``to_list()``); a
-        broken one raises ``ListCorruptionError`` as before."""
-        from .property_list import UNRESOLVED
-        from .property_list import ListCorruptionError as _Corrupt
-
-        items: list[Any] = []
-        for handle, item in pairs:
-            if item is not UNRESOLVED:
-                items.append(item)
-                continue
-            try:
-                items.append(list_attr.item_at(handle)[1])
-            except _Corrupt:
-                raise
-            except IndexError:
-                continue
-        return items
-
-    def _list_state_reference(
-        self, list_name: str, list_attr: Any, rows: dict[str, Any] | None = None
-    ) -> tuple[dict[str, Any] | None, list[tuple[Any, Any]] | None]:
-        """``(reference, pairs)`` for a list's full state.
-
-        ``reference`` is the full-state reference for a list whose items
-        together exceed the span threshold, sized from the heads alone so no
-        spanned body is read only to be dropped; ``None`` when the list fits
-        (or there is no threshold, or the list is v1). ``pairs`` are the
-        heads this read (``items_with_handles(resolve=False)``, for a
-        single list without ``rows``), so the caller resolves the items
-        from them instead of reading the list again; ``None`` otherwise.
-        """
-        from .property_list import UNRESOLVED
-        from .property_list import ListCorruptionError as _Corrupt
-        from .property_list_span import encoded_size
-
-        threshold = getattr(self.config, "list_item_span_threshold", None)
-        if not isinstance(threshold, int) or isinstance(threshold, bool):
-            return None, None
-        core = getattr(list_attr, "_list_prop", list_attr)
-        pairs: list[tuple[Any, Any]] | None = None
-        try:
-            if core.storage_format() != 2:
-                return None, None  # a v1 list never spans: read it as before
-            if rows is not None:
-                sizes = list_attr.sizes_from_rows(rows)
-            else:
-                heads: list[tuple[Any, Any]] = list_attr.items_with_handles(
-                    resolve=False
-                )
-                pairs = heads
-                sizes = [
-                    (
-                        handle.bytes
-                        if handle.bytes is not None
-                        else encoded_size(handle.raw_value)
-                    )
-                    if item is UNRESOLVED
-                    else encoded_size(json.dumps(item))
-                    for handle, item in heads
-                ]
-        except (ValueError, _Corrupt):
-            return None, None  # v1, or a malformed head: read as before
-        total = sum(sizes)
-        if total + 2 * len(sizes) + 64 <= threshold:
-            return None, pairs
-        return {
-            "list": list_name,
-            "operation": "extend",
-            "spanned": True,
-            "bytes": total,
-        }, None
 
     def _store_subscription_diff(
         self, peer_id: str, subscription_id: str, sequence: int, data: dict[str, Any]
@@ -5658,7 +5308,7 @@ class Actor:
         blob=None,
         *,
         previous: Callable[[], Any] | None = None,
-        whole: str | None = None,
+        whole: str | Callable[[], str | None] | None = None,
     ):
         """Registers a blob diff against all subscriptions with the correct target, subtarget, and resource.
 
@@ -5677,7 +5327,9 @@ class Actor:
         (``{subtarget: whole}`` at target level), since a receiver applies a
         target- or subtarget-level value whole; without it such a subscriber
         got only ``{resource: blob}`` and its replica lost the subtarget's
-        other keys.
+        other keys. A callable is called once, and only when such a
+        subscriber matches; it may answer None (nothing stored: the
+        subscriber is sent ``{resource: blob}``).
 
         Note: Skips registration if the target/subtarget is currently suspended.
         Use suspend_subscriptions() and resume_subscriptions() to manage suspension.
@@ -5809,6 +5461,8 @@ class Actor:
                         # If the subscription is for a sub-target, send [resource] = blob
                         # If the subscription is for a target, send [subtarget][resource] = blob
                         upblob: Any = {}
+                        if callable(whole):
+                            whole = whole()
                         if whole is not None:
                             finblob = (
                                 whole

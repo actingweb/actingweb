@@ -3,7 +3,6 @@ __all__ = [
     "root",  # pyright: ignore[reportUnsupportedDunderAll]
     "bot",  # pyright: ignore[reportUnsupportedDunderAll]
     "callbacks",  # pyright: ignore[reportUnsupportedDunderAll]
-    "callback_oauth",  # pyright: ignore[reportUnsupportedDunderAll]
     "devtest",  # pyright: ignore[reportUnsupportedDunderAll]
     "meta",  # pyright: ignore[reportUnsupportedDunderAll]
     "oauth",  # pyright: ignore[reportUnsupportedDunderAll]

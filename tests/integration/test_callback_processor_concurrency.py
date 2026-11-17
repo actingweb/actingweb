@@ -1,18 +1,23 @@
 """Two concurrent deliveries of one in-order callback run the handler once
-(3.16, owner-decided plan D13), against the real store on either backend.
+(3.16, owner-decided plan D13), against the real store of the backend the
+run is configured for (``DATABASE_BACKEND``; DynamoDB by default).
 
 Each delivery runs in its own thread with its own event loop. A barrier holds
 both after they read the state row and the sequence, so both see the same
 version and the same next sequence before either writes; one claim wins, the
 other is retried, reads the live claim and answers IN_PROGRESS (which the
 callback handler turns into a 503, so the publisher keeps the diff).
+
+The winner's handler does not return until the other delivery has its answer
+(an event, not a sleep), so that answer is always given while the claim is
+live: the test has one outcome, not two safe ones.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
-import time
 import uuid
 from typing import Any
 
@@ -30,9 +35,15 @@ from tests._adoption_helpers import make_config
 
 pytestmark = pytest.mark.xdist_group(name="callback_processor_cas")
 
+DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
+# Far under CallbackProcessor.CLAIM_LEASE_SECONDS: the claim is live for the
+# whole wait.
+ANSWER_WAIT_SECONDS = 20.0
+
 
 def _subscriber() -> tuple[ActorInterface, str, str]:
-    config = make_config()
+    config = make_config(database=DATABASE_BACKEND)
+    assert config.database == DATABASE_BACKEND
     actor = Actor(config=config)
     assert actor.create(
         url="https://test.example.com/",
@@ -47,9 +58,12 @@ def _subscriber() -> tuple[ActorInterface, str, str]:
 
 
 def test_two_concurrent_deliveries_run_the_handler_once() -> None:
+    assert ANSWER_WAIT_SECONDS < CallbackProcessor.CLAIM_LEASE_SECONDS / 2
     interface, peer_id, sub_id = _subscriber()
     barrier = threading.Barrier(2, timeout=10)
+    answered = threading.Event()
     runs: list[int] = []
+    waits: list[bool] = []
     lock = threading.Lock()
     results: list[ProcessResult] = []
     errors: list[BaseException] = []
@@ -69,9 +83,12 @@ def test_two_concurrent_deliveries_run_the_handler_once() -> None:
         processor._get_last_seq = last_seq  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
 
         async def handler(cb: ProcessedCallback) -> None:
+            # Recorded, not asserted: the processor logs and swallows an
+            # exception a handler raises. The test thread asserts.
+            waited = answered.wait(timeout=ANSWER_WAIT_SECONDS)
             with lock:
                 runs.append(cb.sequence)
-            time.sleep(0.2)  # the loser retries while this runs
+                waits.append(waited)
 
         try:
             results.append(
@@ -87,14 +104,17 @@ def test_two_concurrent_deliveries_run_the_handler_once() -> None:
             )
         except BaseException as e:  # noqa: BLE001 - re-raised in the test thread
             errors.append(e)
+        finally:
+            answered.set()
 
     threads = [threading.Thread(target=deliver) for _ in range(2)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=30)
+        t.join(timeout=60)
     assert not errors, errors
     assert runs == [1]
+    assert waits == [True], "the other delivery had no answer while the claim was live"
     assert sorted(r.value for r in results) == sorted(
         [ProcessResult.PROCESSED.value, ProcessResult.IN_PROGRESS.value]
     )

@@ -20,6 +20,87 @@ from .properties import list_length_hint, register_list_diff
 
 logger = logging.getLogger(__name__)
 
+# What the trust pages say after a redirect. The redirect carries a code;
+# the page shows the text for a code it knows and nothing for any other, so
+# nothing from a request is ever rendered (a link from another site cannot
+# put text on the page or prefill the form).
+TRUST_FORM_MESSAGES = {
+    "peer_url_required": "Enter the peer's URL.",
+    "relationship_too_long": "The relationship name must be 100 characters or less.",
+    "trust_type_required": "Choose a trust type.",
+    # One text for every peer-side cause (unreachable, not an actor,
+    # refused): separate ones would let the form be used to probe hosts.
+    "create_failed": (
+        "The trust could not be created. Check that the URL is the peer "
+        "actor's own address and that the peer can be reached, then try again."
+    ),
+    "server_error": (
+        "Something went wrong on this server and the trust was not created. "
+        "Try again; if it keeps happening, the server's log has the cause."
+    ),
+}
+TRUST_LIST_NOTICES = {
+    "trust_repaired": (
+        "A trust with that peer already existed. It was paired again with a "
+        "new secret; nothing else was changed."
+    ),
+    "trust_exists": (
+        "A trust with that peer already exists with another relationship; "
+        "nothing was changed. Delete it first to pair with a new one."
+    ),
+}
+
+
+def _same_peer_url(left: str, right: str) -> bool:
+    """Whether two base URIs name one peer address: scheme and host compared
+    without case, a default port and a trailing slash ignored. A URL with a
+    port that is not a number, with userinfo, a query or a fragment (an
+    empty one too), or that ``is_valid_peer_baseuri`` refuses, names no peer
+    address and matches nothing."""
+    from urllib.parse import urlsplit
+
+    def key(url: str) -> tuple[str, str, int | None, str] | None:
+        # What the library accepts as a peer's base URI, and nothing else:
+        # no whitespace or control characters, no userinfo, and no query or
+        # fragment, an empty one included.
+        if not is_valid_peer_baseuri(url) or "?" in url or "#" in url:
+            return None
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        try:
+            port = parts.port
+        except ValueError:
+            return None
+        if not parts.hostname or "@" in parts.netloc:
+            return None
+        if port == {"http": 80, "https": 443}.get(scheme):
+            port = None
+        return scheme, parts.hostname.lower(), port, parts.path.rstrip("/")
+
+    left_key = key(left)
+    return left_key is not None and left_key == key(right)
+
+
+def trust_status_label(row: dict[str, Any], actor_id: str | None) -> str | None:
+    """What a trust row's two sides have done, for the trust list, or None
+    for a row whose peer has no side of its own (an OAuth2 client's row:
+    the list keeps its approved and verified badges)."""
+    from ..actor import _has_peer_endpoint  # pyright: ignore[reportPrivateUsage]
+    from ..trust import as_flag
+
+    if not _has_peer_endpoint(row, actor_id):
+        return None
+    approved = bool(as_flag(row.get("approved")))
+    peer_approved = bool(as_flag(row.get("peer_approved")))
+    verified = bool(as_flag(row.get("verified")))
+    if approved:
+        # Active only when the peer both approved and verified this actor.
+        return "Active" if peer_approved and verified else "Waiting for peer"
+    if not verified:
+        # Anyone can send a request under this id; it cannot be approved.
+        return "Unverified"
+    return "Awaiting your approval" if peer_approved else "Awaiting both"
+
 
 class WwwHandler(base_handler.BaseHandler):
     def _list_action_error(self, status: int, message: str) -> None:
@@ -730,6 +811,12 @@ class WwwHandler(base_handler.BaseHandler):
                     t["has_custom_permissions"] = self._has_custom_permissions(
                         myself.id or "", peerid, rel
                     )
+                    # What both sides have done (3.16): the list showed this
+                    # actor's side only.
+                    try:
+                        t["status_label"] = trust_status_label(t, myself.id)
+                    except ValueError:
+                        t["status_label"] = None  # a flag it cannot read
 
                     connection_metadata.append(
                         {
@@ -821,6 +908,9 @@ class WwwHandler(base_handler.BaseHandler):
                 "url": f"{urls['actor_root']}/",
                 "actor_root": urls["actor_root"],
                 "actor_www": urls["actor_www"],
+                # The fixed text for a code the new-trust POST redirected
+                # with; None for anything else.
+                "notice": TRUST_LIST_NOTICES.get(self.request.get("notice") or ""),
             }
             return
 
@@ -843,7 +933,11 @@ class WwwHandler(base_handler.BaseHandler):
                 "form_action": f"{urls['actor_root']}/www/trust/new",
                 "form_method": "POST",
                 "trust_types": available_trust_types,
-                "error": trust_types_error,
+                # A configuration error wins; else the fixed text for the
+                # code a failed submit redirected with. Nothing else from
+                # the query string is read.
+                "error": trust_types_error
+                or TRUST_FORM_MESSAGES.get(self.request.get("error") or ""),
                 "default_relationship": self.config.default_relationship,
             }
             return
@@ -969,9 +1063,21 @@ class WwwHandler(base_handler.BaseHandler):
             logger.error(f"Error getting OAuth2 clients for actor {actor_id}: {e}")
             return []
 
+    def _trust_form_failed(self, actor_id: str, code: str) -> None:
+        """Back to the new-trust form with a code from
+        ``TRUST_FORM_MESSAGES``. The redirect carries the code and nothing
+        the request sent; the status is set explicitly (the Flask
+        integration copies the handler's status)."""
+        self.response.set_status(302, "Found")
+        self.response.set_redirect(self._www_path(actor_id, f"/trust/new?error={code}"))
+
     def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:
-        """Handle creation of a new trust relationship."""
-        peer_url = self.request.get("peer_url")
+        """Handle creation of a new trust relationship. Every outcome is a
+        redirect (3.16; a failure was a bare 400 or 500 page): to the trust
+        list on success or when the peer already has a trust, to the form
+        with a message code otherwise."""
+        # Typed or pasted: surrounding whitespace is not part of the URL.
+        peer_url = (self.request.get("peer_url") or "").strip()
         relationship = (
             self.request.get("relationship") or self.config.default_relationship
         )
@@ -979,18 +1085,14 @@ class WwwHandler(base_handler.BaseHandler):
         description = self.request.get("description") or ""
 
         if not peer_url:
-            self.response.set_status(400, "Peer URL is required")
-            self.response.write("Error: Peer URL is required")
+            self._trust_form_failed(actor_id, "peer_url_required")
             return
 
         # Validate relationship name length
         if (
             relationship and len(relationship) > 100
         ):  # Reasonable length limit for human-readable names
-            self.response.set_status(400, "Relationship name too long")
-            self.response.write(
-                "Error: Relationship name must be 100 characters or less"
-            )
+            self._trust_form_failed(actor_id, "relationship_too_long")
             return
 
         # Normalize URL (add https:// if missing)
@@ -1002,11 +1104,37 @@ class WwwHandler(base_handler.BaseHandler):
 
         # Validate that trust type is provided
         if not trust_type:
-            self.response.set_status(400, "Trust type is required")
-            self.response.write("Error: Trust type is required")
+            self._trust_form_failed(actor_id, "trust_type_required")
             return
 
         try:
+            # A peer this actor already approved a trust with. Creating
+            # again is a re-pair (a new secret, sent to the stored base URI)
+            # when the relationship is the same, and is refused when it is
+            # not; either way the answer looked like a new trust. Say which.
+            # A row waiting for this actor's approval is neither: creating
+            # toward its peer is how it is approved.
+            existing = next(
+                (
+                    row
+                    for row in (myself.get_trust_relationships() or [])
+                    if isinstance(row, dict)
+                    and str(row.get("approved")).lower() == "true"
+                    and _same_peer_url(str(row.get("baseuri") or ""), peer_url)
+                ),
+                None,
+            )
+            if existing and (existing.get("relationship") or "") != trust_type:
+                self.response.set_status(302, "Found")
+                self.response.set_redirect(
+                    self._www_path(actor_id, "/trust?notice=trust_exists")
+                )
+                return
+            if existing:
+                # The re-pair goes to the stored base URI only, compared as
+                # text: send the stored form, not what was typed.
+                peer_url = str(existing.get("baseuri") or "").rstrip("/")
+
             # Create reciprocal trust relationship
             # The 'relationship' parameter in create_reciprocal_trust is the trust type requested from peer
             secret = self.config.new_token()
@@ -1033,19 +1161,30 @@ class WwwHandler(base_handler.BaseHandler):
             if new_trust:
                 # Success - redirect back to trust page
                 self.response.set_status(302, "Found")
-                self.response.set_redirect(self._www_path(actor_id, "/trust"))
-            else:
-                self.response.set_status(400, "Failed to create trust relationship")
-                self.response.write(
-                    "Error: Unable to create trust relationship. Please check the peer URL and try again."
+                # "Paired again" only when the row that came back is the one
+                # matched by URL: the library acts on the id the URL answers
+                # now, and another id means a new trust was made.
+                matched_peer = (existing or {}).get("peerid")
+                repaired = (
+                    bool(matched_peer)
+                    and isinstance(new_trust, dict)
+                    and new_trust.get("peerid") == matched_peer
                 )
+                self.response.set_redirect(
+                    self._www_path(
+                        actor_id,
+                        "/trust?notice=trust_repaired" if repaired else "/trust",
+                    )
+                )
+            else:
+                self._trust_form_failed(actor_id, "create_failed")
 
         except DbError:
             raise
         except Exception as e:
-            logger.error(f"Error creating trust relationship: {e}")
-            self.response.set_status(500, "Internal Server Error")
-            self.response.write(f"Error: {str(e)}")
+            # Logged, never shown: the text can name hosts and paths.
+            logger.error(f"Error creating trust relationship: {e}", exc_info=True)
+            self._trust_form_failed(actor_id, "server_error")
 
     def post(self, actor_id: str, path: str) -> None:
         """Handle POST requests for web UI property operations."""

@@ -115,7 +115,12 @@ class TestReservation:
 
     def test_a_sync_runs_an_owed_rebuild(self, env):
         env.owe(["notes"])
-        with patch.object(env.manager, "rebuild_subscription") as rebuild:
+        with (
+            patch.object(
+                env.manager, "get_callback_subscription", return_value=env.sub
+            ),
+            patch.object(env.manager, "rebuild_subscription") as rebuild,
+        ):
             env.manager.sync_subscription(PEER, SUB)
         rebuild.assert_called_once()
 
@@ -420,6 +425,49 @@ class TestVerification4Covered:
         owe.assert_called_once()
         assert [s["subscriptionid"] for s in owe.call_args.args[1]] == ["one"]
 
+    @pytest.mark.parametrize(
+        "processing,owed", [("unconfigured", True), ("hooks only", False)]
+    )
+    def test_without_a_replica_deleting_a_covering_subscription_owes_nothing(
+        self, processing: str, owed: bool
+    ) -> None:
+        """Re-run 4 (Issue 4): with no replica there is nothing to rebuild;
+        a hooks-only subscriber's next diff was told as a resync instead.
+        Re-run 5 (Issue 5): with no processing configuration a poll keeps a
+        replica (the defaults), so the covered ones are owed, as before."""
+        from actingweb.actor import Actor
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        actor = object.__new__(Actor)
+        actor.id = ACTOR
+        actor.config = MagicMock()
+        actor.config._subscription_config = (
+            None
+            if processing == "unconfigured"
+            else SubscriptionProcessingConfig(enabled=True, auto_storage=False)
+        )
+        actor.subs_list = None
+        rows = [
+            {"peerid": PEER, "subscriptionid": "whole", "target": "properties"},
+            {
+                "peerid": PEER,
+                "subscriptionid": "one",
+                "target": "properties",
+                "subtarget": "notes",
+            },
+        ]
+        sub = MagicMock()
+        sub.delete.return_value = True
+        with (
+            patch.object(actor, "get_subscriptions", return_value=rows),
+            patch("actingweb.subscription.Subscription", return_value=sub),
+            patch.object(actor, "_owe_covered_rebuilds") as owe,
+            patch("actingweb.remote_storage.RemotePeerStore"),
+            patch("actingweb.interface.actor_interface.ActorInterface"),
+        ):
+            assert actor.delete_subscription(PEER, "whole", callback=True)
+        assert owe.called is owed
+
     def test_a_subtarget_subscriptions_dropped_batch_owes_no_names(self, env):
         env.sub.subtarget = "profile"
         with patch.object(
@@ -717,4 +765,528 @@ class TestVerification2026_11_16:
         )
         env.baselines = [{"status": "paid"}]
         assert env.rebuild(config=config, force=True).success
+        assert seen == []
+
+
+# -- a poll that replaced the replica tells the data hooks (3.16) ------------
+
+
+def _hooked(seen: list[Any], **kwargs: Any) -> Any:
+    from actingweb.subscription_config import SubscriptionProcessingConfig
+
+    return SubscriptionProcessingConfig(
+        enabled=True,
+        subscription_data_hooks={"*": [lambda *a: seen.append(a[1:])]},
+        **kwargs,
+    )
+
+
+def _poll(env: _Env, config: Any, diffs: list[dict[str, Any]], *, loop: bool) -> Any:
+    """``sync_subscription`` (or its async twin) against ``env``: the
+    publisher answers ``diffs`` at sequence 5, baselines come from
+    ``env.baselines``."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    def answer(path: str = "") -> dict[str, Any]:
+        seq = env.sequences.pop(0) if len(env.sequences) > 1 else env.sequences[0]
+        return {"sequence": seq, "data": list(diffs)}
+
+    env.proxy.get_resource.side_effect = answer
+    env.proxy.get_resource_async = AsyncMock(side_effect=answer)
+    env.proxy.change_resource_async = AsyncMock(return_value={})
+
+    def subscription(**_: Any) -> Any:
+        sub_obj = MagicMock()
+        snapshot = dict(env.recorded)
+        sub_obj.get.side_effect = lambda: dict(snapshot)
+        sub_obj.handle.modify.side_effect = lambda seqnr: env.recorded.update(
+            sequence=seqnr
+        )
+        return sub_obj
+
+    with (
+        patch.object(env.manager, "get_callback_subscription", return_value=env.sub),
+        patch.object(env.manager, "_get_peer_proxy", return_value=env.proxy),
+        patch.object(
+            env.manager, "_fetch_and_transform_baseline", side_effect=env._baseline
+        ),
+        patch.object(
+            env.manager,
+            "_fetch_and_transform_baseline_async",
+            AsyncMock(side_effect=env._baseline),
+        ),
+        patch("actingweb.subscription.Subscription", side_effect=subscription),
+    ):
+        if not loop:
+            return env.manager.sync_subscription(PEER, SUB, config=config)
+
+        async def run() -> Any:
+            from actingweb.handlers import callbacks
+
+            result = await env.manager.sync_subscription_async(PEER, SUB, config=config)
+            await asyncio.gather(*list(callbacks._HOOK_TASKS))
+            return result
+
+        return asyncio.run(run())
+
+
+_OUT_OF_STEP = MagicMock(out_of_step={"list": "notes", "operation": "insert"})
+
+
+class TestAPollTellsTheDataHooks:
+    """thoughts/plans/2026-11-16-3-16-pre-validation-fixes.md, Phase 2: a
+    poll that replaced the replica from a baseline calls the data hooks once
+    with it, as ``"resync"``, whichever path fetched the baseline."""
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    @pytest.mark.parametrize("path", ["owed", "marker", "out of step", "none applied"])
+    def test_a_poll_that_replaced_the_replica_tells_the_data_hooks(
+        self, env: _Env, path: str, loop: bool
+    ) -> None:
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        diffs: list[dict[str, Any]] = []
+        config = _hooked(seen)
+        if path == "owed":
+            env.owe(["notes"])
+        elif path == "marker":
+            diffs = [{"sequence": 5, "type": "resync", "url": "https://p/x"}]
+        elif path == "out of step":
+            # No sequence tracking: the diff that could not be applied told
+            # no hook, so the baseline is the first the application hears.
+            config = _hooked(seen, auto_sequence=False)
+            diffs = [{"sequence": 5, "data": {"notes": {"operation": "insert"}}}]
+        elif path == "none applied":
+            env.recorded["sequence"] = 5
+            diffs = [{"sequence": 3, "data": {"old": 1}}]
+        with patch.object(
+            RemotePeerStore, "apply_callback_data", return_value=_OUT_OF_STEP
+        ):
+            result = _poll(env, config, diffs, loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    def test_a_polled_rebuild_that_did_not_settle_tells_no_hook(
+        self, env: _Env
+    ) -> None:
+        seen: list[Any] = []
+        env.owe(["notes"])
+        env.sequences = [5, 6, 7, 8, 9, 10]  # keeps moving: stays owed
+        env.baselines = [{"status": "paid"}]
+        result = _poll(env, _hooked(seen), [], loop=False)
+        assert not result.success
+        assert seen == []
+
+    def test_the_async_poll_runs_a_coroutine_hook_on_its_loop(self, env: _Env) -> None:
+        import asyncio
+
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        loops: list[Any] = []
+        types: list[str] = []
+
+        async def hook(*args: Any) -> None:
+            loops.append(asyncio.get_running_loop())
+            types.append(args[-1])
+
+        config = SubscriptionProcessingConfig(
+            enabled=True, subscription_data_hooks={"properties": [hook]}
+        )
+        env.owe(["notes"])
+        env.baselines = [{"status": "paid"}]
+        callers: list[Any] = []
+        real_run = asyncio.run
+
+        def run(coro: Any) -> Any:
+            async def wrapped() -> Any:
+                callers.append(asyncio.get_running_loop())
+                return await coro
+
+            return real_run(wrapped())
+
+        with patch("asyncio.run", run):
+            _poll(env, config, [], loop=True)
+        assert types == ["resync"]
+        assert loops == callers[:1]  # the caller's loop, not a worker thread's
+
+    def test_a_settled_empty_baseline_is_told(self, env: _Env) -> None:
+        seen: list[Any] = []
+        env.owe(["notes"])
+        env.baselines = [{}]
+        assert _poll(env, _hooked(seen), [], loop=False).success
+        assert seen == [(PEER, "properties", {}, 5, "resync")]
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_rebuild_after_a_list_diff_the_poll_told_tells_the_baseline_too(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """The audit (2026-11-17): the poll stops at the diff it could not
+        apply; the diffs after it are never run and the rebuild clears them
+        on the publisher, so the baseline is the only way the hooks hear
+        them. A settled rebuild always tells (owner)."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid", "later": 2}]
+        diffs = [
+            {"sequence": 1, "data": {"notes": {"operation": "insert"}}},
+            {"sequence": 2, "data": {"later": 2}},
+        ]
+        with patch.object(
+            RemotePeerStore, "apply_callback_data", return_value=_OUT_OF_STEP
+        ):
+            _poll(env, _hooked(seen), diffs, loop=loop)
+        assert [call[-1] for call in seen] == ["diff", "resync"]
+        assert seen[-1][2] == {"status": "paid", "later": 2}
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is False  # it ran
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_poll_uses_the_applications_configuration_when_given_none(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """The audit: ``sync_subscription(config=None)`` used a default with
+        ``auto_storage`` on and built a replica the application never
+        configured."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        env.config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
+            enabled=True, auto_storage=False
+        )
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5  # level: a quiet poll
+        assert _poll(env, None, [], loop=loop).success
+        assert env.replica.get_value("status") is None
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_poll_without_a_configuration_tells_the_applications_hooks(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 6 (Issue 1): the poll resolved the application's
+        configuration, the baseline teller got the raw None and told
+        nobody; the owed rebuild was settled and its change lost."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        seen: list[Any] = []
+        env.config._subscription_config = SubscriptionProcessingConfig(  # type: ignore[attr-defined]
+            enabled=True,
+            subscription_data_hooks={"*": [lambda *a: seen.append(a[1:])]},
+        )
+        env.owe(["notes"])
+        env.baselines = [{"status": "paid"}]
+        assert _poll(env, None, [], loop=loop).success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_polled_marker_owes_nothing_a_poll_cannot_tell(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 7 (Issue 2): markers are stored only for subscribers that
+        get no callbacks, so a debt owed for a callback's legacy hook was
+        never collected. With no replica and no data hook a polled marker
+        is applied as an empty diff and owes nothing."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        config = SubscriptionProcessingConfig(enabled=True, auto_storage=False)
+        marker = [{"sequence": 5, "type": "resync", "url": "https://p/x", "data": {}}]
+        assert _poll(env, config, marker, loop=loop).success
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is False
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_poll_leaves_a_rebuild_only_the_legacy_hook_hears_owed(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """The audit (re-run 5, Issue 2): a poll tells data hooks only, so
+        it must not consume a rebuild that only a callback's legacy hook
+        would hear; the next callback runs and tells it."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        env.owe()  # owed and due (never reserved)
+        config = SubscriptionProcessingConfig(enabled=True, auto_storage=False)
+        with patch.object(env.manager, "rebuild_subscription") as rebuild:
+            result = _poll(env, config, [{"sequence": 1, "data": {"a": 1}}], loop=loop)
+        rebuild.assert_not_called()
+        assert result.success
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_polled_marker_rebuilds_for_a_hooks_only_subscriber(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """The audit: without ``auto_storage`` the marker was applied as an
+        empty diff, so the hooks never heard the state it asked for."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        marker = [{"sequence": 5, "type": "resync", "url": "https://p/x", "data": {}}]
+        result = _poll(env, _hooked(seen, auto_storage=False), marker, loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_duplicates_while_a_rebuild_is_owed_tell_no_baseline(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """The audit: the all-duplicates path told a baseline while a
+        rebuild was owed, which the rebuild then told again."""
+        seen: list[Any] = []
+        assert env.processor.begin_rebuild(PEER, SUB, force=True)  # owed, not due
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5
+        result = _poll(
+            env, _hooked(seen), [{"sequence": 3, "data": {"old": 1}}], loop=loop
+        )
+        assert result.baseline is None
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_quiet_poll_tells_no_hook(self, env: _Env, loop: bool) -> None:
+        """Nothing to fetch and the subscriber level with the publisher: the
+        replica is refreshed from a baseline, which is the state the hooks
+        already heard about (owner, 2026-11-16)."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5  # the publisher answers 5
+        result = _poll(env, _hooked(seen), [], loop=loop)
+        assert result.success and result.baseline is None
+        assert env.replica.get_value("status") is not None  # still applied
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_poll_with_nothing_to_fetch_that_was_behind_tells_the_hook(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Verification 2026-11-16 (Issue 2): after a gap resync the sequence
+        is 0 and the queued callbacks are gone, unseen by any hook. When the
+        publisher retains no diff, the poll that follows has nothing to fetch
+        and its baseline is the first the application hears of the change."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 0  # reset by the gap resync; publisher at 5
+        result = _poll(env, _hooked(seen), [], loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_whose_baseline_was_not_stored_whole_stays_owed(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Not told, and not forgotten: the rebuild stays owed, so the next
+        poll after the interval runs it again and tells it then (re-run 1,
+        Issue 3: the poll was recorded as level and nothing was owed)."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = MagicMock(skipped=False, failed=["status"])
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
+            polled = _poll(env, _hooked(seen), [], loop=loop)
+        assert not polled.success
+        assert seen == []
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is True
+
+    def test_without_sequence_tracking_a_quiet_poll_is_never_behind(
+        self, env: _Env
+    ) -> None:
+        """Without ``auto_sequence`` callbacks record no sequence, so the
+        recorded one says nothing about what was missed: no rebuild, no
+        hook, on every quiet poll."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        result = _poll(env, _hooked(seen, auto_sequence=False), [], loop=False)
+        assert result.success and result.baseline is None
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_tells_an_empty_baseline_and_empties_the_replica(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 1 (Issue 1): the lost callbacks deleted the publisher's
+        last properties. The baseline is ``{}``: the hook is told it, and
+        the replica no longer holds what the publisher deleted."""
+        seen: list[Any] = []
+        env.replica.set_value("status", {"value": "paid"})
+        env.baselines = [{}]
+        assert _poll(env, _hooked(seen), [], loop=loop).success
+        assert seen == [(PEER, "properties", {}, 5, "resync")]
+        assert env.replica.get_value("status") is None
+
+    @pytest.mark.parametrize("sequence", [None, "5", float("nan"), True])
+    def test_a_publisher_sequence_that_is_no_integer_is_not_behind(
+        self, env: _Env, sequence: Any
+    ) -> None:
+        """Re-run 1 (Issue 6): a ``NaN`` raised in the comparison."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.sequences = [sequence]
+        # Re-run 2: a text or null sequence raised later, at the quiet
+        # path's own comparison; it is now not recorded either.
+        assert _poll(env, _hooked(seen), [], loop=False).success
+        assert seen == []
+        assert env.recorded["sequence"] == 0
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_of_a_covered_subscription_tells_no_hook(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 2 (Issue 1): a baseline skipped because another
+        subscription covers the replica is not told on the behind path
+        either; the rebuild returned it as settled."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        skipped = MagicMock(skipped=True, failed=[])
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=skipped):
+            polled = _poll(env, _hooked(seen), [], loop=loop)
+        assert polled.success and polled.baseline_skipped
+        assert seen == []
+
+    def test_a_skipped_rebuild_still_returns_its_baseline(self, env: _Env) -> None:
+        """The callback path tells the baseline that answered for its
+        callback whatever the replica stored; only a poll leaves a skipped
+        one untold, by the result's ``baseline_skipped``."""
+        env.baselines = [{"status": "paid"}]
+        skipped = MagicMock(skipped=True, failed=[])
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=skipped):
+            result = env.rebuild(force=True)
+        assert result.success and result.baseline == {"status": "paid"}
+        assert result.baseline_skipped is True
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_an_interval_another_path_started_does_not_hold_the_behind_poll(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """A pushed resync's sweep stamps the interval without owing a
+        rebuild; the behind poll that follows still rebuilds and tells."""
+        assert env.processor.begin_rebuild(PEER, SUB, force=True)
+        env.processor.settle_rebuild(PEER, SUB, rebuilt=True)
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 0
+        assert _poll(env, _hooked(seen), [], loop=loop).success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+
+    @pytest.mark.parametrize("storage", [True, False], ids=["replica", "hooks-only"])
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_failing_behind_rebuild_is_attempted_once_a_minute(
+        self, env: _Env, loop: bool, storage: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-run 2 (Issue 2): the behind path forced its rebuild past the
+        interval, so a baseline that could not be fetched was fetched again
+        on every poll. Re-run 3 (Issue 5): also without ``auto_storage``."""
+        fetched: list[Any] = []
+
+        def baseline(**_: Any) -> Any:
+            fetched.append(1)
+            return None  # the fetch fails
+
+        env._baseline = baseline  # type: ignore[method-assign]
+        env.recorded["sequence"] = 0  # behind the publisher's 5
+        config = _hooked([], auto_storage=storage)
+        first = _poll(env, config, [], loop=loop)
+        second = _poll(env, config, [], loop=loop)
+        assert not first.success and not second.success
+        assert second.error_code == 429
+        assert len(fetched) == 1
+        real = time.time
+        monkeypatch.setattr(
+            "actingweb.callback_processor.time.time", lambda: real() + 61
+        )
+        _poll(env, config, [], loop=loop)
+        assert len(fetched) == 2
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_hooks_only_rebuild_owed_after_a_failure_is_told_when_it_runs(
+        self, env: _Env, loop: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Re-run 3 (Issue 1): a failed behind rebuild leaves it owed. A
+        callback then records its sequence, so the next poll is level: the
+        owed rebuild must still run there and tell the hook, not wait for
+        a path that runs it without telling."""
+        seen: list[Any] = []
+        env.baselines = [None, {"status": "paid"}]
+        env.recorded["sequence"] = 0
+        config = _hooked(seen, auto_storage=False)
+        assert not _poll(env, config, [], loop=loop).success
+        env.recorded["sequence"] = 5  # a callback recorded meanwhile
+        real = time.time
+        monkeypatch.setattr(
+            "actingweb.callback_processor.time.time", lambda: real() + 61
+        )
+        assert _poll(env, config, [], loop=loop).success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+        assert env.processor.rebuild_state(PEER, SUB)["owed"] is False
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_hook_on_another_target_does_not_make_a_behind_poll_rebuild(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 3 (Issue 2): nobody would be told, so the poll stays one
+        request and records the sequence, as without any hook."""
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+
+        config = SubscriptionProcessingConfig(
+            enabled=True,
+            auto_storage=False,
+            subscription_data_hooks={"resources": [lambda *a: None]},
+        )
+        result = _poll(env, config, [], loop=loop)
+        assert result.success
+        assert env.recorded["sequence"] == 5
+        # One request: the poll's own (a rebuild reads the sequence again).
+        proxy = env.proxy
+        assert proxy.get_resource.call_count + proxy.get_resource_async.call_count == 1
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_duplicates_under_a_sequence_that_is_no_integer_tell_no_hook(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 3 (Issue 3): nothing is recorded or cleared, so the same
+        duplicates come back on every poll; telling them would repeat."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5
+        env.sequences = [None]  # type: ignore[list-item]
+        result = _poll(
+            env, _hooked(seen), [{"sequence": 3, "data": {"old": 1}}], loop=loop
+        )
+        assert result.baseline is None
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    def test_a_behind_poll_without_auto_storage_tells_the_hook(
+        self, env: _Env, loop: bool
+    ) -> None:
+        """Re-run 2 (Issue 3): a subscriber with hooks and sequence tracking
+        but no replica was told nothing after a gap resync; the hook is its
+        only record."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 0
+        result = _poll(env, _hooked(seen, auto_storage=False), [], loop=loop)
+        assert result.success
+        assert seen == [(PEER, "properties", {"status": "paid"}, 5, "resync")]
+        assert env.recorded["sequence"] == 5
+
+    def test_a_level_poll_without_auto_storage_tells_no_hook(self, env: _Env) -> None:
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5
+        assert _poll(env, _hooked(seen, auto_storage=False), [], loop=False).success
+        assert seen == []
+
+    @pytest.mark.parametrize("loop", [False, True], ids=["sync", "async"])
+    @pytest.mark.parametrize("outcome", ["skipped", "failed"])
+    def test_a_baseline_that_was_not_applied_whole_is_not_told(
+        self, env: _Env, outcome: str, loop: bool
+    ) -> None:
+        """Skipped (another subscription covers the replica) or with an
+        entry that could not be stored: the hook would hear of data the
+        replica does not hold."""
+        seen: list[Any] = []
+        env.baselines = [{"status": "paid"}]
+        env.recorded["sequence"] = 5
+        result = MagicMock(
+            skipped=outcome == "skipped",
+            failed=["status"] if outcome == "failed" else [],
+        )
+        with patch.object(RemotePeerStore, "apply_resync_data", return_value=result):
+            polled = _poll(
+                env, _hooked(seen), [{"sequence": 3, "data": {"old": 1}}], loop=loop
+            )
+        assert polled.success and polled.baseline is None
         assert seen == []

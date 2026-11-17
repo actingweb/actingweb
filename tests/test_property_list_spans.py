@@ -948,65 +948,6 @@ class TestReceiver:
         lst.append.assert_not_called()
 
 
-class TestFullStateFallback:
-    def test_full_state_of_a_spanned_list_is_stored_as_a_reference(
-        self, config: Config
-    ) -> None:
-        from actingweb.actor import Actor
-
-        actor = Actor(config=config)
-        actor.id = ACTOR
-        state = {
-            NAME: {"list": NAME, "operation": "extend", "items": [big("a", 400_000)]}
-        }
-        stored: list[dict[str, Any]] = []
-
-        def store_diff(
-            peer_id: str, sub_id: str, seq: int, data: dict[str, Any]
-        ) -> str:
-            stored.append(data)
-            return ""
-
-        trust = mock.Mock()
-        trust.get.return_value = {"baseuri": "https://peer.example/p1"}
-        caps = mock.Mock()
-        caps.supports_resync_callbacks_cached.return_value = False
-        with (
-            mock.patch("actingweb.trust.Trust", return_value=trust),
-            mock.patch(
-                "actingweb.peer_capabilities.PeerCapabilities", return_value=caps
-            ),
-            mock.patch("actingweb.interface.actor_interface.ActorInterface"),
-            mock.patch.object(
-                actor,
-                "_get_full_state_for_subscription",
-                side_effect=lambda t, st, keys=None: (
-                    keys.add(NAME) if keys is not None else None,
-                    state,
-                )[1],
-            ),
-            mock.patch.object(
-                actor, "_store_subscription_diff", side_effect=store_diff
-            ),
-            mock.patch.object(
-                actor, "_increment_subscription_sequence", return_value=7
-            ),
-        ):
-            actor._callback_subscription_resync(
-                {
-                    "peerid": "p1",
-                    "subscriptionid": "s1",
-                    "target": "properties",
-                    "subtarget": NAME,
-                    "sequence": 1,
-                }
-            )
-        assert stored, "the fallback never reached the diff store"
-        inner = stored[0][NAME]
-        assert inner["spanned"] is True
-        assert "items" not in inner
-
-
 class TestActorLevel:
     def test_actor_create_refuses_dollar_and_long_ids(self, config: Config) -> None:
         from actingweb.actor import Actor

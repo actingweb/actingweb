@@ -12,8 +12,8 @@ sender delivers them:
   default on): a subscriber served by the publisher's own process needs one
   of its handler threads to answer, and a low-granularity one a second for
   its fetch back. The two groups run alongside each other.
-- **A unit's sends in order**: the clear and the full state of the fallback
-  for a peer without resync arrive in sequence.
+- **A unit's sends in order**: a unit with more than one send delivers
+  them in sequence and stops at the first that was not delivered.
 - **Off the event loop, or with ``with_sync_callbacks``,** the call returns
   when every send has answered, timed out, or been cut by the delivery
   budget. **On a running loop without it,** the sends are tasks kept in a
@@ -232,8 +232,8 @@ async def send_async(send: PreparedSend) -> int:
 
 def _run_unit_sync(unit: Unit, deadline: _Deadline) -> bool:
     """A unit's sends in order; delivered when every one answered 2xx. The
-    first that did not stops the unit: a full state is not sent after its
-    clear failed."""
+    first that did not stops the unit: a later send is not made after one
+    it depends on failed."""
     delivered = True
     for send in unit.sends:
         try:

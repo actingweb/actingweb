@@ -50,6 +50,14 @@ Usage
        target="properties", data={"status": "active"}
    )
 
+   # A change inside one property: write it first, then notify. A
+   # subscriber above the resource is sent the property's whole stored
+   # value (3.16), one at resource level the resource's value.
+   actor.subscriptions.notify_subscribers(
+       target="properties", data={"unit": "C"},
+       subtarget="settings", resource="display",
+   )
+
    # Introspection
    for sub in actor.subscriptions.all_subscriptions:
        print(sub.peer_id, sub.target)
@@ -91,8 +99,8 @@ Since 3.16 one sender delivers every subscriber's callback for a write
   for its fetch back. The two groups run alongside each other, so a write
   waits for the longer of them, not the sum. A subscriber is on the own host
   when its trust's base URI has the publisher's origin (scheme, host, port).
-- **Two ordered callbacks to one subscriber** (the clear and the state of the
-  fallback for a peer without resync) arrive in order.
+- **Ordered callbacks to one subscriber** arrive in order, and stop at the
+  first that was not delivered.
 - **Timeouts:** 5 s to connect and 10 s to read for a diff, 30 s to read for
   a resync.
 
@@ -326,23 +334,10 @@ Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
      "timestamp": "2026-01-20T12:00:00.000000Z"
    }
 
-**Low-Granularity Fallback:**
-
-When a peer doesn't support the ``subscriptionresync`` option (per ActingWeb protocol v1.4), the publisher automatically falls back to a low-granularity callback:
-
-.. code-block:: json
-
-   {
-     "id": "actor123",
-     "subscriptionid": "sub456",
-     "sequence": 43,
-     "target": "properties",
-     "granularity": "low",
-     "url": "https://example.com/actor123/subscriptions/sub456/43",
-     "timestamp": "2026-01-20T12:00:00.000000Z"
-   }
-
-Note: No ``type`` field, and ``url`` points to the subscription diff endpoint. The receiver fetches the data from the URL automatically.
+A resume sends this callback to every subscriber with a callback endpoint,
+whatever option tags it advertises (3.16; a peer cached without
+``subscriptionresync`` was sent the full state as ordinary diffs before). A
+subscriber that does not know the type re-reads on its own schedule.
 
 What a Subscriber Is Told
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -546,9 +541,7 @@ no longer holds what the publisher's list held: it is *out of step* and is
 rebuilt (see `How a replica is stored`_). A bulk ``POST /properties`` with
 ``items`` sends up to 25 changes in order, a run of appends as one
 ``extend``; more than 25 send no per-item diff and one resync of the list
-after the batch (``Actor.request_resync``). A peer without resync support
-receives a list's full state as ``clear`` and then ``extend``, under
-consecutive sequence numbers.
+after the batch (``Actor.request_resync``).
 
 ``delete_by_handle()``, ``update_by_handle()``, ``remove_where()``, and
 ``update_where()`` (added in 3.14) do not add new operations to this table
@@ -591,11 +584,7 @@ not apply a reference and does not fetch the values: the replica is out of
 step, a WARNING names the list and the operation, and the replica is
 rebuilt from a baseline (see `How a replica is stored`_). A reference is the one diff a pre-3.16 peer does not understand:
 with the value fields absent it answers ``unknown operation`` and stores
-nothing. The full-state fallback for a peer without resync support is a
-reference too when the list's items exceed the threshold, sized from the
-list's rows without reading spanned bodies, and when several lists together
-would exceed the diff row the largest become references until the blob
-fits.
+nothing.
 
 One positional field became advisory in 3.14: the ``index`` an
 ``append`` diff carries (and the ``length`` field every list diff
@@ -674,7 +663,10 @@ callback or ``sync_subscription()`` after it. A failure leaves it owed and
 logs a WARNING (``Rebuild of <peer>:<subscription> ... stays owed``).
 ``actor.subscriptions.rebuild_subscription(peer_id, subscription_id,
 force=True)`` (or ``rebuild_subscription_async``) runs one now; ``force``
-skips the interval, never a rebuild already running.
+skips the interval, never a rebuild already running. A direct call tells no
+hook: its result's ``baseline`` is what it applied. A rebuild that a
+callback or ``sync_subscription()`` runs is told to the data hooks once, as
+``"resync"``.
 
 A diff in the middle of a list (``insert``, ``update``, ``delete``,
 ``pop``, ``remove``) reads the replica's list, which costs O(n); appends do
@@ -919,8 +911,9 @@ When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``
 
    elif result == ProcessResult.PENDING:
        # Gap detected - sequence is higher than expected
-       # Callback queued, waiting for missing sequences
-       # Will auto-process when gap is filled
+       # Callback queued, waiting for missing sequences. The delivery
+       # that fills the gap processes it, also when that delivery was
+       # already running when this one arrived
        pass
 
    elif result == ProcessResult.RESYNC_TRIGGERED:
@@ -942,6 +935,13 @@ When using ``CallbackProcessor`` directly, ``process_callback()`` (async) and ``
        # max_pending limit reached (back-pressure)
        # Publisher should slow down or retry later
        pass
+
+A handler passed to either method can be called for more than the callback
+it was called with: the delivery that is next in line also processes the
+callbacks queued behind it, in order and one at a time (always the first;
+then at most 20, and none once 5 seconds have passed; the next delivery
+takes the rest). A
+``REBUILD`` result can therefore come from a queued callback.
 
 Performance Tuning
 ------------------

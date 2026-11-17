@@ -58,8 +58,8 @@ Option tags, the actor and ``/meta``:
 - Added: an actor SHOULD NOT advertise a tag for something it does not
   serve.
 - Clarified: ``subscriptionresync`` is the receiver's capability; a
-  publisher SHOULD send resync callbacks only to a subscriber that
-  advertises it.
+  publisher MAY send a resync callback to a subscriber that does not
+  advertise it, which then re-reads on its own schedule.
 - Changed: ``oauth`` means that an OAuth2 login is available for the
   mini-application; the per-actor ``/oauth`` binding is no longer defined
   (an implementation MAY offer one).
@@ -298,9 +298,9 @@ Optional endpoints and ``/mcp``:
 - Added: the diff carries the stored value, after the mini-application's
   transformation.
 - Clarified: a sub-target or resource diff is relative to the subscribed
-  level on both sides, except the full state sent to a subscriber without
-  resync support, which is keyed by name at every level; list diffs are wrapped in the list's name only for a
-  target-level subscription.
+  level on both sides, except a full state sent as ordinary diffs in
+  place of a resync, which is keyed by name at every level; list diffs are
+  wrapped in the list's name only for a target-level subscription.
 - Added: the list operations ``insert``, ``pop`` (with a negative index),
   ``clear``, ``delete_all``, ``extend`` (an empty ``extend`` creates a
   list) and ``metadata`` are defined; full state as ``clear`` then
@@ -338,16 +338,17 @@ Resync, permission callbacks, delivery:
 - Changed: a ``none`` subscription is never sent a resync callback; it
   finds the resync as a ``type: resync`` diff when it polls, and SHOULD
   clear that marker only after the fetched state was applied.
-- Added: a publisher MAY send a resync callback to a subscriber whose tags
-  it does not yet know; after resuming suspended subscriptions it MUST tell
-  each subscriber (resync callback, resync diff, or full state).
+- Added: a publisher MAY send a resync callback to any subscriber,
+  whatever tags it advertises; after resuming suspended subscriptions it
+  MUST tell each subscriber (resync callback, resync diff, or full state).
 - Added: a resync takes a sequence number; ``subtarget`` is an empty
   string or ``null`` when unset (a receiver accepts both) and ``resource``
   is not sent; a 2xx answer means delivered; an
   undelivered resync MAY be sent again at the next resume.
-- Added: to a subscriber without ``subscriptionresync`` the publisher sends
-  the full state as low-granularity diffs (a ``clear`` of the lists, then
-  the whole state).
+- Clarified: to a subscriber without ``subscriptionresync`` a publisher
+  MAY send the full state as low-granularity diffs in place of a resync (a
+  ``clear`` of the lists, then the whole state); a subscriber that does not
+  know the resync type re-reads the subscribed state on its own schedule.
 - Changed: deleting per-relationship permissions sends a permission
   callback (with the type's defaults); a change of a trust type's defaults
   MAY notify (was SHOULD).
@@ -852,9 +853,9 @@ permissioncallback
 subscriptionresync
   Support for the resync callback mechanism, as a receiver: the actor accepts
   ``type: "resync"`` callbacks on its subscription callback URIs and acts on them by fetching
-  the subscribed state (see Resync Callback). A publisher reads the tag from the subscriber
-  to decide whether it may send a resync callback; an actor that also publishes MAY send
-  resync callbacks to a subscriber that advertises the tag.
+  the subscribed state (see Resync Callback). A publisher MAY read the tag from the subscriber
+  to decide what to send it: it MAY send a resync callback to any subscriber, and only a
+  subscriber that advertises the tag is known to act on one.
 
 callbackcompression
   Support for compressed callback payloads using standard HTTP content encoding (gzip, br).
@@ -3315,11 +3316,11 @@ An actor MAY suspend the subscriptions to a target or subtarget for a
 while (for example around a bulk change). While suspended, a change
 records no diff and uses no sequence number. When the subscriptions are
 resumed, the actor MUST tell each subscriber that its state may have
-changed: by a resync callback to a subscriber that advertises
-``subscriptionresync`` (see Resync Callback), by a resync diff the
+changed: by a resync callback (see Resync Callback), by a resync diff the
 subscriber polls (for a subscription with granularity ``none``, or one
-the actor cannot call), or by the full state as ordinary diffs to a
-subscriber that does not support resync (see Resync Callback).
+the actor cannot call), or, where the actor chooses to for a subscriber
+that does not advertise ``subscriptionresync``, by the full state as
+ordinary diffs (see Resync Callback).
 
 Initiating and Enumerating Subscriptions
 ----------------------------------------
@@ -3477,8 +3478,8 @@ sub-target or resource: it carries the sub-target's (or the resource's)
 value itself, not wrapped in its name. A subscriber MUST apply it to the
 sub-target or resource it subscribed to, on both sides of the exchange
 (the publisher does not repeat the subscribed path inside the diff). The
-one exception is the full state a publisher sends as ordinary diffs to a
-subscriber without resync support (see Resync Callback): those diffs are
+one exception is the full state a publisher MAY send as ordinary diffs in
+place of a resync (see Resync Callback): those diffs are
 keyed by name at every level, a sub-target subscription's included, and a
 subscriber unwraps the entry named by its sub-target.
 
@@ -3792,8 +3793,8 @@ The operations not shown above:
   items are unchanged either way.
 
 When a sender sends a subscriber the full state of a list as ordinary
-diffs (for example to a subscriber that does not support resync, see
-Resync Callback), it sends a ``clear`` of the list and then, in a later
+diffs (for example in place of a resync, see Resync Callback), it sends a
+``clear`` of the list and then, in a later
 diff with a higher sequence number, an ``extend`` with all its items, so a
 receiver that already holds the list does not append the items to the
 copy it has. (A list sent as a reference, see below, needs no ``clear``.)
@@ -4064,11 +4065,13 @@ A publisher MAY send a resync callback to indicate that the peer should
 fetch the subscribed state, rather than processing individual diffs. This
 is useful after bulk operations where many changes occurred and sending
 individual diffs would be inefficient, and when suspended subscriptions are
-resumed (see Establishing a Subscription). A publisher SHOULD send a resync
-callback only to a subscriber that advertises ``subscriptionresync``; when
-it does not (yet) know the subscriber's tags it MAY send one anyway. To a
-subscriber
-that does not advertise the tag, the publisher instead sends the full
+resumed (see Establishing a Subscription). A publisher MAY send a resync
+callback to any subscriber, whether or not it advertises
+``subscriptionresync`` and whether or not the publisher knows its tags. A
+subscriber that does not know the type cannot act on it: it answers as it
+answers any callback it does not understand, and re-reads the subscribed
+state on its own schedule. To a subscriber that does not advertise the
+tag, a publisher MAY instead send the full
 subscribed state as ordinary diffs, each delivered as a low-granularity
 callback and in this order: first, when the state holds list properties, a
 diff with a ``clear`` for each of them; then, under the next sequence
@@ -4372,7 +4375,7 @@ it does so is an implementation matter. The callbacks for one subscription MUST 
 sequence numbers in the order the diffs were recorded, but a subscriber MUST NOT assume
 they arrive in that order: two changes in quick succession may be delivered out of order,
 and the sequence number orders them. Where a publisher sends one subscriber two callbacks
-that depend on each other (the ``clear`` and the full state of Resync Callback), it MUST
+that depend on each other (the ``clear`` and the full state a publisher may send in place of a resync, see Resync Callback), it MUST
 send the second only after the first was answered with a 2xx; if the first was not,
 the second is not sent.
 
@@ -4389,8 +4392,8 @@ Receivers detecting gaps in sequence numbers have several recovery options:
 1. **Polling**: Perform a GET on the subscription endpoint to retrieve missed diffs.
    This is the RECOMMENDED recovery mechanism.
 
-2. **Resync Callback**: If the receiver advertises ``subscriptionresync``, the sender MAY
-   send a ``type: "resync"`` callback to indicate the receiver should fetch full state.
+2. **Resync Callback**: The sender MAY send a ``type: "resync"`` callback to indicate the
+   receiver should fetch full state; a receiver that advertises ``subscriptionresync`` acts on it.
 
 3. **Sequence Gap Detection**: Receivers SHOULD track the expected next sequence number.
    When a gap is detected (received sequence > expected + 1), the receiver SHOULD

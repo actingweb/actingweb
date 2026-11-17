@@ -66,6 +66,14 @@ FANOUT_REMOVED = (
 )
 
 
+CALLBACK_OAUTH_REMOVED = (
+    "actingweb.handlers.callback_oauth: CallbackOauthHandler was removed in "
+    "3.16; neither integration routed it. The OAuth2 callback is served at "
+    "/oauth/callback by integrate_flask and integrate_fastapi: remove the "
+    'import, and see docs/migration/v3.16.rst "Removed: CallbackOauthHandler".'
+)
+
+
 def _handle_removed_lookup_switch(what: str, enabled: bool) -> None:
     """Refuse the removed legacy-lookup switch; warn on its redundant form.
 
@@ -378,7 +386,7 @@ class Config:
         # The OAuth redirect URI follows the host the caller gave, not the
         # default one the dict was built with; a caller's own value wins.
         if not self.oauth.get("redirect_uri"):
-            self.oauth["redirect_uri"] = self.proto + self.fqdn + "/oauth"
+            self.oauth["redirect_uri"] = self.proto + self.fqdn + "/oauth/callback"
 
         # Environment variable overrides for property lookup configuration
         if os.getenv("INDEXED_PROPERTIES"):

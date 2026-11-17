@@ -47,7 +47,7 @@ Web UI Routes (when with_web_ui(True))
 Authentication
 ==============
 
-- `/oauth`: OAuth2 callback and session handling (when configured via with_oauth)
+- `/oauth/callback`: OAuth2 callback and session handling (when configured via with_oauth); the other OAuth2 routes are under `/oauth/`
 - Web UI and protected routes enforce authentication according to configuration (basic or OAuth2)
 
 Base Paths

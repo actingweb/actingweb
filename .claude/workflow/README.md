@@ -9,7 +9,7 @@ for project rules that belong to one command only and would clutter
 .claude/workflow/release.md         # "after a follow-up push, stop; the user re-triggers CI"
 .claude/workflow/changelog.md       # "also add user-visible entries to frontend/src/data/whatsNew.ts"
 .claude/workflow/verify_implementation.md
-.claude/workflow/create_specs.md    # "this repository's sources: entry points, docs, tests, other checks"
+.claude/workflow/create_spec.md     # "this repository's sources: entry points, docs, tests, other checks"
 ```
 
 The two adapter agents read addenda too, under their own names:

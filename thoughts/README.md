@@ -27,7 +27,7 @@ list.
 | `research/` | What we found out — investigation, measurement, analysis, bug investigations, inbound triage | yes | `/research_codebase`, `/fix_bug` |
 | `plans/` | What we intend to do — phased implementation plans | yes | `/create_plan` |
 | `verifications/` | Evidence a plan actually landed | yes | `/verify_implementation` |
-| `specs/` | How each capability behaves today, for maintainers: one file (or directory) per capability, indexed in `specs/README.md` | no | `/create_specs` (backfill), `/verify_implementation` (merges each plan's Spec Delta) |
+| `specs/` | How each capability behaves today, for maintainers: one file (or directory) per capability, indexed in `specs/README.md` | no | `/create_spec` (backfill), `/verify_implementation` (merges each plan's Spec Delta) |
 | `reference/` | Durable knowledge — patterns, architecture, protocol flows | no | by hand |
 | `todo/` | Known work not yet scheduled | no | by hand |
 | `inbound/` | Reports from outside this repo, not yet triaged | no | whoever files one |
@@ -48,9 +48,9 @@ none of them is the spec. `reference/` holds knowledge about how the system
 is built (patterns, flows), which a spec leaves out on purpose.
 
 A spec changes through a plan's Spec Delta (merged at verification) or
-`/create_specs`, not by hand while the work is in flight. Format and rules:
+`/create_spec`, not by hand while the work is in flight. Format and rules:
 `~/.claude/shared/conventions.md` ("Living specs"); this repository's
-sources: `.claude/workflow/create_specs.md`.
+sources: `.claude/workflow/create_spec.md`.
 
 ### Dated vs undated is not cosmetic
 
@@ -222,7 +222,7 @@ point.
 **Tool-driven loop** — the `/` commands already implement this:
 
 ```
-/create_specs           → specs/README.md, specs/<capability>.md   (backfill, one capability per run)
+/create_spec            → specs/README.md, specs/<capability>.md   (backfill, one capability per run)
 /plan_feature           → features/YYYY-MM-DD-slug.md    (acceptance criteria; no status: only plans carry one)
 /research_codebase      → research/YYYY-MM-DD-slug.md
 /create_plan            → plans/YYYY-MM-DD-slug.md      (status: proposed; ACs, traceability, Spec Delta)
@@ -247,7 +247,7 @@ An inbound report that turns out to need a plan gets its own dated
   todo as a stub pointing at the plan (or delete it — the plan supersedes it).
 - Learned something durable about how the system works → `reference/slug.md`,
   updated in place forever. How a capability *behaves* is a spec statement
-  instead, and arrives through a plan's Spec Delta or `/create_specs`.
+  instead, and arrives through a plan's Spec Delta or `/create_spec`.
 - Investigated something and wrote it up → `research/`, even if no plan follows.
 - A report arrived from outside the repo → it lands in `inbound/`; triage it,
   file what survives verification, then delete the file.

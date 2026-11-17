@@ -17,7 +17,7 @@ as instructions, not prose. Per-command addenda live in
 The chain: `/plan_feature` → `/research_codebase` → `/create_plan` (or
 `/update_plan` before work starts) → `/implement_plan` →
 `/verify_implementation` → `/iterate_plan`. `/fix_bug` for bugs.
-`/create_specs` backfills the living specs in `thoughts/specs/`, one
+`/create_spec` backfills the living specs in `thoughts/specs/`, one
 capability at a time, when a plan needs one. A plan carries numbered
 acceptance criteria, each traced to a test, and a Spec Delta; it is built
 only after the owner's explicit approval (`approved:` in its frontmatter).
@@ -234,8 +234,8 @@ after merging. Tag the merge commit.
   developers and maintainers, indexed in `thoughts/specs/README.md`. A spec
   says how a capability behaves today, with the test, document or plan
   behind each statement; it changes through a plan's Spec Delta (merged by
-  `/verify_implementation`) or `/create_specs`. A plan that touches a
-  capability with no spec offers `/create_specs <capability>` first. Plans
+  `/verify_implementation`) or `/create_spec`. A plan that touches a
+  capability with no spec offers `/create_spec <capability>` first. Plans
   written up to and including `2026-11-16-3-16-pre-validation-fixes` carry
   no mergeable Spec Delta and merge nothing.
 - A plan's refinements after implementation go in its sibling

@@ -1,4 +1,4 @@
-# /create_specs addendum
+# /create_spec addendum
 
 These are this repository's sources, so the inventory does not have to find
 them. Confirm them with the owner like any other inventory result.

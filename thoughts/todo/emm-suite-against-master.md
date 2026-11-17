@@ -80,7 +80,7 @@ baseline's failures by name and nothing else:
   after entries 20 and 26): the same counts and names each time; and on
   `320925d` (entries 11 to 37 committed, the library worktree checked out
   at that commit): the same counts and names; and on `1a68f1d` (entries
-  38 to 41): the same counts and names. Emm's `properties` data hook sends its UI a
+  38 to 41) and `e6a8976` (entries 42 to 45): the same counts and names. Emm's `properties` data hook sends its UI a
   full-sync notification on `"resync"`: since this plan a poll that rebuilt
   the replica calls it (a quiet poll does not), and so does a callback that
   ran an owed rebuild.

@@ -1664,7 +1664,8 @@ class SubscriptionManager:
                 ):
                     # Owed from before, and nothing a poll can tell would
                     # hear it (no replica, no data hook): left owed for the
-                    # next callback, whose legacy hook does (3.16).
+                    # next callback, which runs it for the legacy hook, or
+                    # drops it when nobody hears (3.16).
                     result = ProcessResult.PROCESSED
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
@@ -2695,7 +2696,8 @@ class SubscriptionManager:
                 ):
                     # Owed from before, and nothing a poll can tell would
                     # hear it (no replica, no data hook): left owed for the
-                    # next callback, whose legacy hook does (3.16).
+                    # next callback, which runs it for the legacy hook, or
+                    # drops it when nobody hears (3.16).
                     result = ProcessResult.PROCESSED
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
@@ -2931,9 +2933,14 @@ class SubscriptionManager:
         from ..callback_processor import CallbackProcessor
         from .actor_interface import ActorInterface
 
-        CallbackProcessor(ActorInterface(self._core_actor)).settle_rebuild(
+        if not CallbackProcessor(ActorInterface(self._core_actor)).settle_rebuild(
             peer_id, subscription_id, rebuilt=False, restart_interval=False
-        )
+        ):
+            logger.warning(
+                f"Marking the rebuild of {peer_id}:{subscription_id} owed for a "
+                "resync marker lost every compare-and-swap; the rebuild runs "
+                "anyway"
+            )
         return self.rebuild_subscription(
             peer_id, subscription_id, config=config, force=True
         )

@@ -1042,14 +1042,14 @@ CHANGED
   rebuild settles, both are told the baseline once, with ``"resync"``; a
   rebuild that does not settle tells neither and answers 503, stays owed,
   and is told by the rebuild the next callback or poll runs after one
-  minute. Without ``auto_storage`` the same holds when a hook hears it (a
+  minute, to the hooks that path reaches (a poll tells data hooks only). Without ``auto_storage`` the same holds when a hook hears it (a
   data hook for the target or ``"*"``, or the legacy ``subscription``
   callback hook). A baseline another subscription's replica covers is not
   told. A callback whose own change was applied, or is queued, answers
   204 when a rebuild after it does not settle (that rebuild stays owed),
   unless the callback state store faults, which answers 503. What a poll
   does, a gap resync's included, reaches data hooks only; the legacy hook
-  hears callbacks and the callback path's rebuilds (use
+  hears the callbacks it processes and the callback path's rebuilds (use
   ``subscription_data_hook`` to hear every change). **Behavior change:** a data hook can
   be called with ``"resync"`` and the whole baseline in place of the diff
   that arrived, or right after it.
@@ -1374,11 +1374,13 @@ CHANGED
   whole value without ``resource``.
 
 - **Behavior change: a rebuild tells the data hooks its baseline,
-  wherever it runs.** A subscriber rebuilds from a baseline when a
+  wherever the library runs it.** A subscriber rebuilds from a baseline when a
   rebuild is owed (a resync whose fetch failed, a list diff the replica
   could not apply, a rebuild that did not settle), a resync marker is
-  polled, a poll is behind the publisher with nothing to fetch (as after a
-  gap resync), or a poll's diffs were all applied already. The data hooks
+  polled, or a poll is behind the publisher with nothing to fetch (as after
+  a gap resync); a poll whose diffs were all applied already refreshes the
+  replica from the baseline (with ``auto_storage``) and tells it the same
+  way. The data hooks
   heard nothing when a poll rebuilt or when a callback's own list diff
   caused the rebuild; they are now called once with the baseline, the
   sequence recorded and ``"resync"`` whenever the rebuild settled, also

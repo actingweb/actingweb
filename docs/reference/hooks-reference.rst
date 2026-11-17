@@ -229,8 +229,10 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
 - **A rebuild tells its baseline** (3.16). A subscriber rebuilds from the
   publisher's baseline when a rebuild is owed (a resync whose fetch failed,
   a list diff the replica could not apply, a rebuild that did not settle),
-  a resync marker is polled, a poll was behind the publisher with nothing
-  to fetch, or a poll's diffs were all applied already. A rebuild that
+  a resync marker is polled, or a poll was behind the publisher with
+  nothing to fetch. A poll whose diffs were all applied already refreshes
+  the replica from the baseline instead (with ``auto_storage``; no rebuild
+  is reserved) and tells it the same way. A rebuild that
   settled calls the hook once with the baseline, the sequence recorded and
   ``"resync"``, also after a list diff it was told first (the diffs after
   that one were never run, and the baseline is how it hears them). Not
@@ -247,9 +249,10 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   data hooks only. A poll cannot see the legacy hook, so with no replica
   and no data hook it leaves an owed rebuild for the next callback. A gap
   resync runs a poll on the callback path, and like any poll it tells
-  data hooks only. **The legacy ``subscription`` callback hook hears
-  callbacks and the rebuilds the callback path runs; what a poll does
-  does not reach it.** An application that must hear every change uses
+  data hooks only. **The legacy ``subscription`` callback hook hears the
+  callbacks it processes and the rebuilds the callback path runs; what a
+  poll does does not reach it** (nor a queued callback a gap resync
+  clears: its poll brings that change to data hooks only). An application that must hear every change uses
   ``subscription_data_hook``. A resync
   marker is only polled by a subscriber that gets no callbacks; with no
   replica and no data hook it is applied as an empty diff and tells

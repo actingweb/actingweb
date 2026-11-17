@@ -215,27 +215,31 @@ class CallbacksHandler(base_handler.BaseHandler):
         peer_id: str,
         subscription_id: str,
         subscription: dict[str, Any],
-    ) -> bool:
+    ) -> None:
         """Run the rebuild the processor answered REBUILD for (this
         callback's out-of-step list diff, or one owed from before) and tell
         its settled baseline to the hooks, unless another subscription's
         replica covers it (3.16: a settled rebuild always tells; the hooks
         may hear this callback's diff first). With nothing to rebuild and
-        nobody to tell, the debt is dropped instead. Returns whether the
-        rebuild settled (or was dropped); one that failed stays owed. The
-        callback answers as processed either way: the processor claims one
-        callback at a time, so its own change (or its place in the queue)
-        is kept."""
+        nobody to tell, the debt is dropped instead; one that failed stays
+        owed. The callback answers as processed either way: the delivered
+        callback heads the batch it is claimed in, so its own change is
+        applied (or it waits in the queue), and queued callbacks a stop
+        dropped behind it are carried by the rebuild."""
         from ..callback_processor import CallbackProcessor
         from ..interface.subscription_manager import SubscriptionManager
 
         target = subscription.get("target", "properties")
         try:
             if not self._hears_a_rebuild(config, target):
-                CallbackProcessor(actor_interface).settle_rebuild(
+                if not CallbackProcessor(actor_interface).settle_rebuild(
                     peer_id, subscription_id, rebuilt=True
-                )
-                return True
+                ):
+                    logger.warning(
+                        f"Dropping the rebuild of {peer_id}:{subscription_id} "
+                        "lost every compare-and-swap; it may still be owed"
+                    )
+                return
             rebuilt = SubscriptionManager(
                 actor_interface._core_actor  # noqa: SLF001
             ).rebuild_subscription(peer_id, subscription_id, config=config)
@@ -244,7 +248,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"Rebuild of {peer_id}:{subscription_id} failed: "
                     f"{rebuilt.error or 'unknown error'}; it stays owed"
                 )
-                return False
+                return
             if not rebuilt.baseline_skipped:
                 self._tell_subscription_hooks(
                     config,
@@ -256,12 +260,10 @@ class CallbacksHandler(base_handler.BaseHandler):
                     rebuilt.final_sequence,
                     "resync",
                 )
-            return True
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error during the replica rebuild: {e}", exc_info=True)
-            return False
 
     def _resync_fetch_failed(
         self,
@@ -281,9 +283,14 @@ class CallbacksHandler(base_handler.BaseHandler):
         if not owe:
             return
         try:
-            CallbackProcessor(actor_interface).settle_rebuild(
+            if not CallbackProcessor(actor_interface).settle_rebuild(
                 peer_id, subscription_id, rebuilt=False, restart_interval=False
-            )
+            ):
+                logger.warning(
+                    f"Marking the rebuild of {peer_id}:{subscription_id} owed "
+                    "after a failed resync fetch lost every compare-and-swap; "
+                    "it may not be owed"
+                )
         except DbError as e:  # folds DbError: the 503 stands; logged
             logger.error(
                 f"Could not mark the rebuild of {peer_id}:{subscription_id} "

@@ -184,3 +184,17 @@ changed. Not re-verified.
 
 **After entry 45:** Full tier: DynamoDB 8,071 passed, PostgreSQL 7,843
 passed, docs clean; no wire recording changed. Not re-verified.
+
+## 2026-11-17, after verification thoughts/verifications/2026-11-17-3-16-pre-validation-fixes-7.md
+
+Scope: its Low items 1 to 4 and 8 to 12 (owner: "fix the lows"). Items 5
+to 7 change behaviour and the verification's recommendation for each was
+to accept; they stay accepted, as recorded there.
+
+46. **[Verification fix] Leftovers of the last iterations** — `_run_rebuild_answer` returns nothing (its result was read by nobody since entry 38) and its docstring gives the literal reason the callback answers as processed (the delivered callback heads its batch; queued ones a stop dropped are carried by the rebuild); the poll's comment says the next callback runs a legacy-only debt or drops it when nobody hears; a debt write that loses every compare-and-swap is logged at each site (the failed resync fetch, dropping a debt nobody hears, the resync marker, covered subscriptions, and the maintenance tool, which now counts only marks that landed) (`actingweb/handlers/callbacks.py`, `actingweb/interface/subscription_manager.py`, `actingweb/actor.py`, `actingweb/maintenance/verify_property_lists.py`). Why: re-run 9, Issues 1 to 4. AC: none. Spec: none.
+47. **[Verification fix] Five doc sentences made exact** — the all-duplicates poll is a refresh with `auto_storage`, not a rebuild; "wherever the library runs it" (the public `rebuild_subscription()` tells no hook); no "as before" for the callback path's legacy hook; the legacy hook "hears the callbacks it processes" (not a queued one a gap resync clears); a rebuild that settles later is told "to the hooks that path reaches" (`hooks-reference.rst`, `v3.16.rst`, `CHANGELOG.rst`). Why: re-run 9, Issues 8 to 12. AC: none. Spec: none.
+
+**After the batch:** ruff, ruff format, pyright (0 errors) and the docs
+build clean. The Full tier was started and stopped at the owner's word
+(2026-11-17: "no need"); the last full run is on `e6a8976`, before these
+logging, return-value and documentation changes. Not re-verified.

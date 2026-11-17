@@ -4005,12 +4005,17 @@ class Actor:
         processor = CallbackProcessor(actor=ActorInterface(self))  # type: ignore[arg-type]
         for sub in covered:
             try:
-                processor.settle_rebuild(
+                if not processor.settle_rebuild(
                     peerid,
                     str(sub.get("subscriptionid") or ""),
                     rebuilt=False,
                     lists=[str(sub.get("subtarget") or "")],
-                )
+                ):
+                    logger.warning(
+                        f"Marking the replica of {peerid}:"
+                        f"{sub.get('subscriptionid')} for a rebuild lost every "
+                        "compare-and-swap; it may not be owed"
+                    )
             except Exception as e:  # folds DbError: best effort, delete committed
                 logger.warning(
                     f"Could not mark the replica of {peerid}:"

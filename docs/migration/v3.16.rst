@@ -2358,18 +2358,21 @@ what is stored, filtered by the subscriber's grant only. For a target other
 than ``properties`` the library has no store to read: pass the subtarget's
 whole value without ``resource``.
 
-**A rebuild tells the data hooks its baseline, wherever it runs.** A
+**A rebuild tells the data hooks its baseline, wherever the library runs
+it.** A
 subscriber rebuilds from the publisher's baseline when a rebuild is owed
 (a resync whose fetch failed, a list diff the replica could not apply, a
 rebuild that did not settle), a resync marker is polled, a poll is behind
-the publisher with nothing to fetch (as after a gap resync), or a poll's
-diffs were all applied already. A data hook was told nothing when a poll
+the publisher with nothing to fetch (as after a gap resync); a poll whose
+diffs were all applied already refreshes the replica from the baseline
+(with ``auto_storage``) and tells it the same way. A data hook was told
+nothing when a poll
 rebuilt, and nothing when a callback's own list diff caused the rebuild;
 it is now called once with the baseline, the sequence recorded and
 ``"resync"`` whenever the rebuild settled, also after the list diff it was
 told first: the diffs after that one were never run, and the rebuild
 clears them on the publisher. The legacy ``subscription`` callback hook
-hears it on the callback path, as before; a poll tells data hooks only.
+hears it on the callback path; a poll tells data hooks only.
 Not told: a quiet poll (nothing to fetch, and the recorded sequence level
 with the publisher's: its refresh is the state the hook already heard
 about), a baseline another subscription's replica covers (on every path;
@@ -2386,7 +2389,8 @@ callback after a failed
 resync fetch, telling its baseline. A poll leaves a rebuild only the
 legacy hook would hear for the next callback. What a poll does, a gap
 resync's included, reaches data hooks only: the legacy ``subscription``
-callback hook hears callbacks and the rebuilds the callback path runs, so
+callback hook hears the callbacks it processes and the rebuilds the
+callback path runs, so
 an application that must hear every change uses
 ``subscription_data_hook``. A rebuild that failed is
 attempted again after a minute, and a poll inside that minute fails with

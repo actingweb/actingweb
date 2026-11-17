@@ -1047,9 +1047,10 @@ CHANGED
   callback hook). A baseline another subscription's replica covers is not
   told. A callback whose own change was applied, or is queued, answers
   204 when a rebuild after it does not settle (that rebuild stays owed),
-  unless the callback state store faults, which answers 503. A gap resync
-  owes a rebuild when the legacy hook is registered, since its poll tells
-  data hooks only. **Behavior change:** a data hook can
+  unless the callback state store faults, which answers 503. What a poll
+  does, a gap resync's included, reaches data hooks only; the legacy hook
+  hears callbacks and the callback path's rebuilds (use
+  ``subscription_data_hook`` to hear every change). **Behavior change:** a data hook can
   be called with ``"resync"`` and the whole baseline in place of the diff
   that arrived, or right after it.
 - **Answers that follow the specification:** ``{"sequence": 0}`` clears

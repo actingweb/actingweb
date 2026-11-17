@@ -1230,20 +1230,6 @@ class SubscriptionManager:
             return app_config
         return SubscriptionProcessingConfig(enabled=True)
 
-    def _owe_rebuild(self, peer_id: str, subscription_id: str) -> None:
-        """Mark this subscription's rebuild owed, without restarting its
-        interval. Raises ``DbError`` on a fault."""
-        from ..callback_processor import CallbackProcessor
-        from .actor_interface import ActorInterface
-
-        if not CallbackProcessor(actor=ActorInterface(self._core_actor)).settle_rebuild(
-            peer_id, subscription_id, rebuilt=False, restart_interval=False
-        ):
-            logger.warning(
-                f"Owing the rebuild of {peer_id}:{subscription_id} lost every "
-                "compare-and-swap; it is not owed"
-            )
-
     def _rebuild_owed(self, peer_id: str, subscription_id: str) -> bool:
         """Whether this subscription's replica owes a rebuild (one that
         failed, or was marked). A read fault answers True: the rebuild then

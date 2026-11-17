@@ -164,3 +164,23 @@ in code).
 passed, PostgreSQL 7,842 passed, docs clean; no wire recording changed.
 `ruff format` then rewrapped one condition in `_owe_rebuild`; the four
 subscription test modules re-run green. Not re-verified.
+
+## 2026-11-17, after verification thoughts/verifications/2026-11-17-3-16-pre-validation-fixes-6.md
+
+Scope: its Issues 1 to 7.
+
+42. **[Verification fix] Entry 41's test change, made** — `test_a_rebuild_answer_nobody_hears_drops_the_debt` now owes first (`owe=True`) and fails with the drop removed (checked by removing it). Entry 41 claimed the change, but the script that made it replaced an argument an earlier step of the same script had already removed, and the replacement matched nothing without failing; the commit `1a68f1d` did not carry it. Why: re-run 8, Issue 1. AC: none. Spec: none.
+43. **[Decision changed] A gap resync with a legacy hook rebuilds there, instead of owing** — entry 40's debt could be settled by an application's poll, which tells data hooks only, so the legacy hook still missed the gap. The gap resync now runs `_run_rebuild_answer(force=True)` after its sync (forced past the interval its own poll's rebuild may have started; not twice when the replay already rebuilt), and tells every hook; a rebuild that fails stays owed. `_owe_rebuild` and its warning are gone; the lingering debt's side effects (a 429 on a behind poll, a withheld all-duplicates baseline) with it (`actingweb/handlers/callbacks.py`, `actingweb/interface/subscription_manager.py`, `hooks-reference.rst`, `CHANGELOG.rst`, `v3.16.rst`). Why: re-run 8, Issues 2, 3 and 4. Test: `tests/test_subscriber_receiver_1_5.py::test_the_gap_resync_rebuilds_and_tells_when_a_legacy_hook_hears` (five shapes, a `"*"` callback hook among them; the three with a hook red first). AC: none. Spec: none.
+44. **[Verification fix] The 204 for an unsettled REBUILD is pinned; the guide's behind-poll sentence** — `::test_an_unsettled_rebuild_answer_keeps_the_callback_and_the_debt`; "on a behind poll and on a polled resync marker (with a data hook)". Why: re-run 8, Issues 5 to 7. AC: none. Spec: none.
+
+**After the batch:** Full tier on the batch's tree: PostgreSQL 7,844
+passed; DynamoDB 8,071 passed and 1 error, the setup of
+`tests/performance/test_backend_performance.py::TestSpannedListPropertyPerformance::test_list_property_spanned_to_list`
+("too many rank collisions, retry later", list storage under the
+parallel run's load); run alone it passed three times of three, so a
+parallel-isolation flake, not this batch's. Docs clean; no wire recording
+changed. Not re-verified.
+45. **[Decision changed] The legacy hook is not served by polls; entry 43's forced rebuild is removed** — owner, 2026-11-17, after weighing the consumer consequence: no known consumer registers the legacy `subscription` callback hook (Emm and the demo use `subscription_data_hook`; the docs already steer to it), while entry 43 made every gap resync rebuild once more for any application with a `"*"` callback hook. The rule is stated instead: the legacy hook hears callbacks and the rebuilds the callback path runs; what a poll does, the gap resync's included, reaches data hooks only (`actingweb/handlers/callbacks.py`: the gap resync's rebuild and `_run_rebuild_answer`'s `force` removed; `hooks-reference.rst`, `CHANGELOG.rst`, `v3.16.rst`). Test: `tests/test_subscriber_receiver_1_5.py::test_the_gap_resync_runs_no_rebuild_for_the_legacy_hook` (four shapes, a `"*"` callback hook among them; replaces entry 43's). No todo is filed for polls telling the legacy hook: the owner judged the consequence too small for the design change. AC: none. Spec: none.
+
+**After entry 45:** Full tier: DynamoDB 8,071 passed, PostgreSQL 7,843
+passed, docs clean; no wire recording changed. Not re-verified.

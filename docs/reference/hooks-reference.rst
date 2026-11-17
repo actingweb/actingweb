@@ -246,9 +246,11 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   rebuild and tells both kinds of hook; a poll runs it too and tells the
   data hooks only. A poll cannot see the legacy hook, so with no replica
   and no data hook it leaves an owed rebuild for the next callback. A gap
-  resync runs a poll on the callback path, which tells data hooks only:
-  with a legacy hook registered it then owes a rebuild, which a later
-  callback (or the replayed callback) runs and tells every hook. A resync
+  resync runs a poll on the callback path, and like any poll it tells
+  data hooks only. **The legacy ``subscription`` callback hook hears
+  callbacks and the rebuilds the callback path runs; what a poll does
+  does not reach it.** An application that must hear every change uses
+  ``subscription_data_hook``. A resync
   marker is only polled by a subscriber that gets no callbacks; with no
   replica and no data hook it is applied as an empty diff and tells
   nobody. A poll called without a configuration uses the application's

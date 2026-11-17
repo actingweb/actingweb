@@ -1604,12 +1604,6 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"Resync completed: {sync_result.diffs_processed} diffs, "
                             f"sequence now at {sync_result.final_sequence}"
                         )
-                        if legacy_hook:
-                            # The poll told data hooks only: the legacy hook
-                            # missed the gap. Owe the rebuild, which a later
-                            # callback (or this one's replay) runs and tells
-                            # every hook (3.16).
-                            mgr._owe_rebuild(peer_id, subscription_id)  # noqa: SLF001
                         if (
                             isinstance(sequence, int)
                             and sync_result.final_sequence < sequence

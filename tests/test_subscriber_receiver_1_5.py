@@ -569,6 +569,7 @@ def _rebuild_answered(
     auto_storage: bool = True,
     data_hook: bool = True,
     legacy_hook: bool = False,
+    legacy_name: str = "subscription",
     result: ProcessResult = ProcessResult.REBUILD,
     sync_result: Any = None,
     owe: bool = False,
@@ -589,7 +590,7 @@ def _rebuild_answered(
     hooks = HookRegistry()
     if legacy_hook:
         hooks.register_callback_hook(
-            "subscription", lambda a, n, d: legacy.append(d["type"]) or True
+            legacy_name, lambda a, n, d: legacy.append(d["type"]) or True
         )
 
     def process(self: Any, **_: Any) -> ProcessResult:
@@ -654,37 +655,54 @@ def test_a_rebuild_answer_nobody_hears_drops_the_debt() -> None:
     """Re-run 6 (Issue 6): no replica and no hook: no rebuild runs, and
     the debt is dropped instead of answered again on every callback."""
     _, _, _, rebuild, actor = _rebuild_answered(
-        _synced(True, 3, {}), auto_storage=False, data_hook=False
+        _synced(True, 3, {}), auto_storage=False, data_hook=False, owe=True
     )
     rebuild.assert_not_called()
     assert _state(actor)["owed"] is False
 
 
+def test_an_unsettled_rebuild_answer_keeps_the_callback_and_the_debt() -> None:
+    """Re-run 8 (Issue 5): the callback's own change was applied (or is
+    queued), so a REBUILD whose rebuild does not settle answers 204, and
+    the rebuild stays owed."""
+    webobj, seen, _, rebuild, actor = _rebuild_answered(_synced(False, 0), owe=True)
+    rebuild.assert_called_once()
+    assert webobj.response.status_code == 204
+    assert [k for _, k in seen] == []
+    assert _state(actor)["owed"] is True
+
+
 @pytest.mark.parametrize(
-    "storage,data_hook,legacy_hook,owed",
+    "storage,data_hook,legacy_name",
     [
-        (False, False, True, True),
-        (True, True, True, True),
-        (True, False, False, False),
-        (False, True, False, False),
+        (False, False, "subscription"),
+        (True, True, "subscription"),
+        (True, False, "*"),
+        (True, False, None),
     ],
-    ids=["legacy only", "replica, data and legacy", "replica only", "data only"],
+    ids=["legacy only", "replica, data and legacy", "* callback hook", "replica only"],
 )
-def test_the_gap_resync_owes_a_rebuild_when_a_legacy_hook_hears(
-    storage: bool, data_hook: bool, legacy_hook: bool, owed: bool
+def test_the_gap_resync_runs_no_rebuild_for_the_legacy_hook(
+    storage: bool, data_hook: bool, legacy_name: str | None
 ) -> None:
-    """Re-run 6 (Issue 4), re-run 7 (Issue 1): the gap resync's poll tells
-    data hooks only, so a registered legacy hook never heard the gap,
-    whatever else the subscriber has. The rebuild is owed for it."""
-    _, _, _, _, actor = _rebuild_answered(
-        _synced(True, 9),
+    """Owner, 2026-11-17: the legacy ``subscription`` callback hook hears
+    callbacks and the rebuilds the callback path runs; what a poll does,
+    the gap resync's included, reaches data hooks only. No extra rebuild
+    and no debt for it, so an application with a ``"*"`` callback hook
+    pays nothing per gap timeout."""
+    webobj, _, legacy, rebuild, actor = _rebuild_answered(
+        _synced(True, 9, {"x": 1}),
         auto_storage=storage,
         data_hook=data_hook,
-        legacy_hook=legacy_hook,
+        legacy_hook=legacy_name is not None,
+        legacy_name=legacy_name or "subscription",
         result=ProcessResult.RESYNC_TRIGGERED,
         sync_result=_synced(True, 9),
     )
-    assert _state(actor)["owed"] is owed
+    assert webobj.response.status_code == 204
+    rebuild.assert_not_called()
+    assert legacy == []
+    assert _state(actor)["owed"] is False
 
 
 def _state(actor: Any) -> Any:

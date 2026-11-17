@@ -62,8 +62,25 @@ jobs:
 
             Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 
-            Read the diff with `gh pr diff ${{ github.event.pull_request.number }}`
-            and the files with the Read, Grep and Glob tools.
+            Scope: review the library code, the tests and the user-facing
+            docs. Do NOT read or comment on `thoughts/**`, `CLAUDE.md` or
+            `TODO.md`: they are internal planning records, reviewed
+            elsewhere, and are often the largest part of a PR.
+
+            Do not run a bare `gh pr diff`: it includes those files and is
+            too large to review well. Instead:
+            1. List what changed with
+               `gh pr diff ${{ github.event.pull_request.number }} --name-only`.
+            2. Read the diff one area at a time, in this order:
+               `git diff origin/${{ github.base_ref }}...HEAD -- actingweb`
+               then `-- tests`, then `-- docs CHANGELOG.rst README.rst`,
+               then any remaining changed paths from step 1 by name
+               (never `thoughts`).
+            3. Spend most of the effort on `actingweb/`. For `tests/`, check
+               that they cover the library changes and assert the right
+               thing, rather than reviewing them line by line.
+
+            Read the surrounding files with the Read, Grep and Glob tools.
 
             Post line-specific findings with
             `mcp__github_inline_comment__create_inline_comment`. Then post

@@ -21,9 +21,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+WRONG_CREDENTIALS = "Invalid username or password"
+"""The text of the 403 for a wrong creator or passphrase on Basic auth; the
+web UI keys its retry text on it (3.16)."""
+
 # The access table's pure functions live in access_table.py (3.16); named here
 # so ``from actingweb.auth import access_table_admits`` keeps working.
 __all__ = [
+    "WRONG_CREDENTIALS",
     "Auth",
     "access_table_admits",
     "add_auth_response",
@@ -163,12 +168,12 @@ class Auth:
         username = username.decode("utf-8")
         if not self.actor or username != self.actor.creator:
             self.response["code"] = 403
-            self.response["text"] = "Invalid username or password"
+            self.response["text"] = WRONG_CREDENTIALS
             logger.debug("Wrong creator username")
             return False
         if not self.actor or not secret_equals(password, self.actor.passphrase):
             self.response["code"] = 403
-            self.response["text"] = "Invalid username or password"
+            self.response["text"] = WRONG_CREDENTIALS
             logger.debug("Wrong creator passphrase")
             return False
         self.acl["relationship"] = "creator"

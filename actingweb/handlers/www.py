@@ -14,6 +14,7 @@ from actingweb.property_list import (
     handle_old_item_fields,
 )
 
+from ..auth import WRONG_CREDENTIALS
 from ..db.exceptions import DbError
 from ..trust import is_valid_peer_baseuri
 from .properties import list_length_hint, register_list_diff
@@ -128,7 +129,7 @@ class WwwHandler(base_handler.BaseHandler):
             if (
                 auth_obj is not None
                 and auth_obj.response["code"] == 403
-                and auth_obj.response["text"] == "Invalid username or password"
+                and auth_obj.response["text"] == WRONG_CREDENTIALS
                 and response is not None
                 and response.status_code == 403
                 and not response.body

@@ -29,7 +29,6 @@ from ..db.exceptions import DbError
 # MCP protocol version constants (single source of truth)
 from ..log_summary import summarize_payload
 from ..mcp.protocol import LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
-from ..oauth2_server.client_registry import ClientRegistrationError
 from .base_handler import BaseHandler
 
 if TYPE_CHECKING:
@@ -239,12 +238,10 @@ class OAuth2EndpointsHandler(BaseHandler):
                 return self._token_error(400, "invalid_client_metadata", str(e))
             except DbError:
                 raise
-            except ClientRegistrationError as e:
-                # 3.16: no trust row, no client. Fixed text: the cause, which
-                # can name the client or the actor, is logged only.
-                logger.error(f"Client registration failed: {e}")
-                return self.error_response(500, "Client registration failed")
             except Exception as e:
+                # Includes ClientRegistrationError (3.16: no trust row, no
+                # client). Fixed text: the cause, which can name the client
+                # or the actor, is logged only.
                 logger.error(f"Client registration failed: {e}")
                 return self.error_response(500, "Client registration failed")
 

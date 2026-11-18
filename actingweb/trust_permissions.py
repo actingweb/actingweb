@@ -344,8 +344,11 @@ class TrustPermissionStore:
             wait for the peer (which may be on the same server). With
             ``with_sync_callbacks()`` it is awaited before the call returns
             instead: a function platform may freeze after the response and
-            lose a background task. The wait is cut at
-            ``callback_delivery_budget_seconds`` when that is set.
+            lose a background task. With ``callback_delivery_budget_seconds``
+            set, the wait counts against the deadline the request's callbacks
+            use in the same context (a sync handler run in FastAPI's thread
+            pool works in a copy and starts its own): the peer exchange is
+            cut when it runs out, and nothing is sent when it already has.
         """
         success = self._store_permissions_internal(permissions)
 
@@ -364,21 +367,31 @@ class TrustPermissionStore:
                 # A function platform (``with_sync_callbacks()``) may freeze
                 # once the response is sent, and a background task with it:
                 # the peer is told before this returns (4.0), within the
-                # callback delivery budget when one is set.
-                from .callback_sender import settings_for
+                # callback delivery budget when one is set: what the
+                # request has left of the deadline its callbacks share.
+                from .callback_sender import _Deadline, settings_for
 
-                budget = settings_for(self.config).budget
-                if budget is None:
+                left = _Deadline.for_request(
+                    settings_for(self.config).budget
+                ).remaining()
+                if left is None:
                     await _notify_with_error_handling()
+                elif left <= 0:
+                    logger.warning(
+                        f"Permission notification for {permissions.actor_id} "
+                        f"to {permissions.peer_id} not sent: the request's "
+                        "callback delivery budget is spent; the peer catches "
+                        "up at its next sync_peer"
+                    )
                 else:
                     try:
-                        await asyncio.wait_for(_notify_with_error_handling(), budget)
+                        await asyncio.wait_for(_notify_with_error_handling(), left)
                     except TimeoutError:
                         logger.warning(
                             f"Permission notification for {permissions.actor_id} "
                             f"to {permissions.peer_id} cut by the callback "
-                            f"delivery budget ({budget}s); the peer catches up "
-                            "at its next sync_peer"
+                            f"delivery budget ({left:.1f}s left); the peer "
+                            "catches up at its next sync_peer"
                         )
             else:
                 # Fire-and-forget: the notification runs as a background

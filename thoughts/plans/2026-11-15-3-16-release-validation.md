@@ -1,5 +1,8 @@
 ---
 status: done
+verified: thoughts/verifications/2026-11-18-3-16-release-validation-reverify.md
+spec_merged: 2026-11-18
+iterations: thoughts/plans/2026-11-15-3-16-release-validation.iterations.md
 approved: 2026-11-18 by Greger Wedel
 ---
 

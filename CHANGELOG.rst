@@ -2952,8 +2952,12 @@ FIXED
   it returns. **Behavior change:** under ``with_sync_callbacks()`` the call
   waits for the peer's answer: up to three attempts (a 503 is resent, at
   most 2 seconds apart), each with a 10-second timeout per connect and
-  read, cut at ``callback_delivery_budget_seconds`` when that is set; a
-  cut notification is logged and the peer catches up at its next
+  read. With ``callback_delivery_budget_seconds`` set, the wait counts
+  against the per-request deadline the request's callbacks use, where both
+  run in the same context (a sync handler that FastAPI runs in its thread
+  pool starts its own): the peer exchange is cut when that deadline runs
+  out, and nothing is sent when it already has. A cut or
+  unsent notification is logged and the peer catches up at its next
   ``sync_peer``. Without it, nothing changes.
 
 - **A redirect sign-in created a refresh token nobody received.** With

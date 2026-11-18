@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-17 by thoughts/plans/2026-11-17-3-16-pre-rc1-fixes.md
+**Last changed:** 2026-11-18 by thoughts/plans/2026-11-15-3-16-release-validation.md
 **ID prefix:** MCP
 
 ## Summary
@@ -22,6 +22,18 @@ capabilities it advertises.
 - **MCP-2** — When the protected-resource document for `/mcp` is read, its
   `tools`, `prompts` and `resources` flags are true exactly for what the
   application registered. [plan+test] `tests/test_mcp_auth_challenge.py::test_the_protected_resource_document_reports_what_is_registered` (plans/2026-11-17-3-16-pre-rc1-fixes.md, AC-10)
+
+## Transport and tool listing
+
+- **MCP-3** — When an authenticated client sends `GET /mcp` with `Accept:
+  text/event-stream`, the server answers 405 with `Allow: POST` (it offers
+  no server-to-client stream); a plain authenticated `GET /mcp` still gets
+  the server's document. [plan+test]
+  `tests/integration/test_oauth2_flows.py::TestMCPWithIssuedToken::test_an_authenticated_stream_opener_gets_405` (plans/2026-11-15-3-16-release-validation.md)
+- **MCP-4** — When a tool is declared without `input_schema`, `tools/list`
+  lists it with `inputSchema: {"type": "object", "properties": {}}`; a
+  declared schema is listed as declared. [plan+test]
+  `tests/test_mcp_permissions.py::TestEveryToolHasAnInputSchema` (plans/2026-11-15-3-16-release-validation.md)
 
 ## Untested
 

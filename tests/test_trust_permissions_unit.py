@@ -674,6 +674,93 @@ class TestTrustPermissionStoreAsyncNotifications:
         create_task.assert_not_called()
         mock_notify.assert_awaited_once_with(permissions)
 
+    async def test_store_permissions_async_shares_the_request_deadline(self, caplog):
+        """Verification 2026-11-18, Issue 1: the wait counts against the
+        deadline the request's callbacks share (callback_sender's
+        ``_Deadline.for_request``), not a fresh budget. A request that has
+        spent it sends nothing and returns at once, and says so."""
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from actingweb import request_context
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        config._subscription_config = SubscriptionProcessingConfig(
+            callback_delivery_budget_seconds=5
+        )
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        async def slow_peer(_permissions):
+            await asyncio.sleep(5)
+
+        request_context.set_request_id("req-spent-budget")
+        # The request's callbacks used the whole budget already.
+        request_context.set_delivery_deadline(time.monotonic() - 0.1)
+        try:
+            started = time.monotonic()
+            with (
+                patch.object(store, "_store_permissions_internal", return_value=True),
+                patch.object(
+                    store, "_notify_peer_async", side_effect=slow_peer
+                ) as notify,
+                caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+            ):
+                assert await store.store_permissions_async(permissions) is True
+            assert time.monotonic() - started < 1
+        finally:
+            request_context.set_delivery_deadline(None)
+            request_context.set_request_id(None)
+        notify.assert_not_called()
+        assert "delivery budget" in caplog.text
+
+    async def test_store_permissions_async_waits_only_what_the_request_has_left(
+        self, caplog
+    ):
+        """Re-verification 2026-11-18, Issue 2: with 0.2 s left of a 5 s
+        budget, a slow peer holds the call for about 0.2 s, not the whole
+        budget."""
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from actingweb import request_context
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        config._subscription_config = SubscriptionProcessingConfig(
+            callback_delivery_budget_seconds=5
+        )
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        async def slow_peer(_permissions):
+            await asyncio.sleep(5)
+
+        request_context.set_request_id("req-partly-spent")
+        request_context.set_delivery_deadline(time.monotonic() + 0.2)
+        try:
+            started = time.monotonic()
+            with (
+                patch.object(store, "_store_permissions_internal", return_value=True),
+                patch.object(store, "_notify_peer_async", side_effect=slow_peer),
+                caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+            ):
+                assert await store.store_permissions_async(permissions) is True
+            assert time.monotonic() - started < 1
+        finally:
+            request_context.set_delivery_deadline(None)
+            request_context.set_request_id(None)
+        assert "cut by the callback delivery budget" in caplog.text
+
     async def test_store_permissions_async_cut_by_the_delivery_budget(self, caplog):
         """With ``with_sync_callbacks()`` and a delivery budget, a peer that
         does not answer in time does not hold the call past the budget."""

@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-17 by thoughts/plans/2026-11-17-3-16-pre-rc1-fixes.md
+**Last changed:** 2026-11-18 by thoughts/plans/2026-11-15-3-16-release-validation.iterations.md (entry 2)
 **ID prefix:** OCR
 
 ## Summary
@@ -30,6 +30,28 @@ cannot be created.
   `tests/test_client_registration_trust.py::test_a_fault_on_the_client_writes_raises_and_removes_the_trust_row`,
   `::test_a_fault_inside_trust_creation_after_its_row_removes_the_row` (plans/2026-11-17-3-16-pre-rc1-fixes.md, AC-7)
 
+## Deciding the level
+
+- **OCR-3** — When an application calls one of the OAuth2 server's entry
+  points (`complete_client_authorization()`, `handle_confirmation()`,
+  `handle_oauth_callback()`) without `decide_trust`, the application's
+  `oauth2_trust_requested` hooks decide: a hook that declines, or names
+  another level than the one the user approved, sends the client back with
+  `access_denied`; with no hook the requested level is granted if the
+  client list accepts it. [plan+test]
+  `tests/integration/test_oauth2_trust_binding.py::test_the_helper_asks_the_applications_decision_hook`,
+  `::test_a_confirmation_called_directly_asks_the_applications_decision_hook` (plans/2026-11-15-3-16-release-validation.md)
+- **OCR-4** — When a sign-in through `/oauth/callback` names `trust_type`
+  in its state, the application's `oauth2_trust_requested` hooks decide
+  (`confirmed=False`, no client id or name); a decline, an exception or
+  another type than the one requested creates no trust, and the user is
+  still signed in (a storage fault in a hook fails the sign-in). [plan+test]
+  `tests/test_spa_trust_type.py::test_a_sign_in_naming_a_trust_type_asks_the_decision_hook`,
+  `::test_another_type_declines_and_no_hook_keeps_the_request`,
+  `::test_the_callback_asks_the_hook_before_it_writes_the_trust` (through
+  `get()`) (plans/2026-11-15-3-16-release-validation.md; owner's decisions
+  2026-11-18; iterations entry 2)
+
 ## Decisions in force
 
 - **OCR-D1** — The trust row is written before the client row, so a client
@@ -37,4 +59,5 @@ cannot be created.
 
 ## Untested
 
-- None of the above.
+- OCR-3 through `handle_oauth_callback()` directly (it needs a provider's
+  code); it decides through the same `_decided_type`.

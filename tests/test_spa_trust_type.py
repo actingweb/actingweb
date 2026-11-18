@@ -95,3 +95,95 @@ def test_another_type_declines_and_no_hook_keeps_the_request() -> None:
     assert _decide(lambda actor, **info: "mcp_client") == "mcp_client"
     assert _decide(None) == "mcp_client"
     assert _decide(None, "admin") is None
+
+
+def _sign_in_through_get(hook: Callable[..., Any] | None) -> tuple[Any, mock.Mock]:
+    """``OAuth2CallbackHandler.get()`` for a sign-in whose state names
+    ``mcp_client``, with ``hook`` as the only ``oauth2_trust_requested``
+    hook. The trust write is replaced by a mock, which is returned."""
+    from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+    from actingweb.interface.hooks import HookRegistry, LifecycleEvent
+
+    config = mock.MagicMock()
+    config.proto = "https://"
+    config.fqdn = "test.example.com"
+    config.oauth2_provider = "google"
+    config.force_email_prop_as_creator = False
+    config.service_registry = None
+    config.actor_path.side_effect = lambda actor_id, path="": (
+        f"https://test.example.com/{actor_id}{path}"
+    )
+    auth = mock.MagicMock()
+    auth.is_enabled.return_value = True
+    auth.provider.name = "google"
+    auth.provider.mobile_deep_link = ""
+    auth.exchange_code_for_token.return_value = {
+        "access_token": "provider-at",
+        "expires_in": 3600,
+    }
+    auth.provider.extract_user_info_from_token_response.return_value = None
+    auth.validate_token_and_get_user_info.return_value = {
+        "sub": "u1",
+        "email": "u@example.test",
+        "email_verified": True,
+    }
+    auth.get_email_from_user_info.return_value = "u@example.test"
+    actor = mock.MagicMock()
+    actor.id = "actor-1"
+    actor.creator = "u@example.test"
+    auth.lookup_or_create_actor_by_identifier.return_value = actor
+    registry = HookRegistry()
+    if hook is not None:
+        registry.register_lifecycle_hook(
+            LifecycleEvent.OAUTH2_TRUST_REQUESTED.value, hook
+        )
+    state = json.dumps({"provider": "google", "trust_type": "mcp_client"})
+    webobj = AWWebObj(
+        url="https://test.example.com/oauth/callback?code=c&state=...",
+        params={"code": "c", "state": state},
+        body="",
+        headers={},
+        cookies={},
+    )
+    with (
+        mock.patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_authenticator",
+            return_value=auth,
+        ),
+        mock.patch(
+            "actingweb.handlers.oauth2_callback.create_oauth2_trust_relationship",
+            return_value=True,
+        ) as create_trust,
+        mock.patch(
+            "actingweb.permission_integration.client_trust_type_acceptable",
+            side_effect=lambda config, name: name in ("mcp_client", "viewer"),
+        ),
+    ):
+        handler = OAuth2CallbackHandler(webobj, config, hooks=registry)
+        handler.get()
+    return webobj, create_trust
+
+
+def test_the_callback_asks_the_hook_before_it_writes_the_trust() -> None:
+    """Verification 2026-11-18, Issue 2: the sign-in callback itself, not
+    only its decision method, asks the hook. A declining hook or another
+    type means the trust is never written; the user is still signed in."""
+
+    def signed_in(webobj: Any) -> bool:
+        # The sign-in completes as without a trust_type: a redirect to the
+        # actor's own page.
+        redirect = str(webobj.response.redirect or "")
+        return webobj.response.status_code == 302 and redirect.startswith(
+            "https://test.example.com/actor-1"
+        )
+
+    webobj, create_trust = _sign_in_through_get(lambda actor, **info: False)
+    create_trust.assert_not_called()
+    assert signed_in(webobj)
+    webobj, create_trust = _sign_in_through_get(lambda actor, **info: "viewer")
+    create_trust.assert_not_called()
+    assert signed_in(webobj)
+    webobj, create_trust = _sign_in_through_get(None)
+    create_trust.assert_called_once()
+    assert create_trust.call_args.args[2] == "mcp_client"
+    assert signed_in(webobj)

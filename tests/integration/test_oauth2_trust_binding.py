@@ -557,6 +557,37 @@ def test_the_helper_asks_the_applications_decision_hook(
     assert "code=" in granted["url"]
 
 
+def test_a_confirmation_called_directly_asks_the_applications_decision_hook(
+    flow: Flow,
+) -> None:
+    """The fallback sits where every entry point decides
+    (``_decided_type``): an application that answers a paused authorisation
+    through ``handle_confirmation`` without ``decide_trust`` gets its hooks
+    asked too, and a declining hook refuses the grant."""
+    from actingweb.interface.hooks import LifecycleEvent
+    from actingweb.oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+    _browser, token = flow.paused()
+    server = get_actingweb_oauth2_server(flow.host.config)
+    hooks = flow.host.config._hooks  # noqa: SLF001 - the application's registry
+    seen: list[dict[str, Any]] = []
+
+    def decline(actor: Any, **info: Any) -> bool:
+        seen.append(info)
+        return False
+
+    event = LifecycleEvent.OAUTH2_TRUST_REQUESTED.value
+    hooks.register_lifecycle_hook(event, decline)
+    try:
+        answer = server.handle_confirmation(token, True)
+    finally:
+        hooks._lifecycle_hooks[event].remove(decline)  # noqa: SLF001
+
+    assert len(seen) == 1 and seen[0]["confirmed"] is True
+    assert "error=access_denied" in answer["url"]
+    assert flow.user_rows() == []
+
+
 def test_a_form_posted_without_its_nonce_is_named_once(
     flow: Flow, caplog: pytest.LogCaptureFixture
 ) -> None:

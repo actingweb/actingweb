@@ -44,6 +44,10 @@ PERMISSION_CALLBACK_RESENDS = 2
 PERMISSION_CALLBACK_RESEND_WAIT = 1.0
 PERMISSION_CALLBACK_RESEND_WAIT_CAP = 2.0
 
+# Background permission notifications still running (see
+# ``store_permissions_async``).
+_NOTIFY_TASKS: set[asyncio.Task[None]] = set()
+
 
 def _retry_after(value: str | None) -> float:
     """Seconds to wait before a resend: the receiver's ``Retry-After`` in
@@ -336,13 +340,16 @@ class TrustPermissionStore:
             don't affect the return value.
 
         Performance Notes:
-            Async version: Notification is fire-and-forget using background task.
-            This prevents blocking when the peer is on the same server.
+            The notification runs as a background task, so the call does not
+            wait for the peer (which may be on the same server). With
+            ``with_sync_callbacks()`` it is awaited before the call returns
+            instead: a function platform may freeze after the response and
+            lose a background task. The wait is cut at
+            ``callback_delivery_budget_seconds`` when that is set.
         """
         success = self._store_permissions_internal(permissions)
 
         if success and self._should_notify_peer(notify_peer):
-            # Fire-and-forget: schedule notification as background task
 
             async def _notify_with_error_handling():
                 try:
@@ -353,7 +360,33 @@ class TrustPermissionStore:
                         exc_info=True,
                     )
 
-            asyncio.create_task(_notify_with_error_handling())
+            if getattr(self.config, "sync_subscription_callbacks", False):
+                # A function platform (``with_sync_callbacks()``) may freeze
+                # once the response is sent, and a background task with it:
+                # the peer is told before this returns (3.16), within the
+                # callback delivery budget when one is set.
+                from .callback_sender import settings_for
+
+                budget = settings_for(self.config).budget
+                if budget is None:
+                    await _notify_with_error_handling()
+                else:
+                    try:
+                        await asyncio.wait_for(_notify_with_error_handling(), budget)
+                    except TimeoutError:
+                        logger.warning(
+                            f"Permission notification for {permissions.actor_id} "
+                            f"to {permissions.peer_id} cut by the callback "
+                            f"delivery budget ({budget}s); the peer catches up "
+                            "at its next sync_peer"
+                        )
+            else:
+                # Fire-and-forget: the notification runs as a background
+                # task, referenced until done (the loop keeps only a weak
+                # reference to a task).
+                task = asyncio.create_task(_notify_with_error_handling())
+                _NOTIFY_TASKS.add(task)
+                task.add_done_callback(_NOTIFY_TASKS.discard)
 
         return success
 

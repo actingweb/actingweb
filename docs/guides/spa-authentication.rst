@@ -322,8 +322,11 @@ The OAuth callback flow works in two stages for SPAs:
 After the user authenticates with Google/GitHub, the OAuth provider redirects the browser
 to ``/oauth/callback``. When the server detects SPA mode (via ``spa_mode: true`` in state),
 it completes the sign-in there (an authorization code can be used once), keeps the
-result as a pending session, sets the refresh cookie, and redirects the browser to your
-SPA's ``redirect_uri`` (e.g., ``/callback``) with the session's id:
+result as a pending session, and redirects the browser to your SPA's ``redirect_uri``
+(e.g., ``/callback``) with the session's id. With ``token_delivery: "hybrid"`` it also
+sets the refresh token as an HttpOnly cookie; fetching the pending session never
+returns a refresh token, so with ``json`` or ``cookie`` delivery a redirect sign-in
+yields an access token only, and the SPA signs in again when it expires:
 
 .. code-block:: text
 
@@ -334,8 +337,9 @@ SPA's ``redirect_uri`` (e.g., ``/callback``) with the session's id:
 **Stage 2: SPA Fetches the Session**
 
 Your SPA callback page then fetches the pending session (see
-``GET /oauth/spa/session/<session_id>`` in the API reference below; the route is
-registered by the FastAPI integration):
+``GET /oauth/spa/session/<session_id>`` in the API reference below). The route is
+registered by the FastAPI integration only: a Flask application uses the fetch-based
+flow of the note below, or registers the route itself.
 
 .. code-block:: javascript
 

@@ -66,6 +66,12 @@ on a running event loop. Off the loop (Flask, FastAPI's sync handlers) every
 write already waits for its callbacks; on a running loop, the setting blocks
 the loop while they are sent, so leave it off there.
 
+One thing the setting does not cover: an ``async`` subscription data hook
+run by a poll made on the event loop (from an ``async`` route) is started
+as a task and not awaited, with or without ``with_sync_callbacks()``. On a
+function platform, register that hook as a plain function, or poll off
+the loop.
+
 **The startup check on a function platform:**
 
 ``integrate_flask`` and ``integrate_fastapi`` run ``check_ready()`` when they
@@ -83,6 +89,13 @@ initialisation. What the check does on DynamoDB:
 - with creator uniqueness on (the default), one consistent ``GetItem`` on
   ``<prefix>_creators``;
 - with ``with_email_as_creator``, one read of its readiness marker.
+
+That is the ready case. On a store with no properties yet the reverse-lookup
+check also scans the properties table and writes its backfill-complete
+markers, and when the configured names changed it writes the new set, so a
+role sized from the list above is refused there; size it for the first
+start, or run ``actingweb-property-lookup`` from the operator's credentials
+first.
 
 A check that passed is not repeated in that process. A store that is not
 ready raises ``StoreNotReady`` out of ``integrate_*``, and so does a read
@@ -281,7 +294,11 @@ Then:
   application's running processes: they keep the permissions they cached
   until they are restarted. Where there is no process to restart (a
   function platform that keeps instances warm), make the platform start new
-  instances.
+  instances. On AWS Lambda, update the function's code or configuration (a
+  changed environment variable will do); invocations then run in new
+  instances. Where traffic goes through an alias, point the alias at a
+  version published after that change: publishing a version alone does
+  not move it.
 
 Run ``creator-to-email`` again after a restore or after any period
 with the email flag off. :doc:`../migration/v3.16` gives the details.

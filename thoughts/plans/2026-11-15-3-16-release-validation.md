@@ -194,6 +194,20 @@ phase's verification names the items it closes.
   no longer "the next major" but a measured one (the todo has it).
 - **No item of `dynamodb-known-next` rides** (owner, 2026-11-18) - the file
   notes that item 3 needs neither the scheme nor a major.
+- **The wire appendix stays local until the release is out** (owner,
+  2026-11-18) - `thoughts/research/2026-11-18-3-16-release-validation.wire.md`
+  cites `v3.15.1` file and line for each security-traced difference while
+  PyPI and the public demo still run that code. It is taken out of the
+  branch before the PR is pushed and committed after the stable tag, as
+  the earlier security records were.
+- **The major rule means "by an unchanged application"** (owner,
+  2026-11-18) - `CONTRIBUTING.rst` says so.
+- **The two owner-run checks of item 7 use the codex and claude CLIs where
+  they can** (owner, 2026-11-18) - the Agent Skill run is a fresh
+  `claude -p` session (and a `codex exec` one) in a scratch repository,
+  started from here; the MCP quickstart needs a real OAuth client and a
+  browser sign-in, so the owner runs that one when the rest of Phase 3 is
+  done.
 - **Every difference the live pair and the code reading found is accepted**
   (owner, 2026-11-18) - the one observed break (a second trust request from
   a 3.15.1 application) traces to a `SECURITY` entry; a spanned reference
@@ -410,17 +424,17 @@ research note or the verification document.
 | AC-7 | 4 | manual: the rollback section read against the inventory's "irreversible" rows | Not run |
 | AC-8 | 2 | manual: the question list in the research note, each with the location that answers it; the adoption worktree's diff as the cross-check | Not run |
 | AC-9 | 2 | the tests the usage-to-test matrix names, existing and new; each new test is added to this row when written, with the Emm call site it protects | Not run |
-| AC-10 | 2, 4 | manual: Emm's suite in environment 9 (both lanes), failures compared by name with Phase 1's baseline (another repository's suite) | Not run |
-| AC-11 | 3 | `tests/integration/test_demo_first_run.py::test_readme_first_run_sequence` | Not run |
-| AC-12 | 3 | manual: the browser walk in local QA mode on a fresh database (a rendered UI) | Not run |
-| AC-13 | 3 | manual: `actingwebdemo`'s test line in a worktree of it (another repository's suite) | Not run |
+| AC-10 | 2, 4 | manual: Emm's suite in environment 9 (both lanes), failures compared by name with Phase 1's baseline (another repository's suite) | Passing on Phase 3's tree: the baseline's five by name, nothing new (note, "Emm's suite after Phase 3"); repeated in Phase 4 |
+| AC-11 | 3 | `tests/integration/test_demo_first_run.py::test_readme_first_run_sequence` | Passing |
+| AC-12 | 3 | manual: the browser walk in local QA mode on a fresh database (a rendered UI) | Done: no error on any step, clean console; the UI has no subscription page (covered by the wire rows); six Low wording items, four fixed (note, "The demo walked in a browser") |
+| AC-13 | 3 | manual: `actingwebdemo`'s test line in a worktree of it (another repository's suite) | Done: 5 passed and pyright clean after the README's `enable --apply` on a fresh store (the start-up check stops it before); its ruff 0.14 pin trips on the vendored tests, its own adoption work (note, "`actingwebdemo` against this branch") |
 | AC-14 | 1, 2 | manual: the live pair's table, 18 cells (two versions cannot share the test process) | Done 2026-11-18: 18 of 18 complete; every difference has the owner's outcome (accept) |
 | AC-15 | 2 | `tests/integration/test_wire_v315.py`, one test per row of the table marked "kept" or "restored"; each is added to this row when written | Passing on both backends, twice each (2026-11-18): `test_wv1_data_callback`, `test_wv2_resync_callback`, `test_wv3_nested_write`, `test_wv4_second_trust_request` (rows `WV1` to `WV4`). No row is "kept" or "restored" (owner); these pin the forms a 3.15.1 peer sent in the live pair, and the one refusal |
 | AC-16 | 4 | manual: the section read against the table and the inventory's rolling-deploy rows; docs build | Not run |
-| AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Not run |
-| AC-18 | 3 | manual: one fresh agent session in the scratch repository, started by the owner | Not run |
-| AC-19 | 3 | manual: the same session; the application is started, not only written | Not run |
-| AC-20 | 3 | `tests/test_docs_api_consistency.py::test_taught_names_are_not_removed` (`README.rst`, `skills/`, `examples/`, `docs/` outside `migration/`, with the allow-list of pages that name a removed option on purpose) | Not run |
+| AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Waits on the owner ("I can do it when it's right"); before the rc tag |
+| AC-18 | 3 | manual: one fresh agent session in the scratch repository, started by the owner | Done, run through the claude and codex CLIs at the owner's request: both read `SKILL.md` first (codex only after its front matter was fixed; `tests/test_agent_skill.py`) |
+| AC-19 | 3 | manual: the same session; the application is started, not only written | Done: both started it through the first-run sequence with the defaults kept and showed the hook's result over REST |
+| AC-20 | 3 | `tests/test_docs_api_consistency.py::test_taught_names_are_not_removed` (`README.rst`, `skills/`, `examples/`, `docs/` outside `migration/`; a name is excused only within two lines of a sentence saying it is removed or deprecated, instead of the planned allow-list of pages, so a new page that names a removed option on purpose needs no list entry) | Passing |
 | AC-21 | 4 | `tests/test_version_consistency.py` (both tests) | Not run |
 | AC-22 | 1, 4 | the wire suite in the Full tier, run after the bump commit | Phase 1: the eight recordings pass with the version set to `9.9.9`; run again after the bump |
 | AC-23 | 1 | manual: the rule read in `CONTRIBUTING.rst` and CLAUDE.md "Release" | Done 2026-11-18 |
@@ -439,7 +453,17 @@ iterations log.
 
 ### `thoughts/specs/trust-permissions.md`
 
-- None yet.
+- **ADDED** — When an application with `with_sync_callbacks()` stores a
+  trust's permission override through `store_permissions_async`, the peer
+  is told before the call returns; without the setting it is told by a
+  background task. With `callback_delivery_budget_seconds` set, the wait
+  ends at the budget and the cut is logged. [test]
+  `tests/integration/test_consumer_sdk_calls.py::test_store_permissions_async_tells_the_peer_before_returning_when_sync`,
+  `tests/test_trust_permissions_unit.py::TestTrustPermissionStoreAsyncNotifications`
+  (`::test_store_permissions_async_calls_notify_peer_async`,
+  `::test_store_permissions_async_awaits_the_peer_when_sync`,
+  `::test_store_permissions_async_cut_by_the_delivery_budget`)
+  (Phase 3, owner's decision 2026-11-18.)
 
 ### `thoughts/specs/subscriptions.md`
 
@@ -455,15 +479,19 @@ iterations log.
 
 ### `thoughts/specs/oauth-client-registration.md`
 
-- **ADDED** — When an application's own sign-in route calls
-  `complete_client_authorization()` without `decide_trust`, the
-  application's `oauth2_trust_requested` hooks decide: a hook that
-  declines, or names another level than the one the user approved, sends
-  the client back with `access_denied`; with no hook the requested level
-  is granted if the client list accepts it. [test]
-  `tests/integration/test_oauth2_trust_binding.py::test_the_helper_asks_the_applications_decision_hook`
-  (Phase 2: found by walking the upgrade as a consumer; the documents
-  already said so, the code did not.)
+- **ADDED** — When an application calls one of the OAuth2 server's
+  entry points (`complete_client_authorization()`, `handle_confirmation()`,
+  `handle_oauth_callback()`) without `decide_trust`, the application's
+  `oauth2_trust_requested` hooks decide: a hook that declines, or names
+  another level than the one the user approved, sends the client back
+  with `access_denied`; with no hook the requested level is granted if the
+  client list accepts it. [test]
+  `tests/integration/test_oauth2_trust_binding.py::test_the_helper_asks_the_applications_decision_hook`,
+  `::test_a_confirmation_called_directly_asks_the_applications_decision_hook`
+  (`handle_oauth_callback()` decides through the same `_decided_type`; no
+  direct test, it needs a provider's code). (Phases 2 and 3: found by
+  walking the upgrade as a consumer; the documents already said so for
+  the helper, the code did not.)
 
 ## Rules for every phase
 
@@ -840,10 +868,10 @@ phase.
   change of the plan so far; the helper is new in this release, so there
   is no changelog entry for a fix (its `ADDED` entry and the guide already
   said what it now does).
-- **With the owner**: `store_permissions_async` tells the peer through a
-  background task whatever `with_sync_callbacks()` says; on a function
-  platform the task may not run. Put to the owner on 2026-11-18; not
-  changed.
+- **`store_permissions_async` on a function platform**: it told the peer
+  through a background task whatever `with_sync_callbacks()` said. Fixed
+  in Phase 3 on the owner's decision (2026-11-18): under the setting the
+  notification is awaited.
 - **Docs written here** (nine files, each sentence read against the code):
   the creators table when tables are declared in a template, the after-deploy
   list, the start-up check on a function platform, where the operator
@@ -955,17 +983,96 @@ phase.
 
 ### Verification
 
-- [ ] Item 5: the first-run test passes, the walk is clean, the
+- [x] Item 5: the first-run test passes, the walk is clean, the
   `actingwebdemo` runbook is complete and its tests pass against this
   branch
-- [ ] Item 7: the quickstart and the skill run are done, or each names the
+- [x] Item 7: the quickstart and the skill run are done, or each names the
   resource it still waits on; the content is checked against the release
-- [ ] The Full tier, if code or tests changed (they did if the first-run
-  test was added)
-- [ ] Emm's suite, if `actingweb/` changed since its last run
-- [ ] Everything started is stopped; the redirect URI is removed
+  (the skill run done; the quickstart waits on the owner and a real OAuth
+  client)
+- [x] The Full tier, if code or tests changed (green after the review's
+  fixes: 8,151 passed on DynamoDB, 7,923 on PostgreSQL, docs built)
+- [x] Emm's suite, if `actingweb/` changed since its last run (on the
+  phase's tree before the review's fixes; Phase 4 runs it again)
+- [x] Everything started is stopped; the redirect URI is removed (no
+  redirect URI was added: the quickstart has not run)
 
-### Implementation Status: Not Started
+### Notes from implementing (2026-11-18)
+
+- **First run (AC-11).** `test_demo_first_run.py` runs the README's three
+  steps as subprocesses on a fresh prefix and a free port, not through
+  Flask's test client: the demo refuses QA mode outside `__main__`, so the
+  test starts it as the development server it is documented as. Its tables
+  are dropped in `finally`.
+- **The walk (AC-12)** ran headless (`chrome-headless-shell`) on
+  `localhost:5055`. No error on any step; the demo's UI has no
+  subscription page, so subscriptions are covered by the wire rows and the
+  live pair instead. Six Low wording items; four fixed (the demo's
+  factory, created and trust templates, and "1 item" in
+  `actingweb/handlers/www.py`), two left with the reason in the note.
+- **`actingwebdemo` (AC-13)** passes against this branch once the README's
+  `enable --apply` has run; its ruff pin and its IAM role are its own
+  adoption work. Its runbook found three gaps in the guide, fixed in
+  `docs/migration/v3.16.rst` and `docs/quickstart/deployment.rst`.
+- **The skill (AC-18, AC-19)** was run through the claude and codex CLIs
+  at the owner's request (2026-11-18), not by a session the owner starts.
+  Codex could not load the skill: its front matter was invalid YAML since
+  #136 (Claude Code is lenient). Fixed, with `tests/test_agent_skill.py`
+  seen failing first and a `FIXED` changelog entry. Before the fix, Codex
+  finished the task by switching uniqueness and reverse lookup off; with
+  it, both agents kept the defaults and ran the first-run sequence.
+- **Two library defects** found while closing Phase 2's review are fixed
+  in this phase: `store_permissions_async` now honours
+  `with_sync_callbacks()` (owner: "fix it"), and the OAuth2 server's
+  decision-hook fallback sits in `_decided_type`, so every entry point
+  without a `decide_trust` asks the application's hooks.
+- **The content (AC-20).** `test_taught_names_are_not_removed` scans
+  `README.rst`, `skills/`, `examples/` and `docs/` outside `migration/`;
+  both quickstarts keep their own tests.
+- **Outside voice on the phase's diff** (codex and a fresh-context claude,
+  16 findings, none High). Acted on:
+  - the awaited permission notification is cut at
+    `callback_delivery_budget_seconds` when set, and the changelog states
+    the real bound (three attempts, 10 s timeouts, at most 2 s apart);
+    unit tests for the background, awaited and budget branches (the
+    budget one seen failing first), and the unit tests' bare `Mock`
+    config, which made the awaited branch run everywhere, says which mode
+    it is in;
+  - the background notification task is referenced until done;
+  - the decision-hook fallback has a second test, through
+    `handle_confirmation`, seen failing first; the Spec Delta names all
+    three entry points;
+  - the capabilities test checks the store's copy names the peer's method
+    (the comparison it had before read the same row twice, so it could
+    not fail); the accessors test grants `*` so that `private/*` being
+    refused shows the exclusion beats a grant;
+  - `test_demo_first_run.py` stops the development server's whole process
+    group (the reloader child too), kills it if it does not exit, logs to
+    a file instead of an unread pipe, pages the table listing and reports
+    a failed drop without hiding an earlier failure. It is coverage for
+    AC-11, not a regression test: the sequence worked before this phase;
+  - wording: Lambda's new instances (a published version alone does not
+    move an alias), 3.15 processes under the PostgreSQL index (the write
+    is refused and logged, renames too), the SPA pending session (its
+    fetch returns no refresh token), the async data hook a poll on the
+    loop starts as a task whatever `with_sync_callbacks()` says
+    (`deployment.rst`), the AC-20 row, `CLAUDE.md`'s major rule worded as
+    `CONTRIBUTING.rst`'s, and `CONTRIBUTING.rst`'s two `git push --tags`
+    lines (tags are pushed by name);
+  - `pyyaml` declared in the dev group (`tests/test_agent_skill.py`);
+  - "1 item" got a changelog line.
+  Not acted on: a refresh token the SPA redirect sign-in mints and keeps
+  in the pending session although `json` and `cookie` delivery never hand
+  it out. It predates this plan and is sign-in code, so it goes to the
+  owner with the SPA `trust_type` question.
+- **Waits on the owner:** the MCP quickstart with a real OAuth client
+  ("I can do it when it's right"). Context7 waits on the stable tag, as
+  planned.
+
+### Implementation Status: Complete
+
+Complete on 2026-11-18 except the MCP quickstart, which waits on the owner
+(AC-17's row says so); it is run before the rc tag.
 
 ---
 

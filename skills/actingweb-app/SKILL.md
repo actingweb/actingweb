@@ -1,8 +1,11 @@
 ---
 name: actingweb-app
-description: Build applications on top of the ActingWeb library (pip install actingweb) -- per-user "actor" services with MCP tools, trust relationships, and peer-to-peer subscriptions. Ideal batteries-included library to quickly develop applications that
-are focused on indvidual users and are AI-native, security- and privacy-sensitive,
-and that may need sharing across users.
+description: >-
+  Build applications on top of the ActingWeb library (pip install actingweb) --
+  per-user "actor" services with MCP tools, trust relationships, and
+  peer-to-peer subscriptions. Ideal batteries-included library to quickly
+  develop applications that are focused on individual users and are AI-native,
+  security- and privacy-sensitive, and that may need sharing across users.
 ---
 
 # ActingWeb application development
@@ -87,6 +90,23 @@ docker run -p 8000:8000 amazon/dynamodb-local
 export AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
 export AWS_DB_HOST=http://localhost:8000
 ```
+
+**The first start of a fresh database stops on purpose.** Creator uniqueness
+is on by default, so `integrate_fastapi()` / `integrate_flask()` raise
+`UniqueCreatorNotReady` until it has been enforced on the store. Start the
+application once (on DynamoDB with table auto-creation on, that start creates
+the tables, then stops), run the command the error names, and start again:
+
+```bash
+python app.py                              # stops: UniqueCreatorNotReady
+actingweb-unique-creators enable --apply   # same environment variables
+python app.py                              # serves
+```
+
+On PostgreSQL run `alembic upgrade head` first (it creates the tables), then
+`actingweb-unique-creators enable --apply`, then start. An application that
+does not want one actor per creator opts out with
+`.with_unique_creator(False)`.
 
 `.with_devtest(True)` turns on a `/<actor_id>/devtest` helper endpoint for
 poking at an actor during manual testing -- it still requires
@@ -380,10 +400,13 @@ if actor is None:
     ...  # no actor has this property value
 ```
 
-**Gotcha**: for this to scale beyond a full table scan, enable indexed
-lookup tables: `app.with_indexed_properties(["email", "externalUserId"])`.
-See https://actingweb.readthedocs.io/en/latest/docs/quickstart/configuration.html
-for the migration guide from the legacy DynamoDB GSI-based lookup.
+**Gotcha**: only indexed property names can be looked up. `oauthId`,
+`email` and `externalUserId` are indexed by default; name your own with
+`app.with_indexed_properties(["email", "externalUserId", "customerId"])`.
+A name added later on a store that already has data needs
+`actingweb-property-lookup backfill --apply` before the application starts
+(it refuses with `PropertyLookupNotReady` until then). See
+https://actingweb.readthedocs.io/en/latest/docs/quickstart/configuration.html
 
 ## See also
 

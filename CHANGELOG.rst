@@ -2914,6 +2914,32 @@ ADDED
 FIXED
 ~~~~~
 
+- **A permission change made with ``store_permissions_async`` could fail to
+  reach the peer on a function platform.** The peer was told by a background
+  task whatever ``with_sync_callbacks()`` said, and a platform that freezes
+  the process after the response (AWS Lambda) could freeze it before the
+  task ran; the peer's copy then stayed stale until its next ``sync_peer``.
+  With ``with_sync_callbacks()`` the call now awaits the notification before
+  it returns. **Behavior change:** under ``with_sync_callbacks()`` the call
+  waits for the peer's answer: up to three attempts (a 503 is resent, at
+  most 2 seconds apart), each with a 10-second timeout per connect and
+  read, cut at ``callback_delivery_budget_seconds`` when that is set; a
+  cut notification is logged and the peer catches up at its next
+  ``sync_peer``. Without it, nothing changes.
+
+- **The Agent Skill did not load in Codex.** The ``description`` in
+  ``skills/actingweb-app/SKILL.md`` ran onto unindented lines, which is not
+  valid YAML; Claude Code read it anyway, Codex dropped the skill with
+  "invalid YAML". It is now a folded block, and a test parses every skill's
+  front matter as strict YAML. If you copied the skill into your
+  repository, copy it again.
+
+- **The web UI said "List with 1 items".** A one-item list now reads "1
+  item", in the properties page and in the property value a template
+  receives for a list (``[List with 1 item]``); other counts are
+  unchanged. A custom template that matches on that text sees the new
+  wording for one item.
+
 - **A callback that arrived while the previous one was being processed
   stayed queued until later traffic.** A subscriber that received callback
   N+1 while N was still being handled queued it, and nothing took it from

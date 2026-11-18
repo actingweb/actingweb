@@ -18,7 +18,6 @@ import asyncio
 from typing import Any
 
 import pytest
-import requests
 
 from ._wire import Scenario, wait_until
 from .test_wire_peer_paths import _put, _replica, _subid
@@ -120,9 +119,8 @@ def test_cached_peer_capabilities_name_the_peers_methods_and_actions(wire_pair):
     assert through_manager is not None
     assert through_store is not None
     assert "wire_ping" in {m.name for m in through_manager.methods}
-    assert {m.name for m in through_store.methods} == {
-        m.name for m in through_manager.methods
-    }
+    # Not a comparison with the manager's copy: both read the same row.
+    assert "wire_ping" in {m.name for m in through_store.methods}
     assert through_store.fetched_at
 
 
@@ -168,6 +166,48 @@ def test_store_permissions_async_reaches_the_peers_copy(wire_pair):
     received = copy()
     assert received is not None
     # The copy is the grant as it holds (the override on the trust type).
+    assert "memory_notes" in (received.properties or {}).get("patterns", [])
+
+
+def test_store_permissions_async_tells_the_peer_before_returning_when_sync(
+    wire_pair,
+):
+    """With ``with_sync_callbacks()`` (a function platform freezes after the
+    response) the peer is told before the call returns: a background task
+    would be lost with the loop. That it stays a background task without
+    the setting is ``tests/test_trust_permissions_unit.py``."""
+    from actingweb.peer_permissions import get_peer_permission_store
+    from actingweb.trust_permissions import (
+        TrustPermissions,
+        get_trust_permission_store,
+    )
+
+    s = wire_pair("two_hosts", grant=None, subscribe=False)
+    a, b = s.publisher, s.subscribers[0]
+    override = TrustPermissions(
+        actor_id=a.id,
+        peer_id=b.id,
+        trust_type="friend",
+        properties={
+            "patterns": ["memory_notes"],
+            "operations": ["read"],
+            "excluded_patterns": [],
+        },
+    )
+    config = a.host.config
+    before = config.sync_subscription_callbacks
+    config.sync_subscription_callbacks = True
+    try:
+        # The loop ends with the call: nothing left on it can run afterwards.
+        stored = asyncio.run(
+            get_trust_permission_store(config).store_permissions_async(override)
+        )
+    finally:
+        config.sync_subscription_callbacks = before
+
+    assert stored is True
+    received = get_peer_permission_store(b.host.config).get_permissions(b.id, a.id)
+    assert received is not None
     assert "memory_notes" in (received.properties or {}).get("patterns", [])
 
 
@@ -222,7 +262,7 @@ def test_a_replica_read_through_the_stores_a_consumer_uses(wire_pair):
 def test_the_accessors_a_consumer_reads_after_pairing(wire_pair):
     from actingweb.permission_evaluator import check_property_access
 
-    s = wire_pair("two_hosts", grant=["notes", "displayname"])
+    s = wire_pair("two_hosts", grant=["*"])
     a, b = s.publisher, s.subscribers[0]
 
     relationships = a.interface().trust.relationships
@@ -232,7 +272,7 @@ def test_the_accessors_a_consumer_reads_after_pairing(wire_pair):
     assert relationships[0].approved and relationships[0].peer_approved
     assert [sub.peer_id for sub in outbound] == [a.id]
     assert check_property_access(a.host.config, a.id, b.id, "notes", "read")
-    # ``friend`` excludes ``private/*`` whatever an override adds.
+    # ``*`` is granted, and ``friend`` still excludes ``private/*``.
     assert not check_property_access(
         a.host.config, a.id, b.id, "private/secret", "read"
     )
@@ -242,24 +282,34 @@ def test_the_accessors_a_consumer_reads_after_pairing(wire_pair):
 
 
 def test_synchronous_callbacks_deliver_before_the_write_returns(wire_pair):
-    """The serverless shape (``with_sync_callbacks()``): when the write
-    returns, the subscriber has the change; no waiting for a background
-    send."""
+    """The serverless shape (``with_sync_callbacks()``): a write made on a
+    running event loop (an async route) delivers its callback before it
+    returns. Without the setting the same write schedules the callback on
+    the loop, so right after it the subscriber has nothing yet."""
     s = wire_pair("two_hosts", grant=["*"])
     a = s.publisher
     config = a.host.config
+
+    async def append_and_look(value: int) -> Any:
+        # No await between the write and the read: a scheduled callback
+        # cannot have run yet.
+        a.interface().property_lists.notes.append({"n": value})
+        seen = _replica(s)["lists"].get("notes")
+        # Let a scheduled callback finish before the loop closes (a loop that
+        # ends first cancels it: the serverless hazard the setting is for).
+        others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*others)
+        return seen
+
     before = config.sync_subscription_callbacks
-    config.sync_subscription_callbacks = True
     try:
-        a.interface().property_lists.notes.append({"n": 1})
-        delivered = _replica(s)["lists"].get("notes")
-        response = requests.put(
-            f"{a.url}/properties/note", json={"text": "sync"}, auth=a.basic
-        )
-        after_put = _replica(s)["scalars"].get("note")
+        config.sync_subscription_callbacks = False
+        scheduled = asyncio.run(append_and_look(1))
+        _follows(s, lambda r: r["lists"].get("notes") == [{"n": 1}])
+        config.sync_subscription_callbacks = True
+        delivered = asyncio.run(append_and_look(2))
     finally:
         config.sync_subscription_callbacks = before
 
-    assert delivered == [{"n": 1}]
-    assert response.status_code in (200, 204)
-    assert (after_put or {}).get("text") == "sync"
+    assert scheduled in (None, [])
+    assert delivered == [{"n": 1}, {"n": 2}]

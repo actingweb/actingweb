@@ -1045,6 +1045,11 @@ class ActingWebOAuth2Server:
         from ..permission_integration import client_trust_type_acceptable
 
         requested = str(record.get("trust_type") or "")
+        # A caller that passes no ``decide_trust`` (any of the three public
+        # entry points) gets the application's ``oauth2_trust_requested``
+        # hooks, as the library's own routes do.
+        if decide_trust is None:
+            decide_trust = self._application_decision()
         if decide_trust is None:
             return (
                 requested
@@ -1206,7 +1211,9 @@ class ActingWebOAuth2Server:
         code, or ``access_denied``) or an error dict. ``actor`` is the core
         actor or an ``ActorInterface``. The decision hook is the
         application's ``oauth2_trust_requested`` hooks; ``decide_trust``
-        replaces them with a callable of the caller's."""
+        replaces them with a callable of the caller's (a route that already
+        asked its hooks passes ``decide_trust=lambda actor, trust_type,
+        **info: trust_type``, or they run twice)."""
         from .. import session_generation
         from ..permission_integration import (
             client_trust_type_acceptable,
@@ -1241,10 +1248,6 @@ class ActingWebOAuth2Server:
         }
         # The route's user approved ``requested``: the hook may decline it,
         # and a different answer declines too (no level the user did not see).
-        # A caller that passes no ``decide_trust`` gets the application's
-        # ``oauth2_trust_requested`` hooks, as the library's own routes do.
-        if decide_trust is None:
-            decide_trust = self._application_decision()
         effective = self._decided_type(core, record, decide_trust, True)
         if effective != record["trust_type"]:
             return self._denied(redirect_uri, state)

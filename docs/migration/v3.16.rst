@@ -635,7 +635,10 @@ request succeed.
 Hook by hook: a ``DbError`` fails the request from a property hook, from a
 method or action hook called over ``/methods`` or ``/actions``, from an
 application's own callback hook, from ``oauth_success``,
-from ``actor_deleted`` (it fires before the wipe) and from ``trust_deleted``
+from ``actor_deleted`` (it fires before the wipe), from
+``oauth2_trust_requested`` (a decision cannot be taken without the store),
+from ``email_sign_in_code_required`` unless a handler had already sent the
+code, and from ``trust_deleted``
 (it fires before the local delete: a trust ``DELETE`` fails, and
 ``sync_peer()`` raises). It is logged, and the request goes on, from
 ``actor_created``, ``actor_adopted``, ``actor_deleted_complete``,
@@ -1252,6 +1255,15 @@ creator recorded for another actor and carries on, and writes the
 backfill-complete item only when it listed nothing. ``--creator`` is
 refused for ``enable`` and ``disable``.
 
+Steps 1 to 3 run while the previous version still serves, and that is
+safe as well. Its processes never read or write the DynamoDB ``creators``
+table: an actor they create after step 3 is what step 5 records, and a
+second actor they create for a creator already held is what step 6 lists.
+On PostgreSQL the index step 3 builds applies to them as soon as it is
+complete: such a second create, or a rename onto a creator already held,
+is refused instead (the old process logs the error and reports the write
+as failed).
+
 **Which actor ``resolve`` keeps.** The best by marker (vouched, then
 unvouched, then ``factory``), then the oldest (PostgreSQL's ``created_at``;
 on DynamoDB the ``created_at`` the OAuth sign-in stores, unknown ages last),
@@ -1324,7 +1336,8 @@ it exists, even with the flag off.
 
 - On DynamoDB an actor create, delete or creator change costs about 4-6
   write units instead of 1 (a transaction, and the conditional release of
-  the old record). Only opted-in tables pay this.
+  the old record). Uniqueness is on by default; an application that opts
+  out with ``with_unique_creator(False)`` does not pay this.
 
 **Scripts that write actors directly.** A script that writes actors
 through ``DbActor`` (a restore or import tool, say): either create

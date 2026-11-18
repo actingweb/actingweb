@@ -535,3 +535,137 @@ callback with 3.15.1's space-separated timestamp, the resync callback with
 a `+00:00` offset, a nested write sent as the changed part, and the second
 trust request without a bearer (403, the release's row unchanged). Recorded
 once, identical over repeated runs on both backends.
+
+## `actingwebdemo` against this branch (Phase 3, item 5, AC-13)
+
+A worktree of `actingwebdemo` with its library pin pointed at this branch
+(`8654613`), on its own DynamoDB Local.
+
+**Its tests.** `pytest tests/ -v` on a fresh store collects nothing and
+stops with `UniqueCreatorNotReady`: the store is new and uniqueness is on
+by default, which is the start-up check doing its job. After the README's
+step (`actingweb-unique-creators enable --apply`) the five tests pass and
+`pyright` is clean, as at the 3.15.1 baseline. `ruff check .` reports 16
+F811 in the vendored copy of this library's tests: `actingwebdemo` pins
+ruff 0.14.11, this library lints with 0.15.22, and with 0.15.22 the whole
+worktree is clean. Both are adoption work for `actingwebdemo` (a
+fresh-store step in its CI, ruff `^0.15` or a `vendor/` exclude), not
+library regressions.
+
+**What it has to change to deploy 4.0.** Its function role lacks
+`dynamodb:BatchGetItem` (the lookup table; without it the function fails
+its start-up check) and `dynamodb:ConditionCheckItem` (actors, properties,
+attributes; fails later, not at start). Both are in the guide's IAM table
+already. The one new table, `<prefix>_creators`, is covered by its
+`table/demo_*` wildcard as long as it keeps the default prefix. It sets no
+removed name. Its Serverless 3.40.0 schema lists runtimes up to
+`python3.11`, so `python3.14` is a schema warning it has to check, not an
+error. Its `CHANGELOG.md` says "3.16 pin"; it becomes 4.0.0.
+
+**The operator sequence it would run** follows the guide's: before the
+deploy, `mark-actors-vouched --email-as-creator` (dry run first),
+`unique-creators report`, `resolve --default-creator-to-email --apply`,
+`enable --apply`, the resolve once more, `property-lookup report` and
+`backfill --apply`, `creator-to-email --apply`; after it, `enable --apply`
+and `report`, `creator-to-email --apply`, `verify-property-lists
+--attributes`, `deletions report`, `peer-state report` and `prune --apply`,
+then new function instances. Open for its owner: whether to vouch the
+demo's old actors or clear them first, which identity runs the operator
+commands (its deploy role has no DynamoDB rights), `OPEN_FACTORY`, and
+`with_sync_callbacks()`.
+
+**Three gaps in the guide it found, fixed here.**
+`docs/migration/v3.16.rst` said "only opted-in tables" pay the creator
+transaction although uniqueness is on by default; it said steps 5 and 6 of
+the creator rollout are safe under live traffic but not whether steps 1 to
+3 are while the previous version serves (they are: the old processes never
+touch the `creators` table, and on PostgreSQL the new index already
+refuses their duplicate); and `docs/quickstart/deployment.rst` said "make
+the platform start new instances" without saying how.
+
+## The demo walked in a browser (Phase 3, item 5, AC-11, AC-12)
+
+**First run (AC-11).** The README's sequence on a fresh DynamoDB prefix: the
+first start creates the tables and stops with `UniqueCreatorNotReady`,
+`actingweb-unique-creators enable --apply` reports `outcome=backfilled`,
+the second start serves. `tests/integration/test_demo_first_run.py` runs
+the same three steps on every Full tier.
+
+**The walk (AC-12).** A headless Chromium (`chrome-headless-shell`, no
+window) on `localhost:5055` in local QA mode, two throwaway actors and one
+more from the factory form, all deleted afterwards (each answers 404 on
+`/meta`). Factory, sign-in, properties (escaping, a 3,000-character value,
+a list's items added, edited and deleted), trust (blocked inputs, an
+unreachable peer, a `friend` trust active on both sides at once), delete
+(the peer's trust goes with it), and the pages at 375 px: no error, no
+stack trace, a clean console on every page. The demo's web UI has no
+subscription page, so subscriptions were not walked there; the wire rows
+and the live pair cover them. The `friend` trust approves itself because
+the demo sets `auto_accept_default_relationship = True`, as at 3.15.1.
+
+**Six Low findings.** Fixed here:
+- the factory page promised an OAuth2 redirect and the created page said
+  the demo runs behind AWS API Gateway, neither true locally (now worded
+  for both);
+- the trust page listed `acquaintance`, which no form offers, and missed
+  four types it does (now points at the New trust form, which lists them);
+- "List with 1 items" (`actingweb/handlers/www.py`, now "1 item");
+- the created page's "Initialize" link goes to the Add Property page (now
+  "Add property").
+
+Left as they are: the New trust form comes back empty after an error, by
+design (`actingweb/handlers/www.py:30-33`: nothing from a request is
+rendered, so a link from another site cannot prefill the form); deleting
+an actor lands on the factory page without a message, which is the
+demo's page and harmless.
+
+## The Agent Skill in a fresh session (Phase 3, item 7, AC-18, AC-19)
+
+The owner asked for the check to run through the CLIs rather than by hand.
+Two scratch consumer repositories, each with only this branch's library in
+a virtualenv and `skills/actingweb-app/` where its agent looks for skills
+(`.claude/skills/` for Claude Code 2.1.327, `.agents/skills/` for Codex
+0.150.1). One task, given to a fresh `claude -p` session and a fresh
+`codex exec` session: a FastAPI application with a property hook that
+strips and lower-cases `greeting`, run on an empty DynamoDB Local prefix,
+an actor created and the property written and read back over REST. The
+task does not mention the skill. Transcripts stayed in the scratchpad and
+were deleted with the repositories.
+
+**Claude Code.** Its first call loaded the skill. It wrote the hook, met
+`UniqueCreatorNotReady` on the first start, ran
+`actingweb-unique-creators enable --apply` as the skill says, started
+again, and showed `"  Hello World  "` stored as `"hello world"`.
+
+**Codex, first run: the skill did not load.** Codex rejected `SKILL.md`
+with "invalid YAML": the `description` ran onto unindented lines (so since
+the skill was added in #136). Claude Code is lenient there, so nobody had
+seen it. Without the skill Codex still finished the task by reading the
+installed package, but it got past the start-up check by turning creator
+uniqueness and reverse lookup off (`with_unique_creator(False)`,
+`with_indexed_properties([])`), which is the guess the skill exists to
+prevent. Fixed: the description is a folded block, and
+`tests/test_agent_skill.py` parses every skill's front matter as strict
+YAML (it failed on the old file); a `FIXED` changelog entry tells
+consumers who copied the skill.
+
+**Codex, second run, with the fixed skill.** It said it was using the
+skill, read `SKILL.md` before anything else, kept the defaults, ran the
+first-run sequence (first start refused, `enable --apply`, start) and
+showed the same result. Its `with_devtest(True)` follows the skill's own
+offer for local testing, which says it must be off in production.
+
+Both sessions stopped their servers; the tables were dropped afterwards.
+
+## Emm's suite after Phase 3 (AC-10)
+
+Emm's library worktree on a snapshot of Phase 3's working tree (its
+`actingweb/` identical to the branch's), environment 9:
+`creator-to-email --apply` first (scanned 1, nothing to move), the preview
+server without ngrok, then both lanes. PostgreSQL: 2 failed, 7,698 passed,
+14 skipped, 185 deselected. DynamoDB (`scripts/test-backends.sh 9`): 3
+failed, 57 passed. The five failures are the baseline's five by name;
+nothing new. This run covers the two library changes of Phases 2 and 3
+(the decision-hook fallback, `store_permissions_async` under synchronous
+callbacks). Nothing was committed in Emm; its worktree still carries only
+its four test-harness edits.

@@ -21,6 +21,12 @@ from .properties import list_length_hint, register_list_diff
 
 logger = logging.getLogger(__name__)
 
+
+def _items(count: int) -> str:
+    """``1 item``, ``3 items``: the item count of a list as the page shows it."""
+    return f"{count} item" if count == 1 else f"{count} items"
+
+
 # What the trust pages say after a redirect. The redirect carries a code;
 # the page shows the text for a code it knows and nothing for any other, so
 # nothing from a request is ever rendered (a link from another site cannot
@@ -511,7 +517,7 @@ class WwwHandler(base_handler.BaseHandler):
                         list_prop.prime_from_rows(list_rows)
                         list_length = len(list_prop)
                         display_properties[prop_name] = (
-                            f"[List with {list_length} items]"
+                            f"[List with {_items(list_length)}]"
                         )
                     except DbError:
                         raise
@@ -700,7 +706,7 @@ class WwwHandler(base_handler.BaseHandler):
                     list_explanation = list_prop.get_explanation()
 
                     # For display, show summary
-                    display_value = f"List with {list_length} items"
+                    display_value = f"List with {_items(list_length)}"
 
                 except ListCorruptionError as e:
                     logger.error(f"List '{prop_name}' is corrupted: {e}")
@@ -737,7 +743,7 @@ class WwwHandler(base_handler.BaseHandler):
                                 created_at = meta_data.get("created_at", "Unknown")
 
                                 # For list properties, show metadata instead of raw value
-                                display_value = f"List with {list_length} items (Created: {created_at}) - Legacy Format"
+                                display_value = f"List with {_items(list_length)} (Created: {created_at}) - Legacy Format"
                             except (json.JSONDecodeError, TypeError):
                                 display_value = "[List property - metadata error]"
                 except DbError:

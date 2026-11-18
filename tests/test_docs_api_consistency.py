@@ -298,3 +298,93 @@ def test_release_notes_removed_list_is_current():
         name for name in REMOVED_IN_RELEASE if name in known or name not in text
     )
     assert not stale, f"REMOVED_IN_RELEASE has names to drop: {stale}"
+
+
+# ---------------------------------------------------------------------------
+# What is taught does not teach a name the release removed
+# ---------------------------------------------------------------------------
+
+# Names that are gone, or only raise, since the release after 3.15.1, and
+# the one deprecated hook name. The migration guides and the changelog name
+# them on purpose; everything else a consumer learns from may name one only
+# to say that it is gone.
+REMOVED_OR_DEPRECATED_NAMES = sorted(
+    REMOVED_IN_RELEASE
+    | {
+        "CallbackOauthHandler",
+        "FanOutManager",
+        "FanOutResult",
+        "USE_PROPERTY_LOOKUP_TABLE",
+        "circuit_breaker_cooldown",
+        "circuit_breaker_threshold",
+        "max_payload_for_high_granularity",
+        "trust_approved",
+        "use_lookup_table",
+        "with_legacy_property_index",
+    }
+)
+_SAYS_GONE_RE = re.compile(
+    r"\b(removed|is gone|are gone|no longer|deprecated|were removed)\b", re.IGNORECASE
+)
+
+
+def _taught_files() -> list[Path]:
+    files = [REPO_ROOT / "README.rst"]
+    for root, patterns in (
+        (REPO_ROOT / "skills", ("*.md",)),
+        (REPO_ROOT / "examples", ("*.py", "*.md", "*.example")),
+        (DOCS_ROOT, ("*.rst",)),
+    ):
+        for pattern in patterns:
+            files.extend(root.rglob(pattern))
+    return [
+        f
+        for f in files
+        if DOCS_ROOT / "migration" not in f.parents
+        and DOCS_ROOT / "_build" not in f.parents
+    ]
+
+
+def _teaches_removed_names(text: str) -> list[tuple[int, str]]:
+    """``(line, name)`` for each removed name ``text`` uses without saying,
+    within two lines either side, that it is removed or deprecated."""
+    lines = text.splitlines()
+    found: list[tuple[int, str]] = []
+    for name in REMOVED_OR_DEPRECATED_NAMES:
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])")
+        for index, line in enumerate(lines):
+            if not pattern.search(line):
+                continue
+            around = " ".join(lines[max(0, index - 2) : index + 3])
+            if not _SAYS_GONE_RE.search(around):
+                found.append((index + 1, name))
+    return found
+
+
+def test_taught_names_are_not_removed():
+    """``README.rst``, ``skills/``, ``examples/`` and ``docs/`` outside the
+    migration guides name a removed or deprecated name only to say so."""
+    files = _taught_files()
+    assert len(files) > 40, f"only {len(files)} files scanned"
+    problems = [
+        f"{path.relative_to(REPO_ROOT)}:{line}: {name}"
+        for path in files
+        for line, name in _teaches_removed_names(
+            path.read_text(encoding="utf-8", errors="ignore")
+        )
+    ]
+    assert not problems, "taught content uses a removed name:\n  " + "\n  ".join(
+        problems
+    )
+
+
+def test_the_removed_name_scan_sees_a_use_and_excuses_a_notice():
+    """The scan itself: a use is found, a sentence that says the name is
+    removed is not, and a longer identifier that contains a name is not."""
+    assert _teaches_removed_names("app.with_legacy_property_index(enable=False)") == [
+        (1, "with_legacy_property_index")
+    ]
+    assert not _teaches_removed_names(
+        "``with_legacy_property_index()`` was removed in 3.16."
+    )
+    assert not _teaches_removed_names("def on_trust_approved(actor): ...")

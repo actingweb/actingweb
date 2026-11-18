@@ -187,8 +187,9 @@ after merging. Tag the merge commit.
   migration guide, as long as an application that upgrades unread keeps
   working or is told at start-up what to do and its stored data stays
   readable by the previous minor; a major when a documented name is
-  removed, data is written that the previous release cannot read without an
-  operator's step, a default changes what an unchanged application does, or
+  removed, data is written that the previous release cannot read when an
+  unchanged application upgrades (an opt-in call or an operator's step does
+  not count), a default changes what an unchanged application does, or
   a peer on the previous release loses a flow for a reason other than a
   security fix. The release after 3.15.1 is 4.0.0 (owner, 2026-11-18).
 - Changelog promotion: rename `Unreleased` to `vX.Y.Z: Month D, YYYY` (or

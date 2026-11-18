@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-18
 **Belongs to:** [`2026-11-18-3-16-release-validation.md`](2026-11-18-3-16-release-validation.md)
-**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `15b0e35`.
+**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `241a67a`.
 
 
 Read at Emm's `main` (commit `c1be751c`), through git only; pinned library `=3.15.1`. Compared against the library working tree on branch `release/3.16.0-release-validation`. Scope: production code, i.e. everything except `tests/`, `evals/`, `frontend/`, `plugin/` and `scripts/` (scripts are reported separately where they touch the library). `path:line` is Emm's file at main, first or most representative use; "sites" counts call sites in production code. Names only for environment variables and IAM actions.

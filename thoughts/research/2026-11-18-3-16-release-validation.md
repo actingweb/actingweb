@@ -541,7 +541,7 @@ once, identical over repeated runs on both backends.
 ## `actingwebdemo` against this branch (Phase 3, item 5, AC-13)
 
 A worktree of `actingwebdemo` with its library pin pointed at this branch
-(`881205a`), on its own DynamoDB Local.
+(`13aa86f`), on its own DynamoDB Local.
 
 **Its tests.** `pytest tests/ -v` on a fresh store collects nothing and
 stops with `UniqueCreatorNotReady`: the store is new and uniqueness is on

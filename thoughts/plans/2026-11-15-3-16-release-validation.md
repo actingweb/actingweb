@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 approved: 2026-11-18 by Greger Wedel
 ---
 
@@ -438,26 +438,26 @@ research note or the verification document.
 | --- | --- | --- | --- |
 | AC-1 | 1 | manual: the inventory table in the research note, one row per consumer-visible change with its changelog entry; no empty cell (a reading of prose) | Done 2026-11-18: 301 rows; the four with no entry have one now |
 | AC-2 | 1, 4 | `tests/test_docs_api_consistency.py::test_release_notes_name_only_what_exists` (the guide and `Unreleased`, with a list of names the text says are removed), and `::test_release_notes_removed_list_is_current` | Passing (seen red on four names first; run again in Phase 4) |
-| AC-3 | 4 | manual: the inventory's "guide section" column, filled after the restructure | Not run |
-| AC-4 | 4 | manual: "Start here" walked against the operator-command table; each step's success signal read | Not run |
-| AC-5 | 4 | `tests/test_migration_guide.py::test_guide_commands_exist_and_parse`; manual: the eight code samples run, the log in the research note | Not run |
-| AC-6 | 4 | `tests/test_migration_guide.py::test_quoted_guide_sections_are_headings` | Not run |
-| AC-7 | 4 | manual: the rollback section read against the inventory's "irreversible" rows | Not run |
-| AC-8 | 2 | manual: the question list in the research note, each with the location that answers it; the adoption worktree's diff as the cross-check | Not run |
-| AC-9 | 2 | the tests the usage-to-test matrix names, existing and new; each new test is added to this row when written, with the Emm call site it protects | Not run |
-| AC-10 | 2, 4 | manual: Emm's suite in environment 9 (both lanes), failures compared by name with Phase 1's baseline (another repository's suite) | Passing on Phase 3's tree: the baseline's five by name, nothing new (note, "Emm's suite after Phase 3"); repeated in Phase 4 |
+| AC-3 | 4 | manual: the inventory's "guide section" column, filled after the restructure | Done, by another route: all 137 must-act rows checked against the regrouped guide; 109 had a section, the 28 without one got an instruction, each checked against the code (note, guide coverage; Phase 4 notes). **Deviation:** the inventory's guide-section column was not refilled (its line numbers are from `da6de67`) |
+| AC-4 | 4 | manual: "Start here" walked against the operator-command table; each step's success signal read | Done: "The upgrade, in order" runs before, the upgrade, after; each step names its command and section, and the command table gives the success signal where the tool prints one (`enable` logs `outcome=backfilled`, `report` exits 1 while duplicates remain, Alembic ends at `a7b8c9d0e1f2`); for the others the table says what the command reports, not a single success line |
+| AC-5 | 4 | `tests/test_migration_guide.py::test_guide_commands_exist_and_parse`; manual: the eight code samples run, the log in the research note | Passing (37 command lines parse). **Deviation:** the guide has four Python samples, not eight; each was checked against the library's signatures and return types instead of run |
+| AC-6 | 4 | `tests/test_migration_guide.py::test_quoted_guide_sections_are_headings` | Passing (the seven quoted titles, through `guide_section()`) |
+| AC-7 | 4 | manual: the rollback section read against the inventory's "irreversible" rows | Done: "Rolling back to 3.15.1" names the three writes after which 3.15.1 cannot read the data, what the pre-deploy commands leave behind, and what has not been tested |
+| AC-8 | 2 | manual: the question list in the research note, each with the location that answers it; the adoption worktree's diff as the cross-check | Done in Phase 2: the questions appendix (`.emm-questions.md`) answers each with the place in the changelog, guide or `docs/`; the gaps it found were written into the docs (consumer-generic) |
+| AC-9 | 2 | the tests the usage-to-test matrix names, existing and new; each new test is added to this row when written, with the Emm call site it protects | Passing: `tests/integration/test_consumer_sdk_calls.py` (11 tests) and the matrix's existing tests, on both backends in every Full tier since Phase 2 |
+| AC-10 | 2, 4 | manual: Emm's suite in environment 9 (both lanes), failures compared by name with Phase 1's baseline (another repository's suite) | Passing on Phase 3's tree, on Phase 4's checkpoint and on the bumped tree (`4.0.0rc1`): the baseline's five by name, nothing new each time |
 | AC-11 | 3 | `tests/integration/test_demo_first_run.py::test_readme_first_run_sequence` | Passing |
 | AC-12 | 3 | manual: the browser walk in local QA mode on a fresh database (a rendered UI) | Done: no error on any step, clean console; the UI has no subscription page (covered by the wire rows); six Low wording items, four fixed (note, "The demo walked in a browser") |
 | AC-13 | 3 | manual: `actingwebdemo`'s test line in a worktree of it (another repository's suite) | Done: 5 passed and pyright clean after the README's `enable --apply` on a fresh store (the start-up check stops it before); its ruff 0.14 pin trips on the vendored tests, its own adoption work (note, "`actingwebdemo` against this branch") |
 | AC-14 | 1, 2 | manual: the live pair's table, 18 cells (two versions cannot share the test process) | Done 2026-11-18: 18 of 18 complete; every difference has the owner's outcome (accept) |
 | AC-15 | 2 | `tests/integration/test_wire_v315.py`, one test per row of the table marked "kept" or "restored"; each is added to this row when written | Passing on both backends, twice each (2026-11-18): `test_wv1_data_callback`, `test_wv2_resync_callback`, `test_wv3_nested_write`, `test_wv4_second_trust_request` (rows `WV1` to `WV4`). No row is "kept" or "restored" (owner); these pin the forms a 3.15.1 peer sent in the live pair, and the one refusal |
-| AC-16 | 4 | manual: the section read against the table and the inventory's rolling-deploy rows; docs build | Not run |
+| AC-16 | 4 | manual: the section read against the table and the inventory's rolling-deploy rows; docs build | Done: "Other versions beside this one" keeps the three cases apart, from the live pair's 18 cells and probes; the older-peers case is marked not tested |
 | AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Done 2026-11-18 with the owner (Claude Code, Google sign-in, through ngrok): `create_note` ran after four fixes (note, "The MCP quickstart with a real client") |
 | AC-18 | 3 | manual: one fresh agent session in the scratch repository, started by the owner | Done, run through the claude and codex CLIs at the owner's request: both read `SKILL.md` first (codex only after its front matter was fixed; `tests/test_agent_skill.py`) |
 | AC-19 | 3 | manual: the same session; the application is started, not only written | Done: both started it through the first-run sequence with the defaults kept and showed the hook's result over REST |
 | AC-20 | 3 | `tests/test_docs_api_consistency.py::test_taught_names_are_not_removed` (`README.rst`, `skills/`, `examples/`, `docs/` outside `migration/`; a name is excused only within two lines of a sentence saying it is removed or deprecated, instead of the planned allow-list of pages, so a new page that names a removed option on purpose needs no list entry) | Passing |
-| AC-21 | 4 | `tests/test_version_consistency.py` (both tests) | Not run |
-| AC-22 | 1, 4 | the wire suite in the Full tier, run after the bump commit | Phase 1: the eight recordings pass with the version set to `9.9.9`; run again after the bump |
+| AC-21 | 4 | `tests/test_version_consistency.py` (both tests) | Passing after the bump (`4.0.0rc1` in `pyproject.toml`, `actingweb/__init__.py` and the installed metadata) |
+| AC-22 | 1, 4 | the wire suite in the Full tier, run after the bump commit | Passing: the Full tier on the bumped tree replays every recording unchanged on both backends |
 | AC-23 | 1 | manual: the rule read in `CONTRIBUTING.rst` and CLAUDE.md "Release" | Done 2026-11-18 |
 | AC-24 | 4 | manual: each entry checked against `v3.15.1` (the inventory's rows and `git show v3.15.1:`), the removed or folded entries listed in the note; the `SECURITY` leads stay as they are | Done: 285 entries to 261 (9 removed, 15 folded, 36 reworded); one `SECURITY` entry merged into the one that introduces its feature, the others' leads unchanged (note, "The changelog, cut to what changed since 3.15.1") |
 
@@ -1238,21 +1238,21 @@ Not started while a decision of Phase 1 holds it.
 
 ### Verification
 
-- [ ] Items 1 and 2: the inventory's guide-section column has no empty
+- [x] Items 1 and 2: the inventory's guide-section column has no empty
   cell where a consumer must act; "Start here" walked against the command
   table; the samples run
-- [ ] Item 6: "Other versions beside this one" agrees with the table
-- [ ] `docs/migration/index.rst` describes the release; each docs page the
+- [x] Item 6: "Other versions beside this one" agrees with the table
+- [x] `docs/migration/index.rst` describes the release; each docs page the
   inventory showed describing 3.15 is corrected, listed in the note
-- [ ] `grep -rn "v3.16.rst\|v4.0.rst" actingweb docs CHANGELOG.rst tests`:
+- [x] `grep -rn "v3.16.rst\|v4.0.rst" actingweb docs CHANGELOG.rst tests`:
   every quoted title is a heading
-- [ ] The docs build from the Full tier (`sphinx-build -W`), with
+- [x] The docs build from the Full tier (`sphinx-build -W`), with
   `.claude/**` excluded locally
-- [ ] The Full tier, on both backends, on the final tree, after the bump
-- [ ] Emm's suite on the final tree
-- [ ] The todos as listed; `thoughts/README.md` re-read before recording
+- [x] The Full tier, on both backends, on the final tree, after the bump
+- [x] Emm's suite on the final tree
+- [x] The todos as listed; `thoughts/README.md` re-read before recording
   the work as finished
-- [ ] The verification document states "ready to tag" or lists what is not
+- [x] The verification document states "ready to tag" or lists what is not (the statement is in the Implementation Summary below; `/verify_implementation` writes the verification document)
 
 ### Notes from implementing (2026-11-18)
 
@@ -1320,7 +1320,7 @@ Not started while a decision of Phase 1 holds it.
   `rc-pass-against-real-consumers.md` added, `INDEX.md`'s section of the
   release's plans removed.
 
-### Implementation Status: In Progress
+### Implementation Status: Complete
 
 ---
 
@@ -1447,3 +1447,76 @@ threshold that splits it off ("more than three rows").
   describes the partition after the 3.16 conversions is not known.
 - `dynamodb-known-next` was added to the version question after the
   outside voice had started; it was reviewed by headings only.
+
+## Implementation Summary
+
+**Completed:** 2026-11-18
+**All phases:** Complete
+**Test status:** All passing. The Full tier on the bumped tree: 8,161
+passed on DynamoDB, 7,933 on PostgreSQL, ruff, pyright and the wire-row
+check clean, the docs built with `-W`; the Fast tier under Python 3.11
+(the required CI context): 6,274 passed. Emm's suite on the same tree:
+the baseline's five failures by name, nothing new. After the closing
+review the guide's rollback and checklist text changed (docs only: the
+docs build and the guide's tests ran again).
+
+### Statement of readiness
+
+**Ready to open the PR and, once it is merged, to tag `v4.0.0rc1`;** the one untested case below is the rc pass's. The
+eight items, with their evidence in the research note
+(`thoughts/research/2026-11-18-3-16-release-validation.md`):
+
+1. The release read as one: the inventory (301 rows), the changelog cut
+   to what changed since 3.15.1 (AC-24) and correct (AC-1, AC-2).
+2. The guide: regrouped, every must-act change with an instruction, the
+   commands held by a test (AC-3 to AC-7, with the deviations noted).
+3. Emm's side: the questions answered from the docs (AC-8).
+4. Emm's uses covered by tests between real actors (AC-9); Emm's suite
+   at the baseline on every tree (AC-10).
+5. The demo, `actingwebdemo` and a browser walk (AC-11 to AC-13).
+6. The wire against 3.15.1: the live pair, every difference accepted by
+   the owner, the guide's "Other versions" (AC-14 to AC-16).
+7. Discoverability: the MCP quickstart with a real client, the Agent
+   Skill in Claude Code and Codex (AC-17 to AC-20).
+8. 4.0.0, the rule in `CONTRIBUTING.rst`, the bump (AC-21 to AC-23).
+
+**Before the tag, and the owner's answers:**
+
+- *Untested:* 3.15.1 serving on a PostgreSQL database already at
+  `a7b8c9d0e1f2` (the guide's checklist step 4 says so and asks for a
+  maintenance window); it is in the rc-pass todo.
+- *The inventory's one `SECURITY` row cited 3.15.1's code*: the citation
+  was taken out of the inventory in every commit of the branch (owner,
+  2026-11-18), as the wire appendix was.
+- *The deviations below* (AC-3's route, the four samples checked rather
+  than run, the changelog not re-sorted by audience): accepted by the
+  owner, 2026-11-18.
+
+**The exact next step:** `/verify_implementation` on this plan; then, with
+the wire appendix kept out (it is not in the branch), push the branch and
+open the PR to `master`. After the merge the owner tags `v4.0.0rc1` on the
+merge commit; `thoughts/todo/rc-pass-against-real-consumers.md` is the
+first thing after the tag.
+
+### Deviations from Plan
+
+- The guide's inventory column was not refilled; AC-3 was checked by a
+  row-by-row analysis instead.
+- Four Python samples, checked against the library instead of run.
+- The changelog is not re-sorted by audience within each category.
+- The wire appendix had been committed in Phase 1; the never-pushed
+  branch was rewritten to drop it, so Phases 1 to 3 carry new hashes.
+- The readiness statement is here; the verification document comes from
+  `/verify_implementation`.
+
+### Learnings
+
+- Running the consumer flows for real found what review had not: Codex
+  could not load the Agent Skill (invalid YAML since #136), and Claude
+  Code got no tools from the MCP quickstart (a 200 to the stream opener,
+  a tool without `inputSchema`), all three present in 3.15.1.
+- `verify_groups.py` reads a row's owners at the first parent: owners go
+  in a commit of their own before the re-recording.
+- A sweep of a release name needs its exclusions (history, recordings,
+  plan slugs) decided before it runs.
+

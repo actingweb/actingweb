@@ -5,6 +5,9 @@ CHANGELOG
 Unreleased
 ----------
 
+v4.0.0rc1: November 18, 2026
+----------------------------
+
 .. note::
 
    **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start

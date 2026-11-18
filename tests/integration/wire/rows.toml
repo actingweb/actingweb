@@ -52,6 +52,7 @@
 "grant-enforcement-per-route" = ["WG1-WG19"]
 "3-16-pre-validation-fixes" = []
 "3-16-pre-rc1-fixes" = []
+"3-16-release-validation" = ["WT10-WT29", "WS20-WS39", "WD30-WD49", "WL40-WL59", "WG20-WG39", "WV1-WV29"]
 
 # ---------------------------------------------------------------------------
 # peer-authorisation-fixes, Phase 0: the flows over the paths the fix changes
@@ -527,7 +528,7 @@ reason = [
 [rows."WT1"]
 test = "test_wire_trust.py::test_wt1_re_pair"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:1", "spec-1-5:5", "spec-1-5:3"]
+owners = ["spec-1-5:1", "spec-1-5:5", "spec-1-5:3", "3-16-release-validation:1"]
 exposure = false
 expected = "B re-initiates through the SDK: its request carries the current secret as bearer, A answers 201 from its stored approval and swaps the secret only (approved, relationship and base URI kept, no trust_request_received), B stores the new secret; A's next callback carries it."
 reason = [
@@ -552,7 +553,7 @@ reason = [
 [rows."WT3"]
 test = "test_wire_trust.py::test_wt3_new_peer"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:1", "spec-1-5:2", "spec-1-5:5"]
+owners = ["spec-1-5:1", "spec-1-5:2", "spec-1-5:5", "3-16-release-validation:1"]
 exposure = false
 expected = "A new peer N asks A for a trust: the verification GET to N with the new secret, then A's GET of N's /meta (its id must be N), 202, trust_request_received."
 reason = [
@@ -568,7 +569,7 @@ reason = [
 [rows."WT4"]
 test = "test_wire_trust.py::test_wt4_re_pair_with_another_relationship"
 topologies = ["same_host", "two_hosts"]
-owners = ["spec-1-5:1", "spec-1-5:5"]
+owners = ["spec-1-5:1", "spec-1-5:5", "3-16-release-validation:1"]
 exposure = false
 expected = "B re-initiates asking for admin: B refuses it itself (the trust is friend: delete and pair again) and sends A nothing; both rows unchanged; B's subscription intact. The receiver's own 403 for a different relationship is the unit tests'."
 reason = [
@@ -704,14 +705,14 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 
 [rows."WG16"]
 test = "test_wire_grants.py::test_wg16_honest_flows"
-owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3", "3-16-pre-rc1-fixes:1"]
+owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3", "3-16-pre-rc1-fixes:1", "3-16-release-validation:1"]
 exposure = false
 expected = "The user's browser: the form as JSON (now JSON, with form_nonce) and as HTML (a form_nonce input), each setting the nonce cookie; a POST with mcp_client and the GET callback: a code, the cookie cleared, the token (trust_type mcp_client) and tools/list; a POST choosing Apple and Apple's form-POST callback: a code; a second client's Google and Apple buttons followed with no type chosen: a code each, the trust mcp_client (the client default, not admin). No confirmation is asked."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a client's level is the user's choice: anonymous registration refused admin and client_credentials, the form bound to the browser by a nonce cookie, a confirmation otherwise, the Apple button and the JSON form fixed (grant-enforcement-per-route:3)", "2026-11-16 the default redirect_uri is /oauth/callback, the path that is served (3-16-pre-validation-fixes:3)", "2026-11-17 initialize advertises listChanged: false; the server sends no list-change notification (3-16-pre-rc1-fixes:1)"]
 
 [rows."WG17"]
 test = "test_wire_grants.py::test_wg17_owner_created_client"
-owners = ["3-16-pre-rc1-fixes:1"]
+owners = ["3-16-pre-rc1-fixes:1", "3-16-release-validation:1"]
 exposure = false
 expected = "A client the actor's owner created uses client_credentials: the token is bound to the owner's actor; tools/list."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-17 initialize advertises listChanged: false; the server sends no list-change notification (3-16-pre-rc1-fixes:1)"]

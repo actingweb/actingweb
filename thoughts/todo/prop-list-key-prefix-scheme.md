@@ -1,14 +1,23 @@
-# A `prop#`/`list#` key-prefix scheme for the property partition (next major release)
+# A `prop#`/`list#` key-prefix scheme for the property partition
 
 **Created:** 2026-08-21 (v3.14 development)
-**Trigger:** the next major version bump
+**Trigger:** measured, not a version (owner, 2026-11-18): a real actor that
+needs more than two Query pages (about 2 MB) for its plain properties and
+list heads together, after spanning; or a consumer that needs a per-field
+out-of-band payload which a lower `span_threshold` does not give. The
+release after 3.15.1 is 4.0.0 and does not carry this: it was judged against
+that release in
+`thoughts/research/2026-11-18-3-16-release-validation.md` ("The two storage
+todos") and left out. A scheme that converts a list only on an operator's
+step can ship in a minor (`CONTRIBUTING.rst`, "Which number a release
+gets"); one that converts on first write is a major.
 
 Filed from the "Scalability" evaluation notes in
 `thoughts/plans/2026-08-20-v2-positional-access-cost.md`: "the 1 MB Query
 ceiling is close... the ceiling itself belongs to the `prop#`/`list#` scheme
 filed for the next major."
 
-## The problem this doesn't fix, and why it's next-major rather than now
+## The problem this doesn't fix, and why it is not a patch
 
 Plain properties and every list's rows (`list:<name>-<rank>`) share one
 DynamoDB partition, keyed on `actor_id`. Plain-property reads no longer pay for
@@ -30,7 +39,6 @@ row this library has ever written uses the current scheme, so it needs a
 migration path (mirroring the v1→v2 `format` migration's shape: dual-read
 during a transition, `migrate_to_v2()`-style explicit per-list conversion,
 `verify_property_lists.py`-style sweep for stragglers) rather than a patch.
-That's why it waits for a major version.
 
 ## Scope, roughly
 

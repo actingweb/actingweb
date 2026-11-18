@@ -107,3 +107,194 @@ def test_doc_api_exists_execute_action_hooks_signature():
         "docs/guides/mcp-applications.rst calls it positionally as "
         "(action_name, actor, data) -- update the docs if this signature moves."
     )
+
+
+# ---------------------------------------------------------------------------
+# The release notes name only what the release has
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = DOCS_ROOT.parent
+
+# Names the release notes use that belong to another system or are an
+# example value, not a name of this library.
+NOT_LIBRARY_NAMES = {
+    # DynamoDB actions and expressions (the IAM tables, the fault entries)
+    "BatchGetItem",
+    "ConditionCheckItem",
+    "CreateTable",
+    "DeleteItem",
+    "DescribeTable",
+    "GetItem",
+    "PutItem",
+    "TransactWriteItems",
+    "UpdateItem",
+    "attribute_not_exists",
+    # JSON, JavaScript and URL text
+    "NaN",
+    "confirm",
+    "http",
+    # An OAuth2 grant's short name
+    "jwt_bearer",
+}
+
+# Names the release removed: the text that names them says so. A name stays
+# here only while the notes still mention it and the library still lacks it
+# (``test_release_notes_removed_list_is_current``).
+REMOVED_IN_RELEASE = {
+    "CircuitBreaker",
+    "CircuitState",
+    "DeliveryResult",
+    "close_shared_client",
+    "get_shared_client",
+    "lookup_mode_enabled",
+    "validate_google_token_and_check_actor_email",
+    "ListAttributeIterator",
+    "PropertyIndex",
+    "PropertyLegacy",
+    "decrease_seq",
+    "excluded_properties",
+    "get_v1",
+    "supports_resync_callbacks_cached",
+}
+
+_LITERAL_RE = re.compile(r"``([^`]+)``")
+_CALL_RE = re.compile(r"^([A-Za-z_][\w.]*)\(")
+_CAMEL_RE = re.compile(
+    r"^(?:[A-Za-z_]\w*\.)*[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+(?:\.[a-z_]\w*)*$"
+)
+_DOTTED_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+_WORD_RE = re.compile(r"[A-Za-z_]\w*")
+
+
+def _library_names() -> set[str]:
+    """Every identifier the library, its examples and its packaging define
+    or spell: classes, functions, parameters, attributes, keyword arguments,
+    module names, and the words of string constants (JSON keys, settings)."""
+    import ast
+
+    names: set[str] = set()
+    sources = [
+        *(REPO_ROOT / "actingweb").rglob("*.py"),
+        *(REPO_ROOT / "examples").rglob("*.py"),
+    ]
+    for path in sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names.update(path.relative_to(REPO_ROOT).with_suffix("").parts)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                names.add(node.name)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+            elif isinstance(node, ast.keyword) and node.arg:
+                names.add(node.arg)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.alias):
+                names.add((node.asname or node.name).split(".")[-1])
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                names.update(_WORD_RE.findall(node.value))
+    for path in [
+        REPO_ROOT / "pyproject.toml",
+        *(REPO_ROOT / "actingweb").rglob("*.html"),
+    ]:
+        names.update(_WORD_RE.findall(path.read_text(encoding="utf-8")))
+    return names
+
+
+def _newest_migration_guide() -> Path:
+    def version(path: Path) -> tuple[int, ...]:
+        return tuple(int(part) for part in path.stem[1:].split("."))
+
+    guides = [
+        p
+        for p in (DOCS_ROOT / "migration").glob("v*.rst")
+        if re.fullmatch(r"v\d+(\.\d+)*", p.stem)
+    ]
+    return max(guides, key=version)
+
+
+def _first_changelog_section_with_entries() -> str:
+    """The newest changelog section that has entries, padded with blank lines
+    so that its line numbers are the file's: the
+    ``Unreleased`` section while a release is being written, the release's
+    own section once the bump has emptied ``Unreleased``."""
+    lines = (REPO_ROOT / "CHANGELOG.rst").read_text(encoding="utf-8").splitlines()
+    starts = [
+        i - 1
+        for i, line in enumerate(lines)
+        if i and re.fullmatch(r"-{3,}", line) and lines[i - 1].strip()
+    ]
+    for start, end in zip(starts, [*starts[1:], len(lines)], strict=True):
+        section = lines[start:end]
+        if any(line.startswith("- ") for line in section):
+            return "\n" * start + "\n".join(section)
+    raise AssertionError("CHANGELOG.rst has no section with entries")
+
+
+def _code_names(text: str) -> dict[str, int]:
+    """The literals of ``text`` that are shaped like a name of code, with the
+    line each first appears on: a call (``name()``, ``Owner.name(...)``), a
+    CamelCase name, a dotted ``actingweb.`` path, or a ``snake_case`` name."""
+    found: dict[str, int] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        for literal in _LITERAL_RE.findall(line):
+            call = _CALL_RE.match(literal)
+            if call:
+                name = call.group(1)
+            elif _CAMEL_RE.match(literal):
+                name = literal
+            elif _DOTTED_RE.match(literal) and (
+                "_" in literal or literal.startswith("actingweb.")
+            ):
+                name = literal
+            else:
+                continue
+            found.setdefault(name, number)
+    return found
+
+
+def _release_notes() -> dict[str, str]:
+    guide = _newest_migration_guide()
+    return {
+        str(guide.relative_to(REPO_ROOT)): guide.read_text(encoding="utf-8"),
+        "CHANGELOG.rst (newest section with entries)": (
+            _first_changelog_section_with_entries()
+        ),
+    }
+
+
+def test_release_notes_name_only_what_exists():
+    """A class, function, option or exception the newest migration guide or
+    the newest changelog section names exists in the library, unless the
+    release removed it (and the text says so) or it is another system's."""
+    known = _library_names()
+    allowed = NOT_LIBRARY_NAMES | REMOVED_IN_RELEASE
+    problems: list[str] = []
+    for source, text in _release_notes().items():
+        names = _code_names(text)
+        assert len(names) > 50, f"{source}: only {len(names)} names found"
+        for name, line in sorted(names.items()):
+            missing = [
+                part
+                for part in name.split(".")
+                if part not in known and part not in allowed
+            ]
+            if missing:
+                problems.append(f"{source} line {line}: {name} ({missing[0]})")
+    assert not problems, (
+        "the release notes name something the library does not have:\n  "
+        + "\n  ".join(problems)
+    )
+
+
+def test_release_notes_removed_list_is_current():
+    """Every name on the removed list is still named by the notes and still
+    absent from the library, so the list cannot outlive what it excuses."""
+    known = _library_names()
+    text = "\n".join(_release_notes().values())
+    stale = sorted(
+        name for name in REMOVED_IN_RELEASE if name in known or name not in text
+    )
+    assert not stale, f"REMOVED_IN_RELEASE has names to drop: {stale}"

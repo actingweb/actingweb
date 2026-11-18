@@ -470,11 +470,11 @@ Hooks
 ----------------
 
 ``Actor.modify(creator=None, passphrase=None)`` now takes a passphrase and
-returns the backend result. DynamoDB raises on a failed save and PostgreSQL
-returns ``False``; PostgreSQL also reports a zero-row update as failure. Code
+returns the backend result. A failed save raises ``DbError`` on both
+backends; an update that matched no row is ``False``. Code
 that ignored the return value is unaffected. ``Actor.delete`` returns ``True``
-when the backend reported no fault removing the actor row (it returned
-``None``).
+when the actor row was removed (it returned ``None``); a backend fault
+raises ``DbError``.
 
 Changing the creator over HTTP
 ------------------------------
@@ -916,8 +916,19 @@ module docstring of ``actingweb.db.protocols`` states:
 - take the keyword-only ``only_if_secret`` on ``DbTrust.delete`` (delete
   only the row holding that secret, as one conditional delete; ``True`` when
   it deleted or the row is absent, ``False`` when a row with another secret
-  stands, ``DbError`` on a fault) and ``relationship`` on ``DbTrust.modify``
-  (the trust ``DELETE`` and an MCP client's re-authorisation pass them);
+  stands, ``DbError`` on a fault); ``relationship``, ``only_if_verified``
+  and ``only_if_secret`` on ``DbTrust.modify``; ``only_if_absent`` and
+  ``only_if_pending`` on ``DbTrust.create`` (every trust request, approval
+  and ``DELETE`` and an MCP client's re-authorisation pass them;
+  ``actingweb.db.protocols`` states each condition);
+- implement ``DbSubscriptionDiffList.delete_all_of_actor(actor_id)`` (every
+  diff of an actor, by actor id, without reading them first) and
+  ``DbSubscriptionSuspension.delete_all()``, which actor deletion and a
+  relationship purge call (the second also when an actor is created under
+  an explicit id);
+- take the keyword-only ``clear_ttl`` on
+  ``DbAttribute.conditional_update_attr`` (the same conditional write
+  removes the row's storage TTL);
 - take ``callback`` on ``DbSubscription.create`` and ``modify`` as a bool
   only (``None`` on ``modify`` leaves it), raising ``TypeError`` before any
   I/O for anything else;
@@ -927,14 +938,15 @@ module docstring of ``actingweb.db.protocols`` states:
 - implement ``DbActorList.iter_rows(*, consistent=False, rate_limit=None)``,
   yielding each actor as ``{"id", "creator"}`` as it is read, without
   holding the fleet in memory, and raising ``DbError`` on a fault.
-  ``actingweb-mark-actors-vouched``, ``actingweb-migrate-property-lists``
-  and ``actingweb-verify-property-lists`` call it.
+  ``actingweb-mark-actors-vouched``, ``actingweb-migrate-property-lists``,
+  ``actingweb-verify-property-lists`` and
+  ``actingweb-unique-creators creator-to-email`` call it.
   (``actingweb-verify-orphans`` reads the DynamoDB or PostgreSQL tables
   directly and supports only those two backends.)
 
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
 without ``increment_seq`` fails with ``AttributeError`` at its first diff;
-one without ``iter_rows`` stops those three commands before they scan.
+one without ``iter_rows`` stops those four commands before they scan.
 
 For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
 
@@ -1309,8 +1321,8 @@ In 3.16 the rule is enforced where the email is written:
   ``ActorInterface.modify_creator`` to move the creator, the email and the
   vouch together.
 - **A handoff to the trustee persists.** ``PUT /<id>/trust/trustee
-  {"creator": "trustee"}`` (the creator, a trustee or an admin peer may send
-  it) used to be undone by the next load of a vouched actor, which ended the
+  {"creator": "trustee"}`` (the creator or the trustee may send it; no peer
+  may) used to be undone by the next load of a vouched actor, which ended the
   trustee's access, which the protocol's handoff is meant to give. It now
   stays until the trustee hands the actor back with ``PUT {"creator":
   <stored email>}``. While the actor is with the trustee its address is
@@ -2368,8 +2380,7 @@ already received a resync whenever its tags were not cached. *What to
 check:* a subscriber on a version before 3.10, or an implementation that
 does not know ``type: "resync"``, gets no state as diffs after a resume and
 re-reads on its own schedule. ``PeerCapabilities
-.supports_resync_callbacks_cached()`` and
-``actingweb.property_list.fit_full_state`` are removed;
+.supports_resync_callbacks_cached()`` is removed;
 ``supports_resync_callbacks()`` stays.
 
 **``notify_subscribers(resource=...)`` sends the whole stored value above

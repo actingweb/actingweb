@@ -130,7 +130,7 @@
        "protocolVersion": "2025-06-18",
        "serverInfo": {
         "name": "actingweb",
-        "version": "3.15.1"
+        "version": "<library-version>"
        }
       }
      },

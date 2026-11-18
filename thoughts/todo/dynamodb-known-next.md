@@ -60,6 +60,12 @@ order and `limit=1` cannot work. Fixing it needs a key-format change
 existing diff rows. Until then a large diff backlog is re-read entirely on
 every fetch.
 
+Judged for the release after 3.15.1 and left out (owner, 2026-11-18,
+`thoughts/research/2026-11-18-3-16-release-validation.md`): it needs neither
+the key-prefix scheme nor a major. Diff rows are short-lived (cleared when
+read), so writing zero-padded keys and reading both forms needs no
+conversion of stored rows.
+
 ## 5. Import-time freezing of `Meta.table_name` / host
 
 Every DynamoDB model binds `AWS_DB_PREFIX` / `AWS_DB_HOST` /

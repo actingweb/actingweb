@@ -1582,9 +1582,9 @@ class Actor:
     def modify(self, creator: str | None = None, passphrase: str | None = None) -> bool:
         """Change the actor's creator and/or passphrase.
 
-        Returns the backend result. DynamoDB raises when the save fails and
-        PostgreSQL returns ``False``; callers that must know treat both as
-        failure. The in-memory values change only after the backend reported
+        Returns the backend result. A failed save raises ``DbError`` on both
+        backends, and an update that matched no row returns ``False``; callers
+        that must know treat both as failure. The in-memory values change only after the backend reported
         success.
         """
         if not self.handle or not (creator or passphrase):

@@ -320,7 +320,7 @@ SECURITY
   peer's id) is verified again first (a genuine request whose first check
   timed out is then approved), and otherwise replaced by the owner's own
   request, with the owner's secret, never approved as it is. The trustee
-  path (``create_peer_trustee``) and a replaced request run no hook. A replaced pending row takes the
+  path (``Actor.get_peer_trustee``) and a replaced request run no hook. A replaced pending row takes the
   replacement's creation time on both backends. **Check:** an actor id
   is self-asserted, so a host running its own server can still be verified
   (and, with auto-accept, approved) under another actor's id, which then
@@ -567,9 +567,11 @@ SECURITY
   through ``POST /`` after the upgrade is replaced at its first address proof
   (new id, data gone). The emailed verification link ends the sessions of the
   actor it verifies, so the user signs in again after the click; a user whose
-  provider supplies no verified address cannot do that yet, since the
-  free-text form answers ``409`` for an address that already has an actor (as
-  before 3.16), and must sign in through a provider that supplies the address.
+  provider supplies no verified address meets the free-text
+  form's ``409`` for an address that already has an actor (as before 3.16)
+  and signs in through a provider that supplies the address; when the
+  application registers ``email_sign_in_code_required`` the form answers
+  with a one-time code challenge instead of the ``409`` (see ADDED).
   The same ``409`` locks such a user out while the factory is open, since
   anyone can ``POST /`` their address first (also older than 3.16); closing
   the factory removes that path.
@@ -810,7 +812,7 @@ SECURITY
   stamp after writing the new token and revoke it on a mismatch
   (``invalid_grant``); a read fault answers 503 (an authorization code is
   spent by then, so the client restarts the authorization). The SDK's
-  ``ActorInterface.oauth_clients.generate_access_token`` passes its
+  ``OAuth2ClientManager.generate_access_token`` passes its
   client's stamp the same way. A credential issued before
   3.16 has no stamp and works only on an actor never cleaned since. The
   window is closed within the issuing process: another worker can keep
@@ -938,15 +940,21 @@ REMOVED
   ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` configured it
   only. Importing the names raises ``ImportError`` and passing a setting to
   ``with_subscription_processing()`` raises ``RuntimeError``, both naming
-  ``docs/migration/v3.16.rst``, "Callback delivery". **Breaking:** remove the
-  import or setting.
+  ``docs/migration/v3.16.rst``, "Callback delivery". The module's other names
+  (``CircuitBreaker``, ``CircuitState``, ``DeliveryResult``,
+  ``get_shared_client``, ``close_shared_client``) go with it: importing
+  ``actingweb.fanout`` raises. **Check:** remove the import or setting, and
+  pass the settings of ``with_subscription_processing()`` by keyword: two
+  parameters were added before the three removed ones, so a positional
+  eighth or ninth argument now sets ``callback_delivery_budget_seconds`` or
+  ``serialize_own_host_callbacks``.
 
 - **``CallbackOauthHandler``** (``actingweb.handlers.callback_oauth``). It
   was exported and documented but routed by neither integration, and
   specification 1.5 no longer defines the per-actor ``/oauth`` path it
   redirected to. Importing the module raises ``ImportError`` naming
   ``docs/migration/v3.16.rst``, "Removed: CallbackOauthHandler".
-  **Breaking:** remove the import; the OAuth2 callback is served at
+  **Check:** remove the import; the OAuth2 callback is served at
   ``/oauth/callback``.
 
 - **``Subscription.decrease_seq()`` is removed.** It rolled a subscription's
@@ -963,7 +971,8 @@ REMOVED
   ``properties`` value scan on PostgreSQL, ``Config.use_lookup_table``, the
   ``USE_PROPERTY_LOOKUP_TABLE`` variable, the ``use_lookup_table`` arguments
   of ``DbProperty``/``DbPropertyList`` and ``--legacy``/``--lookup-table`` on
-  ``python -m actingweb.db.verify_tables`` are gone. **Behavior change:**
+  ``python -m actingweb.db.verify_tables`` and
+  ``actingweb.db.verify_tables.lookup_mode_enabled`` are gone. **Behavior change:**
   ``ActingWebApp.with_legacy_property_index()`` now raises ``RuntimeError``
   (a tombstone, removed at the next major), and ``Config`` raises it for
   ``USE_PROPERTY_LOOKUP_TABLE=false`` and ``Config(use_lookup_table=False)``;
@@ -972,8 +981,12 @@ REMOVED
   ``DeprecationWarning``. **Check:** drop the setting, run
   ``actingweb-property-lookup report`` and ``backfill --apply`` before the
   deploy if the lookup table was never populated (see the entry under
-  CHANGED), and, once verified, drop the old table and GSI; nothing reads
-  them.
+  CHANGED), and, once verified, drop the old table and GSI; nothing in 3.16
+  reads them. Keep them while a rollback to a 3.15 deployment that still
+  reads the GSI (``USE_PROPERTY_LOOKUP_TABLE=false``) is possible.
+
+- **``MCPHandler.validate_google_token_and_check_actor_email``.** Nothing
+  in the library called it.
 
 CHANGED
 ~~~~~~~
@@ -1180,8 +1193,8 @@ CHANGED
   ``ActorInterface.modify_creator`` to move the creator, the email and the
   vouch together.
 - **Behavior change: a handoff to the trustee persists under the email
-  flag.** ``PUT /<id>/trust/trustee {"creator": "trustee"}`` (the creator, a
-  trustee or an admin peer may send it) set the creator to ``trustee``, and
+  flag.** ``PUT /<id>/trust/trustee {"creator": "trustee"}`` (the creator or
+  the trustee may send it; no peer may) set the creator to ``trustee``, and
   with ``force_email_prop_as_creator`` on the next load of a vouched actor
   moved it back to the stored email, ending the trustee's access the
   protocol's handoff is meant to give. It now stays until the trustee hands
@@ -1243,7 +1256,7 @@ CHANGED
 
 - **Breaking: ``RemotePeerStore.apply_callback_data`` and
   ``apply_resync_data`` take the subscription's level and report what they
-  could not apply.** Both take keyword-only ``subtarget`` and ``resource``
+  could not apply.** Both take keyword-only ``target``, ``subtarget`` and ``resource``
   and return a ``ReplicaApplyResult`` (a dict of per-key results) whose
   ``out_of_step`` attribute names a list diff the replica could not apply
   and ``failed`` the baseline entries it could not store. **Check:** code
@@ -1372,8 +1385,7 @@ CHANGED
   diffs after a resume: it re-reads the subscribed state on its own
   schedule (specification 1.5 says so). ``PeerCapabilities
   .supports_resync_callbacks()`` stays;
-  ``supports_resync_callbacks_cached()`` and
-  ``actingweb.property_list.fit_full_state`` are removed.
+  ``supports_resync_callbacks_cached()`` is removed.
 
 - **Behavior change: ``notify_subscribers(resource=...)`` sends the whole
   stored value above the resource.** ``actor.subscriptions
@@ -1511,8 +1523,10 @@ CHANGED
 - **Breaking: a custom trust store and an ``Actor`` subclass take new
   keywords.** ``DbTrust.delete`` takes the keyword-only ``only_if_secret``
   (delete only the row with that secret; False for a row with another one;
-  True when absent) and ``DbTrust.modify`` takes ``relationship``; the
-  library passes them on every trust ``DELETE`` and an MCP client's
+  True when absent); ``DbTrust.modify`` takes ``relationship``,
+  ``only_if_verified`` and ``only_if_secret``; ``DbTrust.create`` takes
+  ``only_if_absent`` and ``only_if_pending``. The library passes them on
+  every trust request, approval and ``DELETE`` and on an MCP client's
   re-authorisation at a new level. ``Actor.delete_reciprocal_trust`` (and
   its async twin) takes the keyword-only ``expected_secret`` and
   ``before_local_delete``, which the trust ``DELETE`` and ``sync_peer``
@@ -1520,6 +1534,18 @@ CHANGED
   ``Actor.delete()`` and ``purge_relationships()`` pass on every call. A backend or subclass without them raises ``TypeError``.
   **Check:** custom backends and overrides accept the keywords (or
   ``**kwargs``); ``docs/migration/v3.16.rst`` ("Custom database backends").
+
+- **Breaking: a custom backend implements three more methods.**
+  ``DbSubscriptionDiffList.delete_all_of_actor(actor_id)`` is called when
+  an actor is deleted and when its relationships are purged;
+  ``DbSubscriptionSuspension.delete_all()`` (which the bundled backends
+  already had) is now called then too, and when an actor is created under
+  an explicit id; ``DbActorList.iter_rows(consistent=..., rate_limit=...)`` is
+  what the operator commands page through the actors with
+  (``actingweb-mark-actors-vouched``, ``creator-to-email`` and the two
+  property-list tools). Both bundled backends implement them. **Check:** a
+  custom backend adds the three (``actingweb.db.protocols`` has the
+  contracts).
 
 - **Trust hooks fire once, with the same arguments, on every route.** An
   approval through ``PUT /trust/<rel>/<peer>`` or the web UI fired
@@ -1562,7 +1588,7 @@ CHANGED
   ``POST /oauth/register`` answers 400 ``invalid_client_metadata`` for
   either, names ``OAuth2ClientManager.create_client`` (which an actor's owner
   uses for such a client), and stores the default client type on the
-  system actor. **Breaking:** ``client_credentials`` for a client registered
+  system actor. ``client_credentials`` for a client registered
   that way is ``unauthorized_client``, also for one stored before 3.16.
 - **The MCP authorize form is bound to the browser; otherwise the user
   confirms.** **Behavior change:** the form sets a nonce cookie
@@ -1598,14 +1624,6 @@ CHANGED
   ``<type>`` is not the row's type (it answered the override or the type's
   defaults). Rows a client obtained before 3.16 keep their type until it
   authorises again.
-- **New:** ``AccessControlConfig.client_trust_type_acceptable()`` and
-  ``default_client_trust_type()`` (and module functions of the same names in
-  ``actingweb.permission_integration``); the ``oauth2_trust_requested``
-  lifecycle hook (fails closed; may decline or lower the level);
-  ``ActingWebOAuth2Server.complete_client_authorization()`` for a route that
-  signs the user in itself; ``DbTrust.modify(relationship=...)``
-  (keyword-only, both backends).
-
 - **Breaking: ``shared_properties`` no longer returns
   ``excluded_properties``.** ``GET /trust/<rel>/<peer>/shared_properties``
   lists the names the peer may read (decided as a read; it asked for an
@@ -1630,9 +1648,11 @@ CHANGED
   (``{"error": "not_approved"}`` for a trust not yet approved); a refused
   bulk ``POST /properties`` adds ``"refused"`` with the names it refused.
   It never says that an exclusion caused the refusal.
-- **``POST /properties/<name>`` is 400.** **Behavior change:** it answered
-  400 and then wrote the body as if posted to ``/properties``; post to the
-  collection.
+- **``POST /properties/<name>`` writes nothing for a name that is not a
+  list.** **Behavior change:** it answered 400 and then wrote the body as
+  if posted to ``/properties``; it now answers 400 and writes nothing, so
+  post to the collection. For a list's name it appends one item (see
+  "List items are addressed by path" above).
 - **``execute_property_hooks`` answers a permission denial with
   ``PERMISSION_DENIED``.** **Behavior change:** a denied ``get`` used to
   return the value unchanged; it now returns
@@ -1643,9 +1663,9 @@ CHANGED
   ``actingweb.access_table.access_table_admits`` and
   ``matching_access_row`` (also importable from ``actingweb.auth``) answer
   for a relationship without an ``Auth`` object;
-  ``actingweb.access_decision.decide`` is the one decision the routes ask.
-  ``PermissionEvaluator.evaluate_property_with_exclusions`` is removed
-  (``drop_excluded``, ``holds_excluded`` and ``path_excluded`` replace it).
+  ``actingweb.access_decision.decide`` is the one decision the routes ask;
+  ``drop_excluded``, ``holds_excluded`` and ``path_excluded`` in
+  ``actingweb.permission_evaluator`` apply a grant's exclusions.
 
 - **An access row authorises the method a request performs; a PUT or
   DELETE is no longer admitted by a GET row.** The subscription handler
@@ -1703,8 +1723,8 @@ CHANGED
   request. The SPA and email endpoints keep their configured CORS.
 
 - **Breaking: a custom ``DbAttribute`` backend must implement
-  ``create_attr_if_absent``** (the fourth custom-backend requirement of 3.16;
-  the migration guide's list has it). ``delete_attr_conditional`` and
+  ``create_attr_if_absent``** (one of 3.16's custom-backend requirements;
+  the migration guide lists them). ``delete_attr_conditional`` and
   ``conditional_update_attr`` keep answering ``False`` on a fault, and a test
   now pins that on both backends because single-use consumption depends on it.
 
@@ -1817,11 +1837,13 @@ CHANGED
   marker, or that was dropped from the indexed set for a deploy and restored,
   and it refuses a lookup table it cannot read ("could not be checked"). A
   store with no properties marks itself ready. ``check_ready()`` now
-  pre-warms the DynamoDB tables first and runs this and the
-  creator-uniqueness check together; when both refuse it raises
-  ``StoreNotReady`` listing both. **Check:** an application that catches only
-  ``UniqueCreatorNotReady`` should catch ``StoreNotReady`` (their common base
-  class), or the combined refusal escapes it. A PostgreSQL deployment must
+  pre-warms the DynamoDB tables first and runs this check with the others
+  (creator uniqueness, attribute lists, email as creator); when more than
+  one refuses it raises ``StoreNotReady`` listing each. **Check:** an
+  application that catches only ``UniqueCreatorNotReady`` should catch
+  ``StoreNotReady`` (the common base class of ``PropertyLookupNotReady``,
+  ``UniqueCreatorNotReady``, ``AttributeSchemaNotReady`` and
+  ``EmailAsCreatorNotReady``), or another refusal escapes it. A PostgreSQL deployment must
   run ``alembic upgrade head`` (revision ``f6a7b8c9d0e1``) before the deploy.
   A DynamoDB role that lists its actions needs ``dynamodb:BatchGetItem`` on
   ``<prefix>_property_lookup_v2``: the check reads the markers with one
@@ -1843,16 +1865,9 @@ CHANGED
   409, a store whose enforcement cannot be read 503, and DynamoDB actor
   creates, deletes and creator changes cost about 4-6 write units (the
   application's role needs ``ConditionCheckItem`` on the actor table).
-  **Breaking:** ``BaseHandler`` requires ``config`` (a handler built without
-  one raises ``ValueError``; the import-time ``Config()`` default would have
-  built an enforced handler that never ran ``check_ready()``), and
-  ``python -m actingweb.db.verify_tables`` lists the ``creators`` table unless
-  given ``--no-unique-creator``. Its ``required_models()``,
-  ``required_table_names()`` and ``verify_tables()`` take ``unique_creator``
-  as a keyword only: a 3.15 positional ``use_lookup_table`` argument raises
-  ``TypeError`` instead of being read as ``unique_creator``. The readiness check now reads one consistent
+  The readiness check reads one consistent
   item instead of calling ``DescribeTable``, so ``DescribeTable`` can still be
-  dropped from the runtime role. Code that builds ``Config()`` and creates
+  dropped from the runtime role. **Check:** code that builds ``Config()`` and creates
   actors without ``integrate_*`` must call ``check_ready()``: without it,
   with uniqueness on and ``enable --apply`` not yet run, every actor create,
   including the OAuth2 system actor bootstrap, raises ``DbError``
@@ -1862,6 +1877,17 @@ CHANGED
   DynamoDB a fault while reading the creators table's backfill item refuses
   the write too, with an ERROR naming the table, the fault and the
   ``dynamodb:GetItem`` permission it needs.
+
+- **Breaking: ``BaseHandler`` requires ``config``, and the
+  ``verify_tables`` functions take ``unique_creator`` by keyword.**
+  ``BaseHandler`` and its subclasses require ``config`` (a handler built without
+  one raises ``ValueError``; the import-time ``Config()`` default would have
+  built an enforced handler that never ran ``check_ready()``), and
+  ``python -m actingweb.db.verify_tables`` lists the ``creators`` table unless
+  given ``--no-unique-creator``. Its ``required_models()``,
+  ``required_table_names()`` and ``verify_tables()`` take ``unique_creator``
+  as a keyword only: a 3.15 positional ``use_lookup_table`` argument raises
+  ``TypeError`` instead of being read as ``unique_creator``.
 
 - **Breaking: ``with_unique_creator()`` is enforced by the database.** Before
   3.16 the flag made ``Actor.create`` list the creator's actors and refuse
@@ -1948,7 +1974,7 @@ CHANGED
   table); an application that already ran the flag on (the demo
   application does) needs both before it serves 3.16, or it refuses to
   start. See the entry
-  "Behavior change: ``unique_creator`` defaults to on" below.
+  "Behavior change: ``unique_creator`` defaults to on" above.
 
 - **Breaking: the factory form no longer redirects to an existing actor.**
   A form ``POST /`` for a creator that has an actor redirected to
@@ -1995,7 +2021,7 @@ CHANGED
   ``None``, ``[]`` or ``False``, and DynamoDB did the same on most single-row
   reads, so a throttle or a timeout looked exactly like absence, and a caller
   that acted on "absent" created, overwrote or deleted on a guess (the FIXED
-  entries below list eleven). The fault contract is now the same on both
+  entries below describe them). The fault contract is now the same on both
   backends and is stated in ``actingweb.db.protocols``: every ``get``,
   ``fetch``, ``get_by_creator``, ``get_bucket`` and reverse lookup raises
   ``actingweb.db.exceptions.DbError`` on a fault unless called with
@@ -2079,16 +2105,19 @@ CHANGED
   next sign-in, a ``DELETE`` or ``actingweb-deletions``: ``actor_deleted``
   runs again only when it raised ``DbError`` the first time (then every
   registered hook runs again), and ``actor_deleted_complete`` is announced
-  by the one finisher that holds the deletion's lease.
+  by the one finisher that holds the deletion's lease. A deletion finished
+  by ``actingweb-deletions`` runs no application hook.
 
 - **Breaking: the trust, subscription and peer-trustee list backends and
   ``DbActor.get_by_creator`` take ``strict``.** ``fetch(actor_id, *,
-  strict=False)`` and ``get_by_creator(creator, *, strict=False)`` are part of
-  the database protocols (``actingweb.db.protocols``); with ``strict=True`` a
-  read fault raises instead of answering ``[]`` or ``None``, and
-  ``get_by_creator`` leaves out an actor its index lists whose row is gone
-  (DynamoDB's creator index is eventually consistent). Both bundled backends
-  implement it. **Check:** a custom backend must accept the keyword.
+  strict=True)`` and ``get_by_creator(creator, *, strict=True)`` are part of
+  the database protocols (``actingweb.db.protocols``); a read fault raises
+  ``DbError`` instead of answering ``[]`` or ``None`` unless the caller
+  passes ``strict=False``. ``get_by_creator`` also takes ``consistent``
+  (with ``consistent=True`` it leaves out an actor its index lists whose row
+  is gone; DynamoDB's creator index is eventually consistent) and
+  ``ids_only``, which the sign-in lookup passes. Both bundled backends
+  implement all three. **Check:** a custom backend must accept the keywords.
 
 - **Breaking: ``conditional_update_attr`` takes ``clear_ttl``.** The
   attribute backend protocol (``actingweb.db.protocols``) gains a
@@ -2132,8 +2161,9 @@ CHANGED
   ``title`` when it is set.
 
 - **``Actor.delete`` returns a bool.** It returned ``None``; it now returns
-  ``True`` when the backend reported no fault removing the actor row
-  (PostgreSQL answers ``False`` on a caught fault; DynamoDB raises).
+  ``True`` when the actor row was removed and ``False`` when it was not
+  (an actor that was never loaded, or a row that still reads present); a
+  backend fault raises ``DbError`` on both backends.
   **Behavior change:** none for callers that ignored the result.
 
 - **``Actor.create`` returns ``False`` when it created nothing.** It returned
@@ -2162,9 +2192,10 @@ CHANGED
 - **``Actor.modify`` takes a passphrase and returns the backend result.** It
   accepted only ``creator`` and returned ``True`` whatever the backend did.
   ``Actor.modify(creator=None, passphrase=None)`` now returns ``False`` when
-  neither is given or the backend reports failure; DynamoDB raises on a failed
-  save and PostgreSQL returns ``False``, so callers that must know treat both
-  as failure. The in-memory values change only after the backend succeeded.
+  neither is given, the actor was never loaded or the update matched no
+  row; a failed save raises
+  ``DbError`` on both backends, so callers that must know treat both as
+  failure. The in-memory values change only after the backend succeeded.
   **Behavior change:** PostgreSQL's ``DbActor.modify`` reports a zero-row
   update as failure. **Check:** code that ignored the return value is
   unaffected; code that relied on ``True`` for a vanished row is not.
@@ -2181,7 +2212,10 @@ CHANGED
 - **The two factory 403s carry a body.** The duplicate-creator 403 on
   ``POST /`` was empty; it now answers ``{"error": true, "status_code": 403,
   "message": ...}`` for JSON clients and renders ``aw-root-failed.html`` with
-  ``error`` for form clients, as does the new closed-factory 403. The Flask
+  ``error`` for form clients, as does the new closed-factory 403. (A form
+  post for a creator that already has an actor is redirected to ``/login``
+  first; the form meets the duplicate-creator 403 only when two creates
+  race.) The Flask
   and FastAPI form fallbacks render the error page on 403 as well as 400.
   **Behavior change:** a client that expected an empty 403 body gets one.
 
@@ -2225,14 +2259,14 @@ CHANGED
   removed and top-level ``"spanned": true`` and ``"bytes"`` added; this
   covers a spanned item, a large ``update``, an ``extend`` of many items,
   and the REST handlers' single-item diffs. The library's receiver does not apply a reference: it
-  logs a WARNING and answers ``{"success": false, "spanned": true}``; the
-  subscriber re-reads the list. **Behavior change:** a pre-3.16 subscriber
+  marks the replica out of step and rebuilds the list from the publisher. **Behavior change:** a pre-3.16 subscriber
   answers ``unknown operation`` to a reference and stores nothing; a
   subscriber that applies diffs itself must re-read the list on
   ``"spanned": true``.
 
-- ``downgrade_to_v1`` refuses a list holding spanned items
-  (``reason="envelopes"``), and ``migrate_to_v2()`` refuses a v1 list
+- **Conversions and writers refuse what a spanned item's storage form
+  could be mistaken for.** ``downgrade_to_v1`` refuses a list holding
+  spanned items (``reason="envelopes"``), and ``migrate_to_v2()`` refuses a v1 list
   holding a dict item whose first key is ``__aw_env``
   (``reason="envelope-shaped item"``; the migrate script reports it as a
   refusal). Writers refuse an item that is a dict carrying ``__aw_env`` (or
@@ -2252,12 +2286,16 @@ CHANGED
   hex characters) are unaffected; an application that supplies its own ids
   must keep them free of ``$``.
 
-- An actor delete also sweeps the actor's property-list side partition
+- **An actor delete also sweeps the actor's property-list side partition**
   (spanned items' body rows), until a prefix read finds it empty, at most
-  three passes. ``actingweb-verify-orphans`` reports a leaked side
-  partition under its raw ``{actor_id}$aux`` key once the actor is gone.
+  three passes; it logs a WARNING when rows remain after its last pass.
+  ``actingweb-verify-orphans`` reports a leaked side partition under its
+  raw ``{actor_id}$aux`` key once the actor is gone. The sweep is skipped,
+  with an ERROR, when an actor exists whose id is the deleted actor's id
+  plus ``$aux`` (possible only with pre-3.16 caller-supplied ids).
 
-- ``GET /properties?metadata=true`` reports each list's ``total_bytes``
+- **The REST list reads and writes with spanned items.**
+  ``GET /properties?metadata=true`` reports each list's ``total_bytes``
   from the item rows alone (a spanned item's head carries its size), and
   ``format=full`` and ``metadata=true`` report a list with a broken span or
   a malformed head with an ``error`` marker instead of failing the whole
@@ -2319,11 +2357,6 @@ CHANGED
   list_item_span_threshold``), where an item at the ceiling could not be
   stored. **Behavior change:** such a pair raises ``ValueError`` wherever
   it is set.
-
-- An actor delete skips the side-partition sweep, with an ERROR, when an
-  actor exists whose id is the deleted actor's id plus ``$aux`` (possible
-  only with pre-3.16 caller-supplied ids), and logs a WARNING when rows
-  remain after its last pass.
 
 - **Breaking: ``SubscriptionManager.is_suspended()`` raises ``DbError`` on a
   fault.** It answered ``False`` when the suspension could not be read, so a
@@ -2440,7 +2473,8 @@ ADDED
 
 - **``ActingWebApp.with_callback_delivery()``, with
   ``callback_delivery_budget_seconds`` and ``serialize_own_host_callbacks``**
-  (also accepted by ``with_subscription_processing()``): a total time one
+  (also accepted by ``with_subscription_processing()``; it takes
+  ``max_concurrent_callbacks`` too): a total time one
   request may spend delivering its callbacks, shared by every diff it
   registers (off by default; only on a write that waits for its callbacks, the
   event loop's sends are past the response already; sends not started are skipped, sends in flight
@@ -2448,6 +2482,22 @@ ADDED
   to send own-host subscribers under the bound for a deployment that serves
   one request per function instance. See ``docs/quickstart/deployment.rst``.
 
+- **An MCP client's level: the names an application uses.**
+  ``AccessControlConfig.client_trust_type_acceptable()`` and
+  ``default_client_trust_type()`` (and module functions of the same names in
+  ``actingweb.permission_integration``); the ``oauth2_trust_requested``
+  lifecycle hook (fails closed; may decline or lower the level);
+  ``ActingWebOAuth2Server.complete_client_authorization()`` for a route that
+  signs the user in itself.
+- **``Actor.deferred_callbacks()``**, a context manager: inside it
+  ``register_diffs`` stores and numbers each diff as always and holds the
+  callbacks, which are delivered together when the block ends (also when it
+  raises). Nested blocks deliver once, at the outermost.
+- **``HookRegistry.allows_anonymous_callback(name)``** tells whether a
+  callback hook for ``name`` was registered with ``allow_anonymous=True``.
+- **``ListProperty.append_indexed(item)``** appends and returns the index
+  the item landed at (``None`` when it was written but its index could not
+  be read).
 - **``allow_anonymous`` on callback hooks, for third-party webhooks.**
   ``@app.callback_hook(name, allow_anonymous=True)`` lets an unauthenticated
   ``POST /<actor_id>/callbacks/<name>`` reach that hook (only a ``POST``
@@ -2468,7 +2518,7 @@ ADDED
   specification defines that value as the application's; unset it is the
   library's version, as before, so an application should set its own.
 
-- ``actingweb-unique-creators creator-to-email [--apply]``: moves each actor
+- **``actingweb-unique-creators creator-to-email [--apply]``**: moves each actor
   vouched for its current creator whose stored email is another address to
   that email (conditioned on what it read, so a concurrent sign-in wins),
   and after a complete clean ``--apply`` run writes the marker the start-up
@@ -2479,12 +2529,12 @@ ADDED
   prints addresses (ids only by default). The marker means the sweep
   completed once: run it again after the deploy and after any period with
   the flag off.
-- ``actingweb-mark-actors-vouched --email-as-creator``: before vouching an
+- **``actingweb-mark-actors-vouched --email-as-creator``**: before vouching an
   actor whose creator is an address and whose stored email is another one,
   sets the email to the creator, so the sweep does not then hand the actor
   to an address nobody proved. Without it such actors are counted
   (``email_differs``).
-- ``EmailAsCreatorNotReady`` (``actingweb.interface``), the fourth
+- **``EmailAsCreatorNotReady``** (``actingweb.interface``), the fourth
   ``check_ready()`` refusal.
 
 - **Attribute lists with the property list interface.**
@@ -2585,7 +2635,8 @@ ADDED
   prefixed ``config.root`` to it should prefix the origin only.
 
 - **``actingweb-unique-creators``** (``report``, ``resolve``, ``enable``,
-  ``disable``; dry run unless ``--apply``). ``report`` lists actors sharing
+  ``disable``, and ``creator-to-email``, which has its own entry above; dry
+  run unless ``--apply``). ``report`` lists actors sharing
   a creator, including addresses that differ only by case, and on DynamoDB
   ``creators`` records whose actor is gone or holds another creator and
   actors without a record. ``resolve`` keeps one actor per group (vouched,
@@ -2597,10 +2648,11 @@ ADDED
   clean, 1 found or refused, 2 store unreadable. Also as
   ``scripts/unique_creators.py``.
 
-- **``ActingWebApp.check_ready()``** runs the ``with_unique_creator()``
-  startup check for an application that uses neither integration, and
-  ``python -m actingweb.db.verify_tables --unique-creator`` includes the
-  ``creators`` table.
+- **``ActingWebApp.check_ready()``** runs the start-up checks (reverse
+  lookup, creator uniqueness, attribute lists, email as creator) for an
+  application that uses neither integration, and
+  ``python -m actingweb.db.verify_tables`` includes the ``creators`` table
+  unless ``--no-unique-creator`` is given.
 
 - **``ActorInterface.modify_creator(new_creator, *, unvouch=False)``** and
   **``Actor.modify_creator_unvouched(creator)``**. With ``unvouch=True`` an
@@ -2667,8 +2719,8 @@ ADDED
   tokens whatever the client; ``adopt_actor`` and ``is_vouched_actor`` in
   ``actingweb.oauth2``. Fault-aware reads for callers that act on absence:
   ``InternalStore.loaded`` (whether the ``_internal`` read was answered),
-  ``fetch(actor_id, strict=True)`` on the trust and subscription list
-  backends (raise instead of PostgreSQL's ``[]`` on a fault), and
+  ``fetch(actor_id)`` on the trust and subscription list backends (it
+  raises on a fault; ``strict=False`` asks for the old ``[]``), and
   ``OAuth2SessionManager.revoke_all_tokens(actor_id, strict=True)`` (raise
   ``TokenStoreUnavailable`` when a token could not be revoked).
   ``InternalStore.set_confirmed(name, value)`` writes a value and confirms
@@ -2724,14 +2776,15 @@ ADDED
   repair), never a partial item. Costs: one extra paged read per spanned
   item on every resolving read, and the body rows on every write.
 
-- ``items_with_handles(resolve=False)`` and
+- **Reading a list without its spanned bodies.**
+  ``items_with_handles(resolve=False)`` and
   ``to_list_from_rows(rows, resolve=False)`` skip spanned items' bodies (the
   slot holds the new ``UNRESOLVED`` sentinel, exported from ``actingweb``),
   ``ListItemHandle`` gains ``spanned`` and ``bytes``, ``item_at(handle)``
   reads one item now, and ``sizes_from_rows(rows)`` gives each item's size
   without a body read.
 
-- ``verify()`` reports ``spanned_items``, ``span_bytes`` and
+- **Checking and sweeping spans.** ``verify()`` reports ``spanned_items``, ``span_bytes`` and
   ``malformed_heads``; ``verify(spans=True)`` also enumerates body rows and
   reports ``span_body_rows``, ``orphan_span_gens`` and ``broken_spans``.
   ``sweep_span_orphans()`` removes orphan body generations older than an
@@ -2797,7 +2850,8 @@ ADDED
   remain); ``resume [ACTOR_ID] --apply`` finishes them without application
   hooks and prints the finished ids, and purges expired tombstone and
   verification-index rows on PostgreSQL; ``clear ACTOR_ID --apply`` removes
-  a stray tombstone from a live actor. Exit 0, 1 (work left, or a dry run
+  a stray tombstone from a live actor; ``resume --no-notify-peers`` skips
+  the remote ``DELETE`` calls. Exit 0, 1 (work left, or a dry run
   with work), 2 (the tombstone store cannot be read). Pass
   ``--no-unique-creator`` when the application runs without uniqueness.
 
@@ -3316,42 +3370,42 @@ FIXED
   ``TrustManager.create_or_update_oauth_trust`` read the existing trust, and
   a fault read as "none", so it generated a new secret, reset
   ``peer_approved`` and upserted over the stored row. The read raises now and
-  nothing is written. (B1)
+  nothing is written.
 
 - **A permission-override update could overwrite the stored override with a
   partial one.** ``PUT /<id>/trust/<rel>/<peer>`` and
   ``PUT .../permissions`` read the existing override, and a fault read as
   "none", so the request's partial update was stored as the whole override
   and the peer notified. The read propagates now (503) and nothing is stored
-  or sent. (B2)
+  or sent.
 
 - **One faulted read cached "no permission override" for the whole
   process.** ``TrustPermissionStore.get_permissions`` cached the fault's
   ``None``, and the evaluator then applied the trust type's base permissions
   to that peer until restart. Nothing is cached on a fault now; the store
   and the evaluator re-raise ``DbError``, so the request answers 503 instead
-  of being evaluated against the wrong permissions. (B3)
+  of being evaluated against the wrong permissions.
 
 - **With ``unique_creator`` a listing fault let ``Actor.create`` insert a
   duplicate.** The uniqueness check listed the creator's actors, and a
   PostgreSQL fault answered "none". The check-then-insert is gone: the
-  database refuses the duplicate, and a fault refuses the create. (B4)
+  database refuses the duplicate, and a fault refuses the create.
 
 - **A sign-in, the email form or the factory form could create a second
   actor for an address that has one.** ``Actor.get_from_creator`` read a
   listing fault as "no actor", and its callers created one. It raises now; a
-  sign-in answers 503 and creates nothing. (B5)
+  sign-in answers 503 and creates nothing.
 
 - **A faulted peer-trustee read created a new peer actor.**
   ``Actor.get_peer_trustee`` read a fault as "no peer" and POSTed to the
   peer's factory, creating a peer actor and a reciprocal trust. It raises
-  now, before any request. (B6)
+  now, before any request.
 
 - **A faulted read reset a subscription's callback queue.** The callback
   processor read its state, pending queue and sequence with folding reads, so
   a fault overwrote the queue and treated every callback as a gap. The reads
   raise before any write now, and ``POST /<id>/callbacks/subscriptions``
-  answers 503 so the peer retries with the queue and state untouched. (B7)
+  answers 503 so the peer retries with the queue and state untouched.
 
 - **``Actor.delete`` could delete an actor without notifying its peers.**
   The trust and subscription lists were read after the wipe had started, and
@@ -3360,7 +3414,7 @@ FIXED
   strictly: a fault raises before ``Actor.delete`` writes its tombstone or
   removes anything. The ``DELETE /<id>`` route reads them before it writes its
   own tombstone and fires ``actor_deleted``, so a fault there answers 503 with
-  nothing written either. (B8)
+  nothing written either.
 
 - **Two concurrent changes to one subscription could share a sequence
   number, and a failed diff could hand its number out again.** The publisher
@@ -3381,7 +3435,6 @@ FIXED
   Upgrade every worker before the 3.16 ones publish diffs: a 3.15 worker
   still writes the sequence as ``previous + 1`` and can move it back. A
   custom backend must implement ``increment_seq`` (see the migration guide).
-  (D4, G4, D5)
 
 - **Resuming suspended subscriptions could lose every change made while
   they were suspended.** ``resume_subscriptions()`` removed the suspension
@@ -3396,24 +3449,23 @@ FIXED
   (an item over the backend's size limit) is logged as that subscriber's
   miss instead, and a resync that fails over HTTP is not counted: a return
   value below the number of subscribers means some did not get the resync.
-  (A5, A6, C6)
 
 - **On DynamoDB, ``GET /<id>/subscriptions/<peer>/<subid>`` listed diffs in
   key order.** Past sequence 9 the diffs came back as 1, 10, 11, 2, because
   the list was sorted into a result that was then thrown away. They are now
-  in sequence order, as on PostgreSQL. (H5)
+  in sequence order, as on PostgreSQL.
 
 - **Deleting an outbound subscription could delete the peer's whole stored
   dataset.** ``Actor.delete_subscription`` counted the actor's other
   subscriptions to that peer, and a fault read as "none", so it deleted the
   ``RemotePeerStore`` bucket. The fault propagates now; neither the
-  subscription nor the bucket is deleted. (B9)
+  subscription nor the bucket is deleted.
 
 - **A faulted read during a permission callback skipped revocation
   cleanup.** ``POST /<id>/callbacks/permissions/<peer>`` read the previous
   permissions, and a fault read as "first grant": revoked data was kept and
   everything was synced. The callback answers 503 now, before anything is
-  stored or synced. (B10)
+  stored or synced.
 
 - **An actor whose sign-in marker could not be read was ranked like an
   unvouched one.** With several actors sharing an address, a fault on the
@@ -3421,7 +3473,7 @@ FIXED
   actor renamed to the address, say) win the sign-in, be cleaned and then
   outrank the owner's for good. ``get_from_creator`` raises on an unreadable
   marker now, and the replacement creates a successor only when every actor
-  left is a ``factory`` one: an unreadable one fails the sign-in. (BR)
+  left is a ``factory`` one: an unreadable one fails the sign-in.
 
 - **Every sign-in read every factory actor for the address.** With an open
   factory anyone can add actors to an address faster than the per-sign-in
@@ -3430,7 +3482,7 @@ FIXED
   ``get_by_creator(ids_only=True)`` now lists ids from the index alone, the
   lookup reads actors in id order only up to the first vouched one plus the
   cap, the listing is passed down instead of repeated, and a fault on an
-  actor the sign-in will not touch no longer blocks it. (BS)
+  actor the sign-in will not touch no longer blocks it.
 
 - **A fault reading the OAuth2 state encryption key replaced the key.** The
   state manager read the stored key inside a catch-all, so a throttle or
@@ -3470,14 +3522,16 @@ FIXED
   for an oversized item gets ``ListItemTooLargeError`` (a ``ValueError``)
   instead, before any write, or the item is stored.
 
-- The property-list module docstring said items were stored "bypassing the
+- **Docstrings that promised no size limit.** The property-list module
+  docstring said items were stored "bypassing the
   400KB limit"; each item is one row, so the limit applies per item, and
   the docstring now says so. ``get_metadata()``'s ``chunk_size`` is
   documented as a legacy field that is always ``1``. The configuration
   guide's "property lists for chunked storage" advice is reworded the same
   way. No behaviour change.
 
-- The ``://`` prefix form of a permission pattern (``notes://``) is now
+- **One matching path for permission patterns.** The ``://`` prefix form
+  of a permission pattern (``notes://``) is now
   matched through the glob path as ``notes://*`` instead of a separate
   ``startswith`` branch. No behaviour change: the two match the same
   targets, ``..`` segments included, and a pattern that already holds a
@@ -3485,9 +3539,9 @@ FIXED
   security reference now say that resource URIs are not normalised and a
   resource reader validates its own path.
 
-- **Adoption follow-ups.** A listing by creator dropped no row that the
-  DynamoDB index still listed after a rename (it now reads each row's
-  creator); a second sign-in meeting a ``factory`` sibling that another one
+- **Adoption follow-ups.** The sign-in's lookup by creator kept a row that
+  the DynamoDB index still listed after a rename (it now reads each row's
+  creator and drops it); a second sign-in meeting a ``factory`` sibling that another one
   was wiping wiped it again (it is now left to that one); a nested
   replacement reported only its own level in ``actor_adopted``; a
   replacement scanned the shared SPA token buckets once per actor (now one

@@ -551,7 +551,7 @@ and the next sign-in retries.
 
     **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
 
-    **Note**: Fires once, when this actor's approval completes the mutual trust (the peer had already approved), on every approving route: ``PUT /trust/<rel>/<peer>`` and the web UI, ``TrustManager.approve_relationship`` and ``approve_relationship_async``, and creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). A repeat approval of a trust already approved fires nothing (3.16). ``trust_data`` is the row as approved. The trustee path (``create_peer_trustee``) fires nothing. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
+    **Note**: Fires once, when this actor's approval completes the mutual trust (the peer had already approved), on every approving route: ``PUT /trust/<rel>/<peer>`` and the web UI, ``TrustManager.approve_relationship`` and ``approve_relationship_async``, and creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). A repeat approval of a trust already approved fires nothing (3.16). ``trust_data`` is the row as approved. The trustee path (``Actor.get_peer_trustee``) fires nothing. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
 
     **Built-in Behavior**: none on this hook. With ``with_peer_profile()`` the peer's profile is fetched and cached by the first sync (``sync_peer``) or ``refresh_peer_profile()``, not when this hook fires.
 

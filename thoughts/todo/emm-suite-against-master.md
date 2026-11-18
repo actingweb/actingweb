@@ -110,7 +110,14 @@ because 3.15 swallowed a failed write, and a hooks-only subscriber's
 standing list of IAM actions is answered by that table.
 
 Still to run: `3-16-release-validation` (the last; it deletes
-this file). A run now starts with `creator-to-email` (dry run, then
+this file). It does not compare with the baseline above: its Phase 1
+brings the adoption worktree up to Emm's `main` (`c1be751c`; the runs
+above were against `dd5e2ccb`) and takes a new baseline on this
+repository's `master` (owner, 2026-11-18). **Taken 2026-11-18 on
+`da6de67`: PostgreSQL 2 failed, 7,698 passed; DynamoDB lane 3 failed, 57
+passed; five names, all in the baseline above (the date-dependent case no
+longer fails on Emm's `main`);
+`thoughts/research/2026-11-18-3-16-release-validation.md` has them.** A run now starts with `creator-to-email` (dry run, then
 `--apply`) on the environment's database before the preview server.
 
 ## How a run is done

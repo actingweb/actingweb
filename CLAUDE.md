@@ -180,10 +180,17 @@ after merging. Tag the merge commit.
 - Version files: `pyproject.toml` (`version = "X.Y.Z"`) and
   `actingweb/__init__.py` (`__version__ = "X.Y.Z"`), PEP 440; both must match
   the tag exactly. The tag workflow validates this.
-- Patch vs minor: a patch (`3.14.x`) when no route, hook name, kwarg,
+- Patch, minor or major (`CONTRIBUTING.rst`, "Which number a release
+  gets", has the full rule): a patch when no route, hook name, kwarg,
   response field, public signature or config option changes (additive
   keyword-only parameters with defaults are fine); a minor otherwise, with a
-  migration guide.
+  migration guide, as long as an application that upgrades unread keeps
+  working or is told at start-up what to do and its stored data stays
+  readable by the previous minor; a major when a documented name is
+  removed, data is written that the previous release cannot read without an
+  operator's step, a default changes what an unchanged application does, or
+  a peer on the previous release loses a flow for a reason other than a
+  security fix. The release after 3.15.1 is 4.0.0 (owner, 2026-11-18).
 - Changelog promotion: rename `Unreleased` to `vX.Y.Z: Month D, YYYY` (or
   `vX.Y.ZrcN: ...`), add a new empty `Unreleased` above it; a minor's entry
   opens with a `.. note::` pointing at its migration guide.

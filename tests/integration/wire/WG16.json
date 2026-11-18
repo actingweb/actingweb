@@ -406,6 +406,10 @@
       "tools": [
        {
         "description": "Search (wire harness).",
+        "inputSchema": {
+         "properties": {},
+         "type": "object"
+        },
         "name": "search"
        }
       ]
@@ -478,6 +482,10 @@
        "tools": [
         {
          "description": "Search (wire harness).",
+         "inputSchema": {
+          "properties": {},
+          "type": "object"
+         },
          "name": "search"
         }
        ]

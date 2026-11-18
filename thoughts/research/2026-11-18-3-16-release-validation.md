@@ -174,8 +174,10 @@ two are different calls and the docstring agrees with the first.
 ## 3.15.1 and this release as peers (item 6, AC-14)
 
 Three sources. The specification's 49 "Changed:" lines and the recordings'
-`reason` lines are classed in
-[`2026-11-18-3-16-release-validation.wire.md`](2026-11-18-3-16-release-validation.wire.md):
+`reason` lines are classed in the wire appendix
+(`2026-11-18-3-16-release-validation.wire.md`, kept out of the repository
+until the stable tag: it cites 3.15.1's code for each security-traced
+difference; owner, 2026-11-18):
 of the 49, 24 say what 3.15.1 already did, 14 change what is sent, 9 what
 is accepted, 2 are additive. The recordings cannot stand in for 3.15.1:
 every first recording is from 2026-11-07 or later. The release decides
@@ -669,3 +671,45 @@ nothing new. This run covers the two library changes of Phases 2 and 3
 (the decision-hook fallback, `store_permissions_async` under synchronous
 callbacks). Nothing was committed in Emm; its worktree still carries only
 its four test-harness edits.
+
+## The MCP quickstart with a real client (Phase 3, item 7, AC-17)
+
+`examples/mcp_quickstart.py` on DynamoDB Local (prefix `mcpqs`), behind an
+ngrok tunnel on the owner's domain, whose callback is already authorised
+on the `actingwebdemo` OAuth client (owner, 2026-11-18); only that
+client's id and secret were read from `actingwebdemo`'s `.env`, by name,
+and neither was printed. The server listened on `127.0.0.1` only. The
+owner added it to Claude Code 2.1.327 (`claude mcp add --transport http`)
+and signed in with Google.
+
+**What worked at once:** the first-run sequence (first start stopped,
+`enable --apply`, start); discovery, dynamic client registration, the
+Google sign-in, the confirmation, the code and the token; `initialize`
+after the client's one refused protocol version (`2026-07-28`, the normal
+fallback).
+
+**Four findings, fixed here:**
+- *The example could not run behind a tunnel or proxy.* It took its port
+  from `APP_HOST_FQDN`, so a public host without a port raised at start. It
+  reads `PORT` now, and binds `127.0.0.1` unless `HOST` says otherwise (it
+  bound every interface: the plan's review item for this step).
+- *The client reopened the stream in a loop*: an authenticated
+  `GET /mcp` with `Accept: text/event-stream` got 200 and a JSON document;
+  the transport allows a stream or 405, and the client asked more than 50
+  times. Whether that alone hid the tools is not known: the first
+  reconnect after the fix failed on the next finding. Now 405 with `Allow: POST`
+  (`tests/integration/test_oauth2_flows.py::TestMCPWithIssuedToken::test_an_authenticated_stream_opener_gets_405`,
+  seen failing first). 3.15.1 answers the same way.
+- *Claude Code offered none of the tools*: a tool declared without
+  `input_schema` was listed without `inputSchema`, which MCP requires, and
+  the client rejected the whole list. Now an empty object schema
+  (`tests/test_mcp_permissions.py::TestEveryToolHasAnInputSchema`, seen
+  failing first); the quickstart's `create_note` declares its own.
+- *One `POST /oauth/authorize` answered 400 with nothing in the log.* The
+  sign-in went through on the next attempt; the cause cannot be read back.
+  That branch now logs the error code and description (fixed strings, no
+  request values).
+
+After the fixes `create_note` ran through Claude Code and stored the note.
+The server and the tunnel were stopped and the `mcpqs` tables dropped; the
+`aw-qs` entry in the owner's Claude Code configuration is theirs to remove.

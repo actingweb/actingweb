@@ -36,6 +36,12 @@ and filled by each phase.
     carries acceptance criteria and a Spec Delta.
   - *Written in this update*: Acceptance Criteria, Traceability, Spec
     Delta. They replace nothing; the numbering starts here.
+- **2026-11-18** (during Phase 4, owner): the changelog's release section
+  is cleaned to the changes a 3.15.1 user sees. Entries about the
+  development of this release (a fix to something new in it, a step
+  between two unreleased states, a review or plan detail) are removed or
+  folded into the entry for the change itself. New: AC-24 and its Phase 4
+  item.
 
 ## Overview
 
@@ -231,6 +237,16 @@ phase's verification names the items it closes.
     fresh agent session in it and gives it the task. `actingwebdemo` cannot
     be that repository: its `CLAUDE.md` and `vendor/actingweb` would make
     the task succeed without the skill.
+- **[Added 2026-11-18] Two sign-in findings, the owner's answers.** A
+  sign-in through `/oauth/callback` whose state names `trust_type` asks
+  `oauth2_trust_requested` before creating the client trust ("ask the
+  hook"); a decline means no trust, and the sign-in goes on, as the
+  client-list check beside it already did (confirmed by the owner after
+  the option's text had said "fails the sign-in closed"); a hook that
+  names another type declines too, since no page can show it ("decline"). The SPA browser redirect mints
+  a refresh token only for `hybrid` delivery, the one that hands it out
+  ("mint only for hybrid"). Both predate this plan; both land after
+  Phase 3's commit, in Phase 4's.
 
 ## Decisions Deferred
 
@@ -410,6 +426,11 @@ research note or the verification document.
 - **AC-23** (item 8) — When a contributor asks which number a release
   gets, `CONTRIBUTING.rst` states the rule for a patch, a minor and a
   major.
+- **AC-24** (item 1, owner 2026-11-18) — When a 3.15.1 user reads the
+  release's changelog section, every entry describes a difference from
+  3.15.1: none describes a fix or a change to something that did not
+  exist in 3.15.1, and none names a plan, a review or an intermediate
+  state of the release.
 
 ## Traceability
 
@@ -431,13 +452,14 @@ research note or the verification document.
 | AC-14 | 1, 2 | manual: the live pair's table, 18 cells (two versions cannot share the test process) | Done 2026-11-18: 18 of 18 complete; every difference has the owner's outcome (accept) |
 | AC-15 | 2 | `tests/integration/test_wire_v315.py`, one test per row of the table marked "kept" or "restored"; each is added to this row when written | Passing on both backends, twice each (2026-11-18): `test_wv1_data_callback`, `test_wv2_resync_callback`, `test_wv3_nested_write`, `test_wv4_second_trust_request` (rows `WV1` to `WV4`). No row is "kept" or "restored" (owner); these pin the forms a 3.15.1 peer sent in the live pair, and the one refusal |
 | AC-16 | 4 | manual: the section read against the table and the inventory's rolling-deploy rows; docs build | Not run |
-| AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Waits on the owner ("I can do it when it's right"); before the rc tag |
+| AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Done 2026-11-18 with the owner (Claude Code, Google sign-in, through ngrok): `create_note` ran after four fixes (note, "The MCP quickstart with a real client") |
 | AC-18 | 3 | manual: one fresh agent session in the scratch repository, started by the owner | Done, run through the claude and codex CLIs at the owner's request: both read `SKILL.md` first (codex only after its front matter was fixed; `tests/test_agent_skill.py`) |
 | AC-19 | 3 | manual: the same session; the application is started, not only written | Done: both started it through the first-run sequence with the defaults kept and showed the hook's result over REST |
 | AC-20 | 3 | `tests/test_docs_api_consistency.py::test_taught_names_are_not_removed` (`README.rst`, `skills/`, `examples/`, `docs/` outside `migration/`; a name is excused only within two lines of a sentence saying it is removed or deprecated, instead of the planned allow-list of pages, so a new page that names a removed option on purpose needs no list entry) | Passing |
 | AC-21 | 4 | `tests/test_version_consistency.py` (both tests) | Not run |
 | AC-22 | 1, 4 | the wire suite in the Full tier, run after the bump commit | Phase 1: the eight recordings pass with the version set to `9.9.9`; run again after the bump |
 | AC-23 | 1 | manual: the rule read in `CONTRIBUTING.rst` and CLAUDE.md "Release" | Done 2026-11-18 |
+| AC-24 | 4 | manual: each entry checked against `v3.15.1` (the inventory's rows and `git show v3.15.1:`), the removed or folded entries listed in the note; the `SECURITY` leads stay as they are | Not run |
 
 ## Spec Delta
 
@@ -475,7 +497,16 @@ iterations log.
 
 ### `thoughts/specs/mcp-server.md`
 
-- None yet.
+- **ADDED** — When an authenticated client sends `GET /mcp` with `Accept:
+  text/event-stream`, the server answers 405 with `Allow: POST` (it offers
+  no server-to-client stream); a plain authenticated `GET /mcp` still gets
+  the server's document. [test]
+  `tests/integration/test_oauth2_flows.py::TestMCPWithIssuedToken::test_an_authenticated_stream_opener_gets_405`
+- **ADDED** — When a tool is declared without `input_schema`, `tools/list`
+  lists it with `inputSchema: {"type": "object", "properties": {}}`; a
+  declared schema is listed as declared. [test]
+  `tests/test_mcp_permissions.py::TestEveryToolHasAnInputSchema`
+  (both: the MCP quickstart with a real client, 2026-11-18.)
 
 ### `thoughts/specs/oauth-client-registration.md`
 
@@ -492,6 +523,14 @@ iterations log.
   direct test, it needs a provider's code). (Phases 2 and 3: found by
   walking the upgrade as a consumer; the documents already said so for
   the helper, the code did not.)
+- **ADDED** — When a sign-in through `/oauth/callback` names `trust_type`
+  in its state, the application's `oauth2_trust_requested` hooks decide
+  (`confirmed=False`, no client id or name); a decline, an exception or
+  another type than the one requested creates no trust, and the user is
+  still signed in. [test]
+  `tests/test_spa_trust_type.py::test_a_sign_in_naming_a_trust_type_asks_the_decision_hook`,
+  `::test_another_type_declines_and_no_hook_keeps_the_request`
+  (owner's decision 2026-11-18.)
 
 ## Rules for every phase
 
@@ -1071,8 +1110,10 @@ phase.
 
 ### Implementation Status: Complete
 
-Complete on 2026-11-18 except the MCP quickstart, which waits on the owner
-(AC-17's row says so); it is run before the rc tag.
+Complete on 2026-11-18. The MCP quickstart (AC-17) ran with the owner after
+Phase 3's commit; its four fixes (two in `actingweb/handlers/mcp.py`, the
+example's `PORT`/`HOST`, a log line for the authorize 400) land with the
+two sign-in decisions in Phase 4's commit.
 
 ---
 
@@ -1130,6 +1171,16 @@ Not started while a decision of Phase 1 holds it.
     every section an explicit label, and references by label, never by
     item number. **The seven titles that library messages quote keep their
     text**, or the message changes in the same commit.
+- **`CHANGELOG.rst`, only what changed since 3.15.1** (owner,
+  2026-11-18), before it is reordered: each entry of the release's section
+  is checked against `v3.15.1`. An entry that fixes or changes something
+  3.15.1 did not have (a defect found in this release's own development,
+  such as `complete_client_authorization` not asking the hooks, or a
+  default that moved twice before the release) is removed, or folded into
+  the entry that introduces the thing, so the reader sees the end state
+  only; wording that refers to the development ("in the previous rc",
+  "since the earlier change", a plan or a review) goes. What was removed
+  or folded is listed in the note (AC-24).
 - **`CHANGELOG.rst`, as it reads**: the opening `.. note::` with what stops
   a start, the commands, and the pointer to "Start here"; **Breaking:**
   entries first within `CHANGED`; one order within each category, by the
@@ -1203,7 +1254,24 @@ Not started while a decision of Phase 1 holds it.
   the work as finished
 - [ ] The verification document states "ready to tag" or lists what is not
 
-### Implementation Status: Not Started
+### Notes from implementing (2026-11-18)
+
+- **Checkpoint commit first** (advisor): the fixes that came after Phase
+  3's commit (the sign-in hook and its decline rule, the hybrid-only
+  refresh token, the MCP stream opener's 405, the default `inputSchema`,
+  the quickstart's `PORT`/`HOST`, a log line for an authorize 400) were
+  committed before the 4.0 rename, so a failure after the sweep cannot be
+  confused with them. On that tree: the Full tier, with `WG16` and `WG17`
+  re-recorded for the default `inputSchema` (owners
+  `3-16-release-validation:4`, identical twice on each backend) and one
+  parallel-load flake (`test_verification_fetch.py::TestLateAndFull::test_a_full_pool_refuses_at_once`,
+  three passes alone); Emm's suite: the baseline's five, nothing new.
+- **The wire appendix was in the branch** (committed in Phase 1, before
+  the owner's decision to keep it local). The branch was never pushed; the
+  file is taken out of every commit that carries it and kept outside the
+  repository until the stable tag.
+
+### Implementation Status: In Progress
 
 ---
 

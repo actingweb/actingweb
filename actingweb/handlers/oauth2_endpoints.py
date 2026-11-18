@@ -367,6 +367,11 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # Error response
                 error = server_response.get("error", "server_error")
                 description = server_response.get("error_description", "Unknown error")
+                # Logged: a 400 here left nothing to read in the server log
+                # (release validation 2026-11-18).
+                logger.warning(
+                    f"Authorization {method} refused with 400: {error}: {description}"
+                )
                 return self.error_response(400, f"{error}: {description}")
 
         except DbError:

@@ -204,3 +204,54 @@ class TestMcpPermissions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEveryToolHasAnInputSchema(unittest.TestCase):
+    """Release validation 2026-11-18 (the MCP quickstart through Claude
+    Code): a tool declared without ``input_schema`` was listed without
+    ``inputSchema``, which MCP requires, and the client rejected the whole
+    list ("tools.0.inputSchema: expected object"). It is listed with an
+    empty object schema instead; a declared schema is kept."""
+
+    @patch("actingweb.handlers.mcp.RuntimeContext")
+    @patch("actingweb.permission_evaluator.get_permission_evaluator")
+    @patch.object(MCPHandler, "authenticate_and_get_actor_cached")
+    def test_a_tool_without_a_schema_gets_an_object_schema(
+        self, mock_auth, mock_get_eval, mock_runtime_context
+    ):
+        from actingweb.permission_evaluator import PermissionResult
+
+        hooks = HookRegistry()
+
+        @mcp_tool(description="No schema declared")
+        def bare(actor, action_name, data):
+            return {}
+
+        declared = {"type": "object", "properties": {"q": {"type": "string"}}}
+
+        @mcp_tool(description="Schema declared", input_schema=declared)
+        def with_schema(actor, action_name, data):
+            return {}
+
+        hooks.register_action_hook("bare", bare)
+        hooks.register_action_hook("with_schema", with_schema)
+        handler = MCPHandler(config=Config(mcp=True, unique_creator=False))
+        handler.hooks = hooks
+        mock_auth.return_value = FakeActor("actor123", "oauth2:test_peer")
+        context = Mock()
+        context.peer_id = "oauth2:test_peer"
+        runtime = Mock()
+        runtime.get_mcp_context.return_value = context
+        mock_runtime_context.return_value = runtime
+        evaluator = Mock()
+        evaluator.evaluate_permission = Mock(return_value=PermissionResult.ALLOWED)
+        mock_get_eval.return_value = evaluator
+
+        resp = handler.post(
+            {"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}}
+        )
+        tools = {t["name"]: t for t in resp["result"]["tools"]}
+        self.assertEqual(
+            tools["bare"]["inputSchema"], {"type": "object", "properties": {}}
+        )
+        self.assertEqual(tools["with_schema"]["inputSchema"], declared)

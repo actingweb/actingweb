@@ -346,6 +346,21 @@ class TestMCPWithIssuedToken:
         assert data["jsonrpc"] == "2.0"
         assert "result" in data or data.get("id") == 1
 
+    def test_an_authenticated_stream_opener_gets_405(self, oauth2_client):
+        """Release validation 2026-11-18 (the MCP quickstart through a real
+        client): an authenticated ``GET /mcp`` with ``Accept:
+        text/event-stream`` got 200 and a JSON document. The Streamable HTTP
+        transport allows only a stream or 405 there, and Claude Code
+        reopened the stream in a loop. No server-to-client stream is
+        offered, so it is 405."""
+        response = oauth2_client.get("/mcp", headers={"Accept": "text/event-stream"})
+        assert response.status_code == 405
+        assert "POST" in response.headers.get("Allow", "")
+        # A plain authenticated GET still gets the server's document.
+        plain = oauth2_client.get("/mcp", headers={"Accept": "application/json"})
+        assert plain.status_code == 200
+        assert "server_name" in plain.json()
+
     def test_mcp_authentication_required(self, test_app):
         """
         Test that authenticated MCP methods require Bearer token.

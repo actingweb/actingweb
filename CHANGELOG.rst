@@ -2927,12 +2927,47 @@ FIXED
   cut notification is logged and the peer catches up at its next
   ``sync_peer``. Without it, nothing changes.
 
+- **A sign-in that named a trust type created the client trust without
+  asking ``oauth2_trust_requested``.** When the state of a sign-in through
+  ``/oauth/callback`` carried ``trust_type``, the trust was created at that
+  level after the client-list check alone, so an application hook that
+  declines a client, or names another level, had no say there. The hook is
+  now asked on that path too (with ``confirmed=False``: there is no
+  confirmation page). A decline, an exception, or another type than the
+  one requested (no page can show the user another level) means no trust
+  is created, and the user is still signed in. **Behavior change:** an
+  application whose hook declines or names another type gets no client
+  trust on this path where it got one before; one with no such hook sees
+  no difference.
+
+- **A redirect sign-in created a refresh token nobody received.** With
+  ``token_delivery`` ``json`` or ``cookie``, the browser-redirect sign-in of
+  an SPA minted a refresh token and kept it in the pending session, but
+  fetching the session never returns it. No refresh token is created there
+  any more; ``hybrid`` delivery still creates one and sets it as the
+  HttpOnly cookie. **Behavior change:** none for the SPA (it never received
+  that token); the server stores one live token fewer per such sign-in.
+
 - **The Agent Skill did not load in Codex.** The ``description`` in
   ``skills/actingweb-app/SKILL.md`` ran onto unindented lines, which is not
   valid YAML; Claude Code read it anyway, Codex dropped the skill with
   "invalid YAML". It is now a folded block, and a test parses every skill's
   front matter as strict YAML. If you copied the skill into your
   repository, copy it again.
+
+- **A spec-checking MCP client rejected the whole tool list, and reopened
+  the server's stream in a loop.** Both found by running the MCP
+  quickstart against Claude Code. A tool declared without ``input_schema``
+  was listed without ``inputSchema``, which MCP requires, so the client
+  offered none of the server's tools; such a tool is now listed with
+  ``{"type": "object", "properties": {}}``. And an authenticated
+  ``GET /mcp`` with ``Accept: text/event-stream`` (the Streamable HTTP
+  transport's server-to-client stream) was answered 200 with a JSON
+  document, where the transport allows only a stream or 405, and the
+  client asked again and again; it is now 405 with ``Allow: POST``, and a
+  plain authenticated ``GET /mcp`` still returns the document.
+  **Behavior change:** declare ``input_schema`` on tools that take
+  arguments, so clients know what to send.
 
 - **The web UI said "List with 1 items".** A one-item list now reads "1
   item", in the properties page and in the property value a template

@@ -60,7 +60,9 @@ Wire it up and run it:
 
    api = FastAPI(title="My MCP Server")
    aw.integrate_fastapi(api)
-   # then: uvicorn.run(api, host="0.0.0.0", port=5000)
+   # then: uvicorn.run(api, host="127.0.0.1", port=5000)
+   # (HOST and PORT override both; behind a tunnel or proxy, set
+   # APP_HOST_FQDN to the public host and PORT to the local port)
 
 .. code-block:: bash
 

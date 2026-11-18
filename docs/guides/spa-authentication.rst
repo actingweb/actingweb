@@ -324,9 +324,10 @@ to ``/oauth/callback``. When the server detects SPA mode (via ``spa_mode: true``
 it completes the sign-in there (an authorization code can be used once), keeps the
 result as a pending session, and redirects the browser to your SPA's ``redirect_uri``
 (e.g., ``/callback``) with the session's id. With ``token_delivery: "hybrid"`` it also
-sets the refresh token as an HttpOnly cookie; fetching the pending session never
-returns a refresh token, so with ``json`` or ``cookie`` delivery a redirect sign-in
-yields an access token only, and the SPA signs in again when it expires:
+sets the refresh token as an HttpOnly cookie. Fetching the pending session never
+returns a refresh token, and with ``json`` or ``cookie`` delivery none is created
+(4.0): a redirect sign-in then yields an access token only, and the SPA signs in
+again when it expires:
 
 .. code-block:: text
 

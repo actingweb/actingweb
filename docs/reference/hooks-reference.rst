@@ -312,6 +312,15 @@ other lifecycle hooks it fails closed: any ``False``, an exception, two hooks
 naming different types, or a type the client list (or the client's own
 ``allowed_trust_types``) does not offer declines.
 
+It is asked on every path that creates such a trust: the library's own
+authorisation routes, the OAuth2 server's entry points called without
+``decide_trust`` (``complete_client_authorization``,
+``handle_confirmation``, ``handle_oauth_callback``), and a sign-in whose
+state names ``trust_type`` (4.0). On that sign-in there is no confirmation
+page (``confirmed=False``, ``client_id`` and ``client_name`` are ``None``),
+so a type other than the requested one declines, as at Approve; a decline
+means no trust is created, and the user is still signed in.
+
 - Common events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``
 
 Event Details

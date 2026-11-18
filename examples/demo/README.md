@@ -56,7 +56,10 @@ A browser test of the web UI cannot sign in through a real OAuth2 provider,
 and must never use a real account. For a local run, `DEMO_QA_BASIC_AUTH=true`
 leaves OAuth off, so `/<actor_id>/www` signs in with the library's basic
 auth: the creator and passphrase of a throwaway actor created through the
-factory. The app refuses to start in this mode unless `APP_HOST_FQDN` is
+factory. A browser opening `/<actor_id>/www` shows its credential prompt
+(the 401 carries a `Basic` challenge). A wrong passphrase is a 403, and the
+browser keeps it: close the browser (or use a private window) to try again.
+"Logout" does not end a Basic session either. The app refuses to start in this mode unless `APP_HOST_FQDN` is
 `localhost` or `127.0.0.1`; never set it in a deployment.
 
 ```bash

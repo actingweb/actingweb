@@ -124,7 +124,7 @@
       "result": {
        "capabilities": {
         "tools": {
-         "listChanged": true
+         "listChanged": false
         }
        },
        "protocolVersion": "2025-06-18",

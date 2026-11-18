@@ -51,6 +51,13 @@ class OAuth2ClientManager:
         Returns:
             Dictionary containing client credentials and metadata
 
+        Raises:
+            ValueError: the client's metadata is refused.
+            ClientRegistrationError: the client's trust row could not be
+                created (the actor is missing, the trust was refused, or an
+                unexpected error); nothing of the client is stored (3.16).
+            DbError: a storage fault.
+
         Example:
             >>> client_manager = OAuth2ClientManager(actor_id, config)
             >>> client = client_manager.create_client("My AI Assistant")

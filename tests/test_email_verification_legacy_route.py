@@ -65,9 +65,8 @@ def fastapi_client(aw_app: ActingWebApp) -> TestClient:
 
 class TestLegacyRouteNoLongerRegistered:
     """The route table is the precise assertion. A status code alone is not:
-    Flask's generic ``/<actor_id>/www/<path:path>`` catches the legacy path
-    and answers 401, which is indistinguishable from a route that still
-    exists behind auth."""
+    Flask's generic ``/<actor_id>/www/<path:path>`` catches the legacy path,
+    and its answer could come from a route that still exists behind auth."""
 
     def test_flask_has_no_verify_email_rule(self, flask_app: Flask) -> None:
         rules = [str(r) for r in flask_app.url_map.iter_rules()]
@@ -84,13 +83,15 @@ class TestLegacyRouteNoLongerRegistered:
     def test_flask_legacy_path_falls_through_to_the_authed_www_route(
         self, flask_app: Flask
     ) -> None:
-        """401, not 404: Flask's catch-all www route claims the path. Nothing
-        rotates a token, which is what the removal was for."""
+        """Flask's catch-all www route claims the path; with no OAuth
+        provider it reaches the www handler (3.16, as on FastAPI), which
+        answers 404 for an actor that does not exist. Nothing rotates a
+        token, which is what the removal was for."""
         client = flask_app.test_client()
         assert (
-            client.get("/some-actor-id/www/verify_email?token=abc").status_code == 401
+            client.get("/some-actor-id/www/verify_email?token=abc").status_code == 404
         )
-        assert client.post("/some-actor-id/www/verify_email").status_code == 401
+        assert client.post("/some-actor-id/www/verify_email").status_code == 404
 
     def test_fastapi_legacy_path_is_404(self, fastapi_client: TestClient) -> None:
         assert (

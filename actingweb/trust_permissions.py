@@ -29,6 +29,12 @@ from .db.exceptions import DbError
 
 logger = logging.getLogger(__name__)
 
+# How long a process uses a cached override, or a cached "no override", before
+# it reads storage again (3.16): the bound on how long a grant changed by
+# another worker stays in force here. The window docs/reference/security.rst
+# states for MCP tokens and resolved trust entries. Not configurable.
+PERMISSION_CACHE_TTL_SECONDS = 300
+
 # Timeout for peer notification HTTP requests (seconds)
 PEER_NOTIFICATION_TIMEOUT = 10.0
 # A permission callback answered 503 is resent this many times, with the same
@@ -185,9 +191,12 @@ class TrustPermissionStore:
         # otherwise every permission evaluation for a peer without an
         # override re-reads the attribute bucket.
         # Bounded LRU: one entry per actor:peer pair, not one per pair ever
-        # seen (actingweb/_bounded_cache.py).
+        # seen (actingweb/_bounded_cache.py). Entries, a cached None
+        # included, expire after PERMISSION_CACHE_TTL_SECONDS: a store or
+        # delete updates only this process's cache, so another worker sees
+        # the change when its entry expires (3.16).
         self._cache: BoundedDict[str, TrustPermissions | None] = BoundedDict(
-            CACHE_MAX_ENTRIES
+            CACHE_MAX_ENTRIES, ttl=PERMISSION_CACHE_TTL_SECONDS
         )
 
     def _get_permissions_bucket(self, actor_id: str) -> attribute.Attributes | None:
@@ -607,7 +616,12 @@ class TrustPermissionStore:
         hit, cached = self._cache.lookup(cache_key)
         if hit:
             return cached
+        return self._read_permissions(actor_id, peer_id)
 
+    def _read_permissions(self, actor_id: str, peer_id: str) -> TrustPermissions | None:
+        """The stored override, read from the bucket, and cached (a missing
+        one as a negative). A fault raises ``DbError``."""
+        cache_key = f"{actor_id}:{peer_id}"
         bucket = self._get_permissions_bucket(actor_id)
         if not bucket:
             return None
@@ -619,8 +633,9 @@ class TrustPermissionStore:
             attr_data = bucket.get_attr(name=permission_key)
 
             if not attr_data or "data" not in attr_data:
-                # Cache the negative: store/delete paths update the cache, so
-                # this stays correct within the process.
+                # Cache the negative: store/delete paths update this
+                # process's cache at once; another process's store is read
+                # when the entry expires (PERMISSION_CACHE_TTL_SECONDS).
                 self._cache[cache_key] = None
                 return None
 
@@ -677,9 +692,10 @@ class TrustPermissionStore:
         self, actor_id: str, peer_id: str
     ) -> TrustPermissions | None:
         """The stored override, read from the store, not the cache (3.16: a
-        delete decides from what is there). A fault raises ``DbError``."""
-        self._cache.pop(f"{actor_id}:{peer_id}", None)
-        return self.get_permissions(actor_id, peer_id)
+        delete decides from what is there). Never answered from the cache,
+        which another thread can refill at any moment; the read refreshes
+        it. A fault raises ``DbError``."""
+        return self._read_permissions(actor_id, peer_id)
 
     def notify_default_grant(
         self, actor_id: str, peer_id: str, trust_type: str
@@ -763,8 +779,9 @@ class TrustPermissionStore:
         Normalizes any shorthand permission formats to the spec-compliant
         structured format before storage.
         """
-        # Load existing permissions
-        existing = self.get_permissions(actor_id, peer_id)
+        # Merge into the stored override, not a cached one another process
+        # may have changed since (3.16).
+        existing = self.get_permissions_uncached(actor_id, peer_id)
         if not existing:
             logger.error(
                 f"Cannot update non-existent permissions for {actor_id}:{peer_id}"

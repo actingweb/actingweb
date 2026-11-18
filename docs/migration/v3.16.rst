@@ -89,7 +89,10 @@ application with ``with_email_as_creator`` also item 25.
    run, item 12 included: on a store without it, a fresh table prefix the
    library auto-created for instance, every create raises ``DbError``
    (see `Direct Actor.create and ActorInterface.create callers`_).
-5. MCP sign-ins now write the same actor fields as the other paths.
+5. MCP sign-ins now write the same actor fields as the other paths;
+   ``initialize`` advertises ``listChanged: false``; and a client
+   registration whose trust row cannot be created fails with 500 (see `The
+   MCP OAuth server`_).
 6. A hook on ``actor_deleted`` or ``actor_deleted_complete`` may now see
    ``reason="replaced_at_adoption"``.
 7. ``Actor.modify`` now takes a passphrase and returns the backend result;
@@ -403,6 +406,31 @@ The MCP OAuth server
 so the adoption rule applies to MCP sign-ins. **Behavior change:** MCP sign-ins
 write ``oauth_provider`` on every sign-in, and a new actor gets ``created_at``,
 ``oauth_provider``, ``email`` and the marker, as the other paths always did.
+
+**Breaking:** ``initialize`` advertises ``listChanged: false`` under
+``tools``, ``resources`` and ``prompts`` (it said ``true``): the server never
+sends a ``notifications/*/list_changed``. A client that waited for one to
+refresh its lists re-lists instead. The protected-resource document
+(``/.well-known/oauth-protected-resource/mcp``) now reports ``tools``,
+``prompts`` and ``resources`` as what the application registered, as
+``initialize`` and ``/mcp/info`` do (it said tools and prompts ``true``,
+resources ``false``).
+
+**Breaking:** a client registration whose trust row cannot be created fails.
+Registration writes the trust row first, then the client row and the index
+row. When the actor is missing (an anonymous registration while the OAuth2
+system actor could not be created included), the trust is refused, or an
+unexpected error occurs, ``POST /oauth/register`` answers 500
+``server_error`` with fixed text and stores nothing; it answered 201 with
+credentials that could never authorize. A storage fault answers 503, after
+removing a trust row already written. In code:
+
+* ``OAuth2ClientManager.create_client`` and ``MCPClientRegistry.register_client``
+  raise ``ClientRegistrationError``
+  (``actingweb.oauth2_server.client_registry``) in those cases. It is not a
+  ``ValueError``: code that answered every exception as a 400 should answer
+  it as a server error.
+* A ``DbError`` is a storage fault, as before.
 
 Closing the factory
 -------------------

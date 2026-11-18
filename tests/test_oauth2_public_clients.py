@@ -214,6 +214,26 @@ class TestClientManager:
         with pytest.raises(ValueError, match="public client"):
             manager.regenerate_client_secret(client["client_id"])
 
+    def test_create_client_raises_when_the_trust_row_cannot_be_created(
+        self, env: Any
+    ) -> None:
+        # 3.16: a client whose trust row cannot be created is not registered.
+        from actingweb.oauth2_server.client_registry import ClientRegistrationError
+
+        server, store = env
+        manager = OAuth2ClientManager("actor-owner", server.config)
+        with (
+            mock.patch("actingweb.actor.Actor", _MissingActor),
+            pytest.raises(ClientRegistrationError),
+        ):
+            manager.create_client("SDK")
+        assert store.names("actor-owner", "mcp_clients") == set()
+
+
+class _MissingActor:
+    def __init__(self, *_a: Any, **_k: Any) -> None:
+        self.actor = None
+
 
 def _basic(client_id: str, secret: str) -> dict[str, str]:
     raw = base64.b64encode(f"{client_id}:{secret}".encode()).decode()

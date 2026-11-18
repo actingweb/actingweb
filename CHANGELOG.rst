@@ -913,6 +913,22 @@ SECURITY
   list altered this way; ``SubscriptionManager.sync_peer()`` (or
   ``rebuild_subscription(force=True)``) re-reads it from the publisher.
 
+- **A narrowed or removed grant stayed in force on other workers.** Each
+  process cached a peer's permission override, and its absence, with no
+  expiry; only the process that changed a grant updated its cache, so every
+  other worker or container decided that peer's access by the old grant
+  until it restarted, and an update merged into its cached copy. An entry
+  now expires 300 seconds after it was cached, a cached "no override"
+  included, and an update merges into the stored override.
+  **Behavior change:** on a deployment with more than one worker, a grant
+  change takes up to 300 seconds to reach the other workers (the window
+  ``docs/reference/security.rst`` already states for MCP tokens and resolved
+  trust entries); the process that made the change uses it at once. Not
+  configurable. A trust type's base permissions are still cached per
+  process without expiry. **Check:** each worker re-reads one override per
+  peer per 300 seconds; a storage fault on that read answers 503 where the
+  cached entry answered before.
+
 REMOVED
 ~~~~~~~
 
@@ -2392,6 +2408,33 @@ CHANGED
   deleted subscription too (it answered ``True``). The library ignores the
   answer in its sequence updates.
 
+- **Breaking: ``initialize`` advertises ``listChanged: false``.** It said
+  ``true`` under ``tools``, ``resources`` and ``prompts``, but the server
+  never sends a ``notifications/*/list_changed``, so a client that waited
+  for one never refreshed its lists. **Behavior change:** each of the three
+  capabilities, when present, carries ``listChanged: false``. **Check:** a
+  client that refreshes only on that notification re-lists instead.
+
+- **Breaking: a client registration whose trust row cannot be created
+  fails.** ``MCPClientRegistry.register_client`` wrote the client row and
+  the index row, then the trust row, and logged and went on when the actor
+  was missing, the trust was refused or an unexpected error occurred: ``POST
+  /oauth/register`` answered 201 with credentials that could never
+  authorize. The trust row is now written first. In those three cases the
+  registration fails with nothing stored: ``POST /oauth/register`` answers
+  500 ``server_error`` with the fixed description ``Client registration
+  failed`` (it names no client and no actor), and
+  ``OAuth2ClientManager.create_client`` and ``register_client`` raise the
+  new ``ClientRegistrationError`` (``actingweb.oauth2_server.client_registry``),
+  which is not a ``ValueError``. A storage fault on the client or index row
+  removes the trust row already written and raises ``DbError`` (503); a
+  client row written before such a fault stays. **Behavior change:** an
+  anonymous registration while the OAuth2 system actor could not be created
+  answers 500 (it answered 201). **Check:** code that calls
+  ``create_client`` or ``register_client`` and answers every exception as a
+  400 should answer ``ClientRegistrationError`` as a server error; see
+  ``docs/migration/v3.16.rst``, "The MCP OAuth server".
+
 ADDED
 ~~~~~
 
@@ -3486,6 +3529,43 @@ FIXED
 
 - **The MCP bridge counted a concurrent create as the winner when the
   tombstone could not be read.** It now answers 503.
+
+- **The MCP protected-resource document reported capabilities the
+  application did not have.** ``/.well-known/oauth-protected-resource/mcp``
+  said ``tools`` and ``prompts`` ``true`` and ``resources`` ``false``
+  whatever the application registered. **Behavior change:** the three flags
+  are true exactly when the application registered a tool, a prompt or a
+  resource, as ``initialize`` and ``/mcp/info`` already answer.
+
+- **A granted text property reached the subscriber's replica as ``{}``.**
+  When a peer widened its grant by a property, the subscriber fetched it
+  and stored whatever object the proxy returned; a text value that is not
+  JSON reaches the proxy as ``{}``, which was stored. The fetch now decides
+  as the subscription baseline does. **Behavior change:** text the
+  publisher itself answered (not through a redirect to another host, as
+  ``text/plain`` or ``application/json``) is stored as ``{"value": text}``;
+  an empty body or ``{}`` removes the replica's value for that property,
+  list or plain; a non-2xx answer, a redirected answer (JSON included) or
+  a body that is not the publisher's stores nothing and is logged. A text
+  value that parses as JSON (``[1,2]``, ``42``) is still stored as what it
+  parses to, as in the baseline.
+
+- **The Flask web UI could not be signed in to without an OAuth provider.**
+  With no provider configured, ``/<actor_id>/www`` without credentials
+  answered 401 with ``Bearer realm="ActingWeb"``, which no browser prompts
+  for, so the creator and passphrase had no way in; FastAPI already let
+  the request reach the handler, which sends a ``Basic`` challenge.
+  **Behavior change:** on Flask with no provider, a web UI request reaches
+  the handler: 401 with ``Basic realm="<auth_realm>"`` for an existing
+  actor (a browser then prompts for the creator and passphrase), 404 for an
+  actor that does not exist (it was 401), as on FastAPI. The actor root and
+  ``/properties*`` keep the ``Bearer`` 401, so a script's request opens no
+  credential dialog; with a provider configured the request is redirected
+  to sign-in as before, and a provider whose redirect cannot be built still
+  answers the ``Bearer`` 401. A wrong creator or passphrase on the web UI
+  is still 403, now with a plain-text body saying to close the browser (or
+  open a private window) to try again, on both integrations: a browser keeps
+  the refused credentials and showed its bare error page on every reload.
 
 v3.15.1: September 29, 2026
 ---------------------------

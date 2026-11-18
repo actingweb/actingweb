@@ -143,6 +143,22 @@ read: a re-type refuses on it (it may be an old override for the approved
 type)."""
 
 
+def oauth_trust_peer_id(
+    email: str, *, source: str | None, client_id: str | None
+) -> str:
+    """The peer id :meth:`TrustManager.create_or_update_oauth_trust` gives the
+    row of ``email`` (and ``client_id``, when given) established via
+    ``source`` (``None``: ``oauth2``). Deterministic, so a caller can find the
+    row it just created."""
+    source = source or "oauth2"
+    normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
+    if client_id:
+        from ..oauth2_server.trust_lookup import normalize_client_id
+
+        return f"{source}:{normalized_email}:{normalize_client_id(client_id)}"
+    return f"{source}:{normalized_email}"
+
+
 class TrustManager:
     """
     Simplified interface for managing trust relationships.
@@ -619,18 +635,10 @@ class TrustManager:
             # For other OAuth2 trusts, use the establishment method
             peer_type = source
 
-        # Create unique identifier per client when client_id is provided
-        if client_id:
-            # For MCP clients, include client_id to ensure each client gets its own trust relationship
-            # Format: "oauth2:email_at_example_dot_com:client_123abc"
-            normalized_email = email.replace("@", "_at_").replace(".", "_dot_")
-            from ..oauth2_server.trust_lookup import normalize_client_id
-
-            normalized_client = normalize_client_id(client_id)
-            peer_id = f"{source}:{normalized_email}:{normalized_client}"
-        else:
-            # Legacy format for backward compatibility
-            peer_id = self._standardize_peer_id(source, email)
+        # One row per client when client_id is provided
+        # ("oauth2:email_at_example_dot_com:client_123abc"), else the legacy
+        # per-email row.
+        peer_id = oauth_trust_peer_id(email, source=source, client_id=client_id)
 
         logger.debug(
             f"Creating/updating OAuth trust: email={email}, trust_type={trust_type}, established_via={established_via}, source={source}, client_id={client_id}, peer_id={peer_id}"

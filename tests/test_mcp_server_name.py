@@ -114,3 +114,43 @@ class TestGetMcpAgreesWithInitialize:
         body = self._get(make_mcp_config(), hooks)
         assert body["capabilities"]["tools"] is True
         assert body["capabilities"]["prompts"] is False
+
+
+def _all_three_hooks():
+    from actingweb.interface.hooks import HookRegistry
+    from actingweb.mcp.decorators import mcp_prompt, mcp_resource, mcp_tool
+
+    hooks = HookRegistry()
+
+    @mcp_tool(description="a tool")
+    def a_tool(actor, action_name, data):
+        return {}
+
+    @mcp_resource(uri_template="notes://{id}", description="a resource")
+    def a_resource(actor, method_name, data):
+        return {}
+
+    @mcp_prompt(description="a prompt")
+    def a_prompt(actor, method_name, data):
+        return {}
+
+    hooks.register_action_hook("a_tool", a_tool)
+    hooks.register_method_hook("a_resource", a_resource)
+    hooks.register_method_hook("a_prompt", a_prompt)
+    return hooks
+
+
+def test_initialize_advertises_no_list_change_notifications() -> None:
+    # 3.16: the server never sends notifications/*/list_changed.
+    handler = make_mcp_handler(cfg=make_mcp_config(), hooks=_all_three_hooks())
+    result = handler.post(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"clientInfo": {"name": "test-client", "version": "1.0"}},
+        }
+    )["result"]
+    capabilities = result["capabilities"]
+    for kind in ("tools", "resources", "prompts"):
+        assert capabilities[kind]["listChanged"] is False, kind

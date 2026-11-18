@@ -14,6 +14,7 @@ from actingweb.property_list import (
     handle_old_item_fields,
 )
 
+from ..auth import WRONG_CREDENTIALS
 from ..db.exceptions import DbError
 from ..trust import is_valid_peer_baseuri
 from .properties import list_length_hint, register_list_diff
@@ -102,7 +103,44 @@ def trust_status_label(row: dict[str, Any], actor_id: str | None) -> str | None:
     return "Awaiting your approval" if peer_approved else "Awaiting both"
 
 
+WRONG_CREDENTIALS_TEXT = (
+    "Invalid username or password.\n\n"
+    "Your browser keeps the credentials it sent and will not ask again: "
+    "close the browser (or open a private window) and open this page again "
+    "to sign in with the creator and passphrase.\n"
+)
+"""The body of the web UI's 403 for refused Basic credentials (3.16): the
+browser shows it instead of a bare error page and will not prompt again."""
+
+
 class WwwHandler(base_handler.BaseHandler):
+    def require_authenticated_actor(
+        self, actor_id: str, path: str, method: str = "GET", subpath: str = ""
+    ) -> Any | None:
+        """As the base handler's; a 403 for a wrong creator or passphrase
+        gets a body that says how to retry (3.16), since a browser keeps the
+        refused credentials and shows a bare error page on every reload.
+        Only that refusal: another 403 (an actor with no passphrase, say)
+        is not helped by retrying."""
+        auth_result = self._authenticate_internal(actor_id, path, subpath)
+        if not auth_result.success:
+            auth_obj = auth_result.auth_obj
+            response = self.response
+            if (
+                auth_obj is not None
+                and auth_obj.response["code"] == 403
+                and auth_obj.response["text"] == WRONG_CREDENTIALS
+                and response is not None
+                and response.status_code == 403
+                and not response.body
+            ):
+                response.headers["Content-Type"] = "text/plain; charset=utf-8"
+                response.write(WRONG_CREDENTIALS_TEXT)
+            return None
+        if not auth_result.authorize(method.upper(), path, subpath):
+            return None
+        return auth_result.actor
+
     def _list_action_error(self, status: int, message: str) -> None:
         """Answer a list item action with ``status`` and the reason on a
         small HTML page (phone-width viewport, a link back to the list), so

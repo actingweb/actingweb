@@ -15,6 +15,7 @@ These flows work together:
 This comprehensive test suite ensures all OAuth2 components work together.
 """
 
+import pytest
 import requests
 import responses
 
@@ -177,6 +178,87 @@ class TestActingWebOAuth2Server:
         assert "authorization_endpoint" in client_data
         assert "token_endpoint" in client_data
         assert client_data["actor_id"] == "_actingweb_oauth2"
+
+    @pytest.mark.parametrize("failure", ["trust refused", "client row fault"])
+    def test_a_failed_registration_stores_nothing(self, test_app, failure):
+        """3.16: a registration whose trust row cannot be created answers 500
+        and stores nothing; a storage fault on the client row after the
+        trust row answers 503 and removes that row and its token entry.
+        Registration writes the trust row first."""
+        from unittest import mock
+
+        from actingweb.attribute import Attributes, InternalStore
+        from actingweb.constants import (
+            CLIENT_INDEX_BUCKET,
+            OAUTH2_SYSTEM_ACTOR,
+            OAUTH_TOKENS_PREFIX,
+        )
+        from actingweb.db import get_trust
+        from actingweb.db.exceptions import DbError
+        from actingweb.interface.trust_manager import oauth_trust_peer_id
+        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+
+        from .conftest import TEST_APP_CONFIG
+
+        config = TEST_APP_CONFIG["config"]
+        real = MCPClientRegistry._create_client_trust_relationship
+        client_ids: list[str] = []
+
+        def spy(registry, actor_id, client_id, client_data):
+            client_ids.append(client_id)
+            return real(registry, actor_id, client_id, client_data)
+
+        patches = [
+            mock.patch.object(
+                MCPClientRegistry, "_create_client_trust_relationship", spy
+            )
+        ]
+        if failure == "trust refused":
+            patches.append(
+                mock.patch(
+                    "actingweb.interface.trust_manager.TrustManager."
+                    "create_or_update_oauth_trust",
+                    return_value=False,
+                )
+            )
+        else:
+            patches.append(
+                mock.patch.object(
+                    MCPClientRegistry,
+                    "_store_client",
+                    side_effect=DbError("client write", OAUTH2_SYSTEM_ACTOR),
+                )
+            )
+        with patches[0], patches[1]:
+            response = requests.post(
+                f"{test_app}/oauth/register",
+                json={
+                    "client_name": "Failing Client",
+                    "redirect_uris": ["http://localhost:3000/callback"],
+                },
+            )
+
+        if failure == "trust refused":
+            assert response.status_code == 500, response.text
+            assert response.json()["error"] == "server_error"
+        else:
+            assert response.status_code == 503, response.text
+        assert "client_secret" not in response.text
+        (client_id,) = client_ids
+        peer_id = oauth_trust_peer_id(
+            client_id, source="oauth2_client", client_id=client_id
+        )
+        index = Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket=CLIENT_INDEX_BUCKET, config=config
+        )
+        assert not index.get_attr(name=client_id)
+        clients = Attributes(
+            actor_id=OAUTH2_SYSTEM_ACTOR, bucket="mcp_clients", config=config
+        )
+        assert not clients.get_attr(name=client_id)
+        assert not get_trust(config).get(actor_id=OAUTH2_SYSTEM_ACTOR, peerid=peer_id)
+        internal = InternalStore(actor_id=OAUTH2_SYSTEM_ACTOR, config=config)
+        assert internal[f"{OAUTH_TOKENS_PREFIX}{peer_id}"] is None
 
     def test_complete_mcp_authorization_flow(self, test_app):
         """

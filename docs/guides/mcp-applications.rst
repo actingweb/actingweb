@@ -1198,7 +1198,10 @@ The application provides an OAuth2 client generation endpoint:
     @fastapi_app.post("/{actor_id}/api/generate-oauth-client")
     async def generate_oauth_client(actor_id: str, request: Request):
         """Generate OAuth2 client credentials for AI assistants."""
-        from actingweb.oauth2_server.client_registry import MCPClientRegistry
+        from actingweb.oauth2_server.client_registry import (
+            ClientRegistrationError,
+            MCPClientRegistry,
+        )
         
         # Parse request body
         body = await request.json()
@@ -1218,9 +1221,20 @@ The application provides an OAuth2 client generation endpoint:
             ),
         }
         
-        # Register client (ValueError -> 400 invalid_client_metadata)
+        # Register client: ValueError is bad metadata (400); since 3.16
+        # ClientRegistrationError means the client's trust row could not be
+        # created, and nothing was stored (500). A DbError is a storage
+        # fault the integration answers with 503.
         client_registry = MCPClientRegistry(app.get_config())
-        client_data = client_registry.register_client(actor_id, registration_data)
+        try:
+            client_data = client_registry.register_client(actor_id, registration_data)
+        except ValueError as e:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_client_metadata", "error_description": str(e)},
+            )
+        except ClientRegistrationError:
+            return JSONResponse(status_code=500, content={"error": "server_error"})
         
         return JSONResponse(content={
             "client_id": client_data["client_id"],

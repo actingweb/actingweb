@@ -288,9 +288,9 @@ class Trust:
             if result and self.config and self.actor_id and peerid:
                 from .trust_permissions import get_trust_permission_store
 
-                # Unconditionally: the store's cache has no TTL, and a "none"
-                # it cached before another instance or process wrote the
-                # permissions would skip the delete. Deleting an absent
+                # Unconditionally: a "none" the store cached (for up to its
+                # 300-second window) before another instance or process wrote
+                # the permissions would skip the delete. Deleting an absent
                 # attribute succeeds.
                 permission_store = get_trust_permission_store(self.config)
                 if not permission_store.delete_permissions(self.actor_id, peerid):

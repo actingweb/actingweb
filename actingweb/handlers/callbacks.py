@@ -1834,6 +1834,8 @@ class CallbacksHandler(base_handler.BaseHandler):
         """
         from datetime import UTC, datetime
 
+        from actingweb.interface.subscription_manager import _subtarget_value
+
         try:
             response = proxy.get_resource(path=f"properties/{property_name}")
 
@@ -1847,6 +1849,43 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"Failed to fetch property {property_name} from {peer_id}: {error_msg}"
                 )
                 return
+            # The baseline's decision (3.16): only the publisher's own 2xx
+            # answer is the value; a redirect to another host (a login page
+            # behind a proxy) is not, JSON or not.
+            code = int(proxy.last_response_code or 0)
+            if not 200 <= code <= 299 or proxy.last_response_redirected:
+                logger.warning(
+                    f"Fetch of property {property_name} from {peer_id} failed "
+                    f"({code}{', redirected' if proxy.last_response_redirected else ''}); "
+                    "nothing stored"
+                )
+                return
+            if response == {}:
+                # A body the proxy could not parse, an empty one, or {}:
+                # text the publisher answered is the value, empty is no
+                # value, anything else is not the publisher's answer.
+                value = _subtarget_value(response, proxy, property_name)
+                if value is None:
+                    logger.warning(
+                        f"Fetch of property {property_name} from {peer_id}: a "
+                        "body that is not JSON and not the publisher's own "
+                        "answer; nothing stored"
+                    )
+                    return
+                if value == {property_name: ""}:
+                    # Strict: a fault is not "no list". It raises before
+                    # anything is deleted, so the replica keeps both and the
+                    # sync logs the error, instead of leaving the list and
+                    # reporting the value removed.
+                    if property_name in remote_store.list_all_lists(strict=True):
+                        remote_store.delete_list(property_name)
+                    remote_store.delete_value(property_name)
+                    logger.debug(
+                        f"Property '{property_name}' from {peer_id} is empty; "
+                        "replica value removed"
+                    )
+                    return
+                response = value
 
             # Response could be:
             # 1. A list of items (for list properties): [{"data": ...}, ...]

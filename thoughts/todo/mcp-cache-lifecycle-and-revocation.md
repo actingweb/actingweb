@@ -42,7 +42,13 @@ fleet", made explicit in `docs/reference/security.rst` rather than left implicit
 This is also the design that would replace the four per-process permission-path
 caches (`trust_permissions`, `peer_profile`, `peer_permissions`,
 `peer_capabilities`). Each is now a bounded LRU (`actingweb/_bounded_cache.py`),
-but it is still per process and never invalidated from another one.
+but it is still per process and never invalidated from another one. Since
+`thoughts/plans/2026-11-17-3-16-pre-rc1-fixes.md` the `trust_permissions`
+cache (a peer's override, or its absence) expires an entry after 300 seconds,
+so the staleness of a grant on another worker is bounded; the trust-row
+deletion rules (`thoughts/reference/trust-row-deletion-invariants.md`, "Scope
+of the rules") still hold only within one process for up to that window. The
+other three caches and the trust type registry's cache have no expiry.
 
 ## 2. No explicit trust-freshness policy
 
@@ -67,17 +73,6 @@ mismatched entry. Needs someone to characterize whether `Mcp-Session-Id` is
 attacker-controllable in a way that matters, and if so whether the cache should
 be scoped by something server-verified (e.g. bound to the resolved `peer_id`).
 
-## 5. Registration doesn't hard-fail when trust creation fails
-
-`client_registry.py` swallows trust-creation failure during client registration
-("client registration can continue without trust relationship"), and the
-authorize callback continues past a `trust_error`. Under the current fail-closed
-authorization such a client gets a **permanent** `-32003` — it can never
-authorize, because no trust row will ever exist for it to resolve. Issuing
-credentials that can never authorize and issuing credentials that bypass
-authorization are the same root cause: registration should hard-fail when trust
-creation fails, surfacing the error to the registering client.
-
 ## 6. Module-global cache keys assume one ActingWeb application per interpreter
 
 The two MCP globals that authenticate, `_token_cache` and `_trust_cache`,
@@ -96,18 +91,6 @@ both `single_use.PurgeThrottle`). Two apps in one process share one
 `last_attempt`, so one app's token-endpoint traffic can starve the other's
 purge. Harmless on DynamoDB (native TTL reaps anyway); on PostgreSQL the
 purge is the only reaper. Same trigger, same fix: scope by config.
-
-## 8. The trust permission cache has no TTL and is per process
-
-`TrustPermissionStore._cache` (`actingweb/trust_permissions.py`, a
-`BoundedDict`) has no TTL, and a cached None is a hit. A delete and a
-re-create in one worker leave another worker serving its cached grants for
-the same peer id until it restarts. The trust-row deletion rules
-(`thoughts/reference/trust-row-deletion-invariants.md`, "Scope of the
-rules") hold only within one process because of this. Found by the sixth
-verification of `thoughts/plans/2026-11-04-3-16-dependency-security-rollup.md`
-(Issue 7); it predates that plan. A TTL, or the cross-process invalidation
-of section 1, closes it.
 
 ## Related
 

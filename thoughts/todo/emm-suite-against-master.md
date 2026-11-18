@@ -85,6 +85,13 @@ baseline's failures by name and nothing else:
   the replica calls it (a quiet poll does not), and so does a callback that
   ran an owed rebuild.
 
+- `3-16-pre-rc1-fixes` (environment 9, the library worktree at `a416e81`
+  with the branch's uncommitted `actingweb/` diff applied;
+  `creator-to-email` first: nothing to move): PostgreSQL 3 failed, 7,405
+  passed; DynamoDB lane 3 failed, 54 passed; the same six by name, nothing
+  new (2026-11-17). Again on its commits (library worktree at `e4c3015`,
+  after its iterations): the same counts, the same six (2026-11-18).
+
 **Running it: the PostgreSQL lane needs the environment's preview server.**
 Emm's `tests/integration/mcp/` tests call `http://localhost:50<env>`; with
 no server they error (125 connection refusals on 2026-11-17), which reads

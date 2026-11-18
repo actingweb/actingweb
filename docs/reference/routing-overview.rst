@@ -128,12 +128,19 @@ and the ``with_web_ui()`` configuration:
 
 .. note::
 
-   "Authenticated" for the browser UI means an **OAuth2 browser session**. HTTP
-   **Basic auth** (creator + passphrase) authenticates the JSON API
-   (``/properties``, ``/trust``, ``/actions``, ...) but is **not** a browser
-   session: a Basic-auth request to ``/www`` is still redirected to ``/login`` /
-   OAuth. To view the web UI you must complete the OAuth flow, so a working
-   OAuth provider must be configured (``with_oauth(...)``).
+   "Authenticated" for the browser UI means an **OAuth2 browser session**
+   when an OAuth provider is configured (``with_oauth(...)``): a request for
+   ``/<actor_id>/www`` without a session is redirected to sign-in. Without a
+   provider, such a request is answered 401 with a ``Basic`` challenge in the
+   application's realm (``auth_realm``), on both integrations (3.16; Flask
+   answered a ``Bearer`` challenge, which a browser does not prompt for), so
+   the creator and passphrase sign in through the browser's prompt. A wrong
+   passphrase is 403 with a plain-text body saying to close the browser (or
+   open a private window) to try again: a browser keeps the refused
+   credentials and does not prompt again. HTTP **Basic auth** also authenticates the JSON API
+   (``/properties``, ``/trust``, ``/actions``, ...); those routes and the
+   actor root never send a ``Basic`` challenge, so a script's request does
+   not open a credential dialog.
 
 OAuth Callback Redirect Behavior
 --------------------------------
@@ -239,7 +246,13 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   ``client_secret`` in the response), ``client_secret_post`` (default) or
   ``client_secret_basic`` (the response carries ``client_secret`` and
   ``client_secret_expires_at: 0``). Anything else, or a ``client_name`` that
-  is empty after sanitising, is 400 ``invalid_client_metadata``.
+  is empty after sanitising, is 400 ``invalid_client_metadata``. A client
+  whose trust row cannot be created (its actor is missing, the trust is
+  refused, or an unexpected error) is 500 ``{"error": "server_error",
+  "error_description": "Client registration failed"}`` and nothing of it is
+  stored (3.16; it was a 201 with credentials that could never authorize). A
+  storage fault is 503 ``{"error": "temporarily_unavailable", "message":
+  "Service temporarily unavailable"}`` with ``Retry-After``.
 - ``GET /oauth/authorize`` — shows the sign-in form; ``POST
   /oauth/authorize`` — the form submission, which redirects to the chosen
   provider. ``code_challenge`` with ``code_challenge_method=S256`` binds the

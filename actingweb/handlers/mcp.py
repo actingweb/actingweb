@@ -1152,24 +1152,19 @@ class MCPHandler(BaseHandler):
         # Build capabilities based on what's actually available
         capabilities: dict[str, Any] = {}
 
-        # Tools capability
+        # listChanged is false for all three (3.16): this server never sends
+        # a notifications/*/list_changed, so a client must not wait for one.
         if self._has_mcp_tools():
-            capabilities["tools"] = {
-                "listChanged": True
-            }  # Indicates tools can be dynamically discovered
+            capabilities["tools"] = {"listChanged": False}
 
-        # Resources capability
         if self._has_mcp_resources():
             capabilities["resources"] = {
                 "subscribe": False,  # We don't support resource subscriptions yet
-                "listChanged": True,  # Resources can be dynamically discovered
+                "listChanged": False,
             }
 
-        # Prompts capability
         if self._has_mcp_prompts():
-            capabilities["prompts"] = {
-                "listChanged": True
-            }  # Prompts can be dynamically discovered
+            capabilities["prompts"] = {"listChanged": False}
 
         # Server identity and orientation come from the app's with_mcp(...)
         # configuration (carried on Config). The server name is what some

@@ -111,13 +111,13 @@ and position).
   `UpdateItem` item for DynamoDB `DbSubscription.modify`
   (`thoughts/plans/2026-11-02-3-16-adoption-fault-followups.md`) is where it
   fits.
-- **The permission callback's incremental fetch stores a text value as `{}`**
-  (`CallbacksHandler._fetch_single_property`, `handlers/callbacks.py`, via
-  `AwProxy.get_resource`, which answers a non-JSON 200 as `{}`). A newly
-  granted property whose value is text reaches the replica as an empty
-  object; the baseline path reads the raw body (`_subtarget_value`) and is
-  not affected. Found by the codex review of spec-1-5 Phase 1 (2026-11-15);
-  predates it, and is independent of the `text/plain` label that phase added.
+- **A granted text value that parses as JSON is stored as what it parses
+  to** (`CallbacksHandler._fetch_single_property` and the baseline's
+  `_subtarget_value`: `AwProxy.get_resource` parses any body). A text
+  property whose value is `[1,2]`, `42` or `true` reaches the replica as a
+  list, a number or a boolean on both paths. Text that is not JSON is stored
+  as text since `thoughts/plans/2026-11-17-3-16-pre-rc1-fixes.md`. One rule
+  by content type (`text/plain` is text) for both paths is the fix.
 - **The pending queue is bounded by count, not by bytes**
   (`CallbackProcessor._add_pending`, `max_pending`, 100 by default): the
   queue is one attribute row, and DynamoDB's row limit is 400 KB, so a few

@@ -22,11 +22,19 @@ from actingweb.oauth2_server.token_manager import ActingWebTokenManager
 
 
 class _NoActor:
-    """Stands in for ``actingweb.actor.Actor`` so registration skips the
-    client trust row (it needs a real actor store)."""
+    """Stands in for ``actingweb.actor.Actor``: these suites have no actor
+    store."""
 
     def __init__(self, *_a: Any, **_k: Any) -> None:
         self.actor = None
+
+
+def _no_trust_row(
+    _registry: MCPClientRegistry, _actor_id: str, client_id: str, _data: Any
+) -> str:
+    """Stands in for the client trust row's creation (it needs a real actor
+    store, and since 3.16 a registration without it fails)."""
+    return f"oauth2_client:{client_id}:{client_id}"
 
 
 def make_server(config: Config) -> ActingWebOAuth2Server:
@@ -41,7 +49,12 @@ def make_server(config: Config) -> ActingWebOAuth2Server:
 
 @contextlib.contextmanager
 def no_actor_store() -> Iterator[None]:
-    with mock.patch("actingweb.actor.Actor", _NoActor):
+    with (
+        mock.patch("actingweb.actor.Actor", _NoActor),
+        mock.patch.object(
+            MCPClientRegistry, "_create_client_trust_relationship", _no_trust_row
+        ),
+    ):
         yield
 
 

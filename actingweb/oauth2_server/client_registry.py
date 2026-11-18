@@ -40,6 +40,16 @@ SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS = (
 )
 
 
+class ClientRegistrationError(Exception):
+    """A client could not be registered because its trust row could not be
+    created: the actor is missing, the trust was refused, or an unexpected
+    error occurred (3.16). Nothing of the client is stored and no
+    credentials are returned. ``POST /oauth/register`` answers it with a 500
+    ``server_error`` whose text names no client and no actor. Not a
+    ``ValueError``: that is a bad request (400 ``invalid_client_metadata``).
+    A storage fault raises ``DbError`` instead (503 at the integrations)."""
+
+
 class MCPClientRegistry:
     """
     Registry for MCP clients with per-actor storage.
@@ -72,6 +82,11 @@ class MCPClientRegistry:
         ``client_secret_basic``; anything else raises ``ValueError``, which
         the registration endpoint answers as ``invalid_client_metadata``.
         ``client_name`` is sanitised (``actingweb.client_text``).
+
+        The client's trust row is written first, then the client row and the
+        index row (3.16). When the trust row cannot be created this raises
+        :class:`ClientRegistrationError` with nothing stored; a storage fault
+        raises ``DbError``, after removing a trust row already written.
 
         Returns:
             Client registration response per RFC 7591. ``client_secret`` and
@@ -138,20 +153,29 @@ class MCPClientRegistry:
             actor_id, self.config
         )
 
-        # Store client in actor properties
-        logger.debug(
-            f"register_client: storing client_id={client_id} for actor_id={actor_id}"
+        # The client's trust row first (3.16): it takes only the values
+        # above, and a registration that cannot create it fails before any
+        # client row or index row exists (ClientRegistrationError), so a
+        # client that exists always had its trust row created.
+        peer_id = self._create_client_trust_relationship(
+            actor_id, client_id, client_data
         )
-        self._store_client(actor_id, client_id, client_data)
 
-        # Update global index
-        logger.debug(
-            f"register_client: updating global index client_id={client_id} -> actor_id={actor_id}"
-        )
-        self._update_global_index(client_id, actor_id)
-
-        # Create corresponding trust relationship for this OAuth2 client
-        self._create_client_trust_relationship(actor_id, client_id, client_data)
+        try:
+            logger.debug(
+                f"register_client: storing client_id={client_id} for actor_id={actor_id}"
+            )
+            self._store_client(actor_id, client_id, client_data)
+            logger.debug(
+                f"register_client: updating global index client_id={client_id} -> actor_id={actor_id}"
+            )
+            self._update_global_index(client_id, actor_id)
+        except Exception:
+            # A fault on the client writes: the trust row goes, one targeted
+            # delete; a client row already written stays (its retention is
+            # the client registry's). The first fault is what is raised.
+            self._remove_client_trust_row(actor_id, client_id, peer_id)
+            raise
 
         # Return registration response
         base_url = f"{self.config.proto}{self.config.fqdn}"
@@ -666,36 +690,35 @@ class MCPClientRegistry:
 
     def _create_client_trust_relationship(
         self, actor_id: str, client_id: str, client_data: dict[str, Any]
-    ) -> None:
+    ) -> str:
         """
-        Create a trust relationship for the OAuth2 client.
+        Create the trust row of an OAuth2 client being registered, and answer
+        its peer id.
 
-        This ensures that OAuth2 clients are integrated into ActingWeb's trust system
-        and subject to permission evaluation.
-
-        Args:
-            actor_id: Actor this client belongs to
-            client_id: OAuth2 client ID
-            client_data: Client registration data
+        Raises:
+            ClientRegistrationError: the actor is missing, the trust was
+                refused, or an unexpected error occurred; no row of the
+                client remains.
+            DbError: a storage fault; a row already written is removed first.
         """
+        from .. import actor as actor_module
+        from ..interface.trust_manager import TrustManager, oauth_trust_peer_id
+
+        peer_id = oauth_trust_peer_id(
+            client_id, source="oauth2_client", client_id=client_id
+        )
         try:
-            from .. import actor as actor_module
-            from ..interface.trust_manager import TrustManager
-
-            # Load the actor
             core_actor = actor_module.Actor(actor_id, config=self.config)
             if not core_actor.actor:
                 logger.error(
-                    f"Cannot create trust relationship - actor {actor_id} not found"
+                    f"Cannot create trust relationship for OAuth2 client {client_id} - actor {actor_id} not found"
                 )
-                return
+                raise ClientRegistrationError("actor not found")
 
-            trust_manager = TrustManager(core_actor)
-
-            # Create trust relationship using OAuth2 client credentials flow
-            # Use client_id as the "email" identifier for this trust type
-            trust_created = trust_manager.create_or_update_oauth_trust(
-                email=client_id,  # Use client_id as identifier
+            # The client id is the row's identifier; its peer id is unique
+            # per client.
+            trust_created = TrustManager(core_actor).create_or_update_oauth_trust(
+                email=client_id,
                 trust_type=client_data.get("trust_type", "mcp_client"),
                 oauth_tokens={
                     "client_id": client_id,
@@ -703,25 +726,60 @@ class MCPClientRegistry:
                     "grant_type": "client_credentials",
                     "created_at": client_data["created_at"],
                 },
-                established_via="oauth2_client",  # OAuth2 client credentials flow (not interactive)
-                client_id=client_id,  # Ensure unique peer ID per client
+                established_via="oauth2_client",  # not interactive
+                client_id=client_id,
                 client_name=client_data.get("client_name"),
             )
-
-            if trust_created:
-                logger.info(f"Created trust relationship for OAuth2 client {client_id}")
-            else:
+            if not trust_created:
                 logger.error(
                     f"Failed to create trust relationship for OAuth2 client {client_id}"
                 )
-
+                raise ClientRegistrationError("trust refused")
+        except ClientRegistrationError:
+            raise
         except DbError:
+            # The row may be written already (a fault on its token entry,
+            # which follows it).
+            self._remove_client_trust_row(actor_id, client_id, peer_id)
             raise
         except Exception as e:
             logger.error(
-                f"Error creating trust relationship for client {client_id}: {e}"
+                f"Error creating trust relationship for OAuth2 client {client_id}: {e}"
             )
-            # Don't raise - client registration can continue without trust relationship
+            self._remove_client_trust_row(actor_id, client_id, peer_id)
+            raise ClientRegistrationError("trust creation failed") from e
+
+        logger.info(f"Created trust relationship for OAuth2 client {client_id}")
+        return peer_id
+
+    def _remove_client_trust_row(
+        self, actor_id: str, client_id: str, peer_id: str
+    ) -> None:
+        """Remove the trust row a failed registration created, by its peer id
+        (no sweep of the actor's rows), and its token entry. Never raises:
+        it runs while another failure is raised, which is the one the caller
+        sees. A row that could not be removed is logged for the operator."""
+        try:
+            from ..constants import OAUTH_TOKENS_PREFIX
+            from ..db import get_trust
+
+            db = get_trust(self.config)
+            if db.get(actor_id=actor_id, peerid=peer_id) and not db.delete():
+                raise DbError("OAuth2 client trust delete", actor_id)
+            store = attribute.InternalStore(actor_id=actor_id, config=self.config)
+            store.set_confirmed(
+                f"{OAUTH_TOKENS_PREFIX}{peer_id}", None, raise_on_fault=True
+            )
+        except Exception as e:  # folds DbError: the caller raises the first fault
+            logger.error(
+                f"Could not remove trust row {peer_id} of OAuth2 client {client_id} "
+                f"on actor {actor_id} after its registration failed; remove it: {e}"
+            )
+            return
+        finally:
+            from ..mcp.invalidation import evict_caches_for_actor
+
+            evict_caches_for_actor(actor_id)
 
     def _delete_client_trust_relationship(
         self, actor_id: str, client_id: str, *, exclude_peer_id: str | None = None

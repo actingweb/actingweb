@@ -33,7 +33,9 @@ def ensure_oauth2_system_actor(config: "config_class.Config") -> str:
 
     Returns:
         The system actor ID (OAUTH2_SYSTEM_ACTOR constant), also when the actor
-        could not be created: callers load it and handle its absence.
+        could not be created: callers load it and handle its absence (an
+        anonymous client registration on it fails with
+        ``ClientRegistrationError``, a 500 at ``POST /oauth/register``).
 
     Raises:
         DbError: the store could not be read or written. Other errors are

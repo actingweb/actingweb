@@ -104,3 +104,51 @@ def test_setdefault_and_update_respect_the_bound() -> None:
     cache.update({"b": 2, "c": 3})
     assert list(cache) == ["b", "c"]
     assert cache.popitem(last=False) == ("b", 2)
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.parametrize("read", ["getitem", "get", "lookup", "contains"])
+def test_an_entry_older_than_the_ttl_is_a_miss_and_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    from actingweb import _bounded_cache
+
+    clock = _Clock()
+    monkeypatch.setattr(_bounded_cache, "_monotonic", clock)
+    cache: BoundedDict[str, int | None] = BoundedDict(4, ttl=300)
+    cache["a"] = None  # a cached "nothing there" expires too
+    clock.now += 299.9
+    assert cache.lookup("a") == (True, None)
+    clock.now += 0.2
+    if read == "getitem":
+        with pytest.raises(KeyError):
+            cache["a"]
+    elif read == "get":
+        assert cache.get("a", 7) == 7
+    elif read == "lookup":
+        assert cache.lookup("a") == (False, None)
+    else:
+        assert "a" not in cache
+    assert list(cache) == []
+    cache["a"] = 2  # a write stamps it afresh
+    clock.now += 299
+    assert cache.lookup("a") == (True, 2)
+
+
+def test_without_a_ttl_nothing_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    from actingweb import _bounded_cache
+
+    clock = _Clock()
+    monkeypatch.setattr(_bounded_cache, "_monotonic", clock)
+    cache: BoundedDict[str, int] = BoundedDict(4)
+    cache["a"] = 1
+    clock.now += 10**9
+    assert cache.lookup("a") == (True, 1)
+    assert "a" in cache

@@ -412,8 +412,9 @@ class FlaskIntegration(BaseActingWebIntegration):
             "/<actor_id>/www/<path:path>", methods=["GET", "POST", "DELETE"]
         )
         def app_www(actor_id: str, path: str = "") -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            # Check authentication and redirect to OAuth2 if needed
-            auth_redirect = self._check_authentication_and_redirect()
+            # Check authentication and redirect to OAuth2 if needed; with no
+            # provider, the handler's Basic challenge (as on FastAPI).
+            auth_redirect = self._check_authentication_and_redirect(web_ui=True)
             if auth_redirect:
                 return auth_redirect
             return self._handle_actor_request(actor_id, "www", path=path)
@@ -1728,9 +1729,16 @@ class FlaskIntegration(BaseActingWebIntegration):
         return json_response
 
     def _check_authentication_and_redirect(
-        self,
+        self, *, web_ui: bool = False
     ) -> Response | WerkzeugResponse | str | None:
-        """Check if request is authenticated, if not return OAuth2 redirect."""
+        """Check if request is authenticated, if not return OAuth2 redirect.
+
+        ``web_ui``: the request is for ``/<actor_id>/www``. With no OAuth
+        provider configured it then reaches the handler, which answers 401
+        with a ``Basic`` challenge in the application's realm, so a browser
+        prompts for the creator and passphrase (3.16, as on FastAPI). Other
+        routes keep the ``Bearer`` 401: no credential dialog for a script's
+        request."""
         # Check for Basic auth
         auth_header = request.headers.get("Authorization")
         if auth_header and auth_header.startswith("Basic "):
@@ -1790,11 +1798,34 @@ class FlaskIntegration(BaseActingWebIntegration):
             except Exception as e:
                 logger.debug(f"OAuth provider token validation error: {e}")
 
+        if web_ui and not self._oauth_provider_configured():
+            return None
+
         # No valid authentication - redirect to OAuth2
         original_url = request.url
         return self._create_oauth_redirect_response(
             redirect_after_auth=original_url, clear_cookie=bool(oauth_cookie)
         )
+
+    def _oauth_provider_configured(self) -> bool:
+        """Whether a sign-in provider is configured. Asked of the
+        authenticator, not inferred from a redirect that could not be built:
+        a provider whose redirect fails keeps the ``Bearer`` 401. An error
+        asking counts as configured, for the same reason."""
+        try:
+            config = self.aw_app.get_config()
+            if getattr(config, "oauth_providers", {}):
+                return True
+            from ...oauth2 import create_oauth2_authenticator
+
+            return bool(create_oauth2_authenticator(config).is_enabled())
+        except DbError:
+            raise
+        except Exception as e:
+            logger.debug(
+                f"Could not tell whether an OAuth2 provider is configured: {e}"
+            )
+            return True
 
     def _create_oauth_redirect_response(
         self, redirect_after_auth: str = "", clear_cookie: bool = False

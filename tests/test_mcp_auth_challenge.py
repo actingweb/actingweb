@@ -22,6 +22,7 @@ def _endpoints_handler() -> OAuth2EndpointsHandler:
     handler = OAuth2EndpointsHandler.__new__(OAuth2EndpointsHandler)
     handler.config = _config()
     handler.response = AWResponse()
+    handler.hooks = None
     return handler
 
 
@@ -134,3 +135,41 @@ def test_both_protected_resource_variants_advertise_offline_access():
     ):
         assert metadata["scopes_supported"] == ["mcp", "offline_access"]
         assert metadata["resource"] == "https://example.com/mcp"
+
+
+def test_the_protected_resource_document_reports_what_is_registered():
+    """3.16: the three flags follow the registry, as ``initialize`` and
+    ``/mcp/info`` do; before they were tools and prompts true, resources
+    false, whatever the application registered."""
+    from actingweb.interface.hooks import HookRegistry
+    from actingweb.mcp.decorators import mcp_prompt, mcp_resource, mcp_tool
+
+    @mcp_tool(description="a tool")
+    def a_tool(actor, action_name, data):
+        return {}
+
+    @mcp_resource(uri_template="notes://{id}", description="a resource")
+    def a_resource(actor, method_name, data):
+        return {}
+
+    @mcp_prompt(description="a prompt")
+    def a_prompt(actor, method_name, data):
+        return {}
+
+    def flags(hooks):
+        handler = _endpoints_handler()
+        handler.hooks = hooks
+        caps = handler._handle_protected_resource_mcp_discovery()["capabilities"]
+        return {k: caps[k] for k in ("tools", "prompts", "resources")}
+
+    nothing = {"tools": False, "prompts": False, "resources": False}
+    assert flags(None) == nothing
+    assert flags(HookRegistry()) == nothing
+    for kind, func, register in (
+        ("tools", a_tool, "register_action_hook"),
+        ("resources", a_resource, "register_method_hook"),
+        ("prompts", a_prompt, "register_method_hook"),
+    ):
+        hooks = HookRegistry()
+        getattr(hooks, register)(func.__name__, func)
+        assert flags(hooks) == {**nothing, kind: True}, kind

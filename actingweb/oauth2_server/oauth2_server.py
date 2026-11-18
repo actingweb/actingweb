@@ -15,7 +15,7 @@ from urllib.parse import urlencode, urlparse
 from ..db.exceptions import DbError
 from ..oauth2 import create_oauth2_authenticator
 from ..secret_compare import secret_equals
-from .client_registry import get_mcp_client_registry
+from .client_registry import ClientRegistrationError, get_mcp_client_registry
 from .state_manager import get_oauth2_state_manager
 from .token_manager import get_actingweb_token_manager
 
@@ -128,8 +128,9 @@ class ActingWebOAuth2Server:
 
         except ValueError as e:
             raise ValueError(f"Client registration failed: {str(e)}") from e
-        except DbError:
-            # A store fault is not a bad registration request (400).
+        except (DbError, ClientRegistrationError):
+            # A store fault, or a client whose trust row could not be created
+            # (3.16), is not a bad registration request (400).
             raise
         except Exception as e:
             logger.error(f"Client registration error: {e}")

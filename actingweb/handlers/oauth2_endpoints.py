@@ -239,6 +239,9 @@ class OAuth2EndpointsHandler(BaseHandler):
             except DbError:
                 raise
             except Exception as e:
+                # Includes ClientRegistrationError (3.16: no trust row, no
+                # client). Fixed text: the cause, which can name the client
+                # or the actor, is logged only.
                 logger.error(f"Client registration failed: {e}")
                 return self.error_response(500, "Client registration failed")
 
@@ -1109,6 +1112,15 @@ class OAuth2EndpointsHandler(BaseHandler):
         )
 
         base_url = f"{self.config.proto}{self.config.fqdn}"
+        # What the application registered, as initialize and /mcp/info
+        # answer it (3.16; these were fixed values).
+        from .mcp import (
+            registry_has_mcp_prompts,
+            registry_has_mcp_resources,
+            registry_has_mcp_tools,
+        )
+
+        hooks = getattr(self, "hooks", None)
 
         return {
             "resource": f"{base_url}/mcp",
@@ -1120,9 +1132,9 @@ class OAuth2EndpointsHandler(BaseHandler):
             "mcp_version": LATEST_PROTOCOL_VERSION,
             "supported_protocol_versions": SUPPORTED_PROTOCOL_VERSIONS,
             "capabilities": {
-                "tools": True,
-                "prompts": True,
-                "resources": False,
+                "tools": registry_has_mcp_tools(hooks),
+                "prompts": registry_has_mcp_prompts(hooks),
+                "resources": registry_has_mcp_resources(hooks),
                 "roots": False,
             },
         }

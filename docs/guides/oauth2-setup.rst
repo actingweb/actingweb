@@ -419,6 +419,7 @@ FastAPI Integration
 
     from fastapi import FastAPI, HTTPException, Depends
     from actingweb.interface.oauth_client_manager import OAuth2ClientManager
+    from actingweb.oauth2_server.client_registry import ClientRegistrationError
 
     app = FastAPI()
 
@@ -433,9 +434,14 @@ FastAPI Integration
     ):
         try:
             client = client_manager.create_client(client_name)
-            return {"client_id": client["client_id"], "client_secret": client.get("client_secret")}
-        except Exception as e:
+        except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except ClientRegistrationError:
+            # 3.16: the client's trust row could not be created; nothing
+            # was stored. Not the caller's fault. (A DbError, a storage
+            # fault, is left to the integration's 503.)
+            raise HTTPException(status_code=500, detail="Client registration failed")
+        return {"client_id": client["client_id"], "client_secret": client.get("client_secret")}
 
     @app.post("/{actor_id}/oauth-clients/{client_id}/tokens")
     async def generate_access_token(

@@ -6,7 +6,7 @@
 ## What is left
 
 The release validation ran every consumer check against the branch, by
-path. Three of them are repeated with the published release candidate,
+path. Three of them are repeated, and one is new, with the published release candidate,
 because only that proves the wheel (the skill is not in it, the console
 scripts and the packaged templates are):
 
@@ -32,7 +32,14 @@ scripts and the packaged templates are):
    installed and the skill copied from the repository at the rc tag, for
    Claude Code and Codex.
 
+4. **3.15.1 on a PostgreSQL database at `a7b8c9d0e1f2`.** The guide's
+   checklist runs `alembic upgrade head` before the deploy; whether a
+   3.15.1 process keeps serving on the retyped `attributes` key columns
+   was not tested (the live pair ran on DynamoDB). Run the live pair's
+   3.15.1 side on PostgreSQL against a database at head; if it works, the
+   guide's step 4 can drop its maintenance-window advice.
+
 ## When it is done
 
 Each item's outcome goes into the release's verification or the plan for
-the stable release; this file is deleted when all three are done.
+the stable release; this file is deleted when all four are done.

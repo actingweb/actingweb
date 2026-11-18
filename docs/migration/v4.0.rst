@@ -62,14 +62,21 @@ serves:
    (:doc:`../quickstart/configuration`, the IAM list; `Creator
    uniqueness`_, "What 4.0 adds to a role").
 4. On PostgreSQL: ``alembic upgrade head`` (revisions ``f6a7b8c9d0e1`` and
-   ``a7b8c9d0e1f2``).
+   ``a7b8c9d0e1f2``). Whether 3.15.1 keeps serving correctly on a database
+   at ``a7b8c9d0e1f2`` (which retypes the ``attributes`` key columns) has
+   not been tested: run it in a maintenance window, or deploy 4.0 right
+   after it.
 5. If actors were created before 4.0 through the factory, the email form,
    ``Actor.create`` or an MCP connector, and you know they are legitimate:
    ``actingweb-mark-actors-vouched --dry-run``, then without
    ``--dry-run`` (`Marking actors you trust before the first sign-in`_).
-6. ``actingweb-unique-creators report``, ``resolve --apply`` if it lists
-   anything, then ``enable --apply`` (`Step 0`_), unless the application
-   calls ``with_unique_creator(False)``.
+6. ``actingweb-unique-creators report``; if it lists anything, read what
+   ``resolve`` (the dry run) would keep and rename, choose another actor
+   with ``--keep <id>`` where it chooses wrong, then ``resolve --apply``;
+   then ``enable --apply`` (`Step 0`_). Skip this step if the application
+   calls ``with_unique_creator(False)``. ``resolve --apply`` renames
+   duplicate actors, and 3.15.1 keeps them renamed (`Rolling back to
+   3.15.1`_).
 7. ``actingweb-property-lookup report``, then ``backfill --apply`` (`One
    reverse-lookup mechanism`_), unless reverse lookup is off
    (``with_indexed_properties([])``).
@@ -247,12 +254,25 @@ read. That happens at the first of these, after the deploy:
   ``SubscriptionManager.sync_peer()`` runs (`Attribute lists and list
   diffs`_).
 
-What the commands did before the deploy is not read by 3.15.1: it ignores
-the vouch markers and the ``creators`` records, and reads the same
-``property_lookup_v2`` table 4.0 fills. To turn creator uniqueness off
-again, follow its own "Rolling back" (`Creator uniqueness`_). Two things
-have not been tested: 3.15.1 against a PostgreSQL database at revision
-``a7b8c9d0e1f2``, and a whole-application rollback after 4.0 has served.
+Some of what the commands did before the deploy stays in force under
+3.15.1, and some it ignores:
+
+- **Stays:** an actor ``resolve --apply`` renamed keeps its
+  ``<creator>#dup-<hash>`` creator and its cleared email, and a creator
+  moved by ``creator-to-email --apply`` or ``resolve
+  --default-creator-to-email`` keeps the new value: 3.15.1 reads
+  ``creator``, so a user of a renamed actor signs in to the kept one. On
+  PostgreSQL the unique index refuses a duplicate creator from 3.15.1 too,
+  until ``actingweb-unique-creators disable --apply`` drops it (follow
+  `Creator uniqueness`_, "Rolling back"). Choose the actors to keep before
+  checklist step 6: that step, not the deploy, is when they change.
+- **Ignored:** the vouch markers, the ``creators`` records on DynamoDB, and
+  the lookup rows (3.15.1 reads the same ``property_lookup_v2`` table 4.0
+  fills).
+
+Two things have not been tested: 3.15.1 against a PostgreSQL database at
+revision ``a7b8c9d0e1f2``, and a whole-application rollback after 4.0 has
+served.
 
 .. _v40-other-versions:
 

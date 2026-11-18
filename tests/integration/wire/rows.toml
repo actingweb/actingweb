@@ -708,14 +708,14 @@ reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11
 
 [rows."WG16"]
 test = "test_wire_grants.py::test_wg16_honest_flows"
-owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3", "3-16-pre-rc1-fixes:1", "3-16-release-validation:1"]
+owners = ["grant-enforcement-per-route:3", "3-16-pre-validation-fixes:3", "3-16-pre-rc1-fixes:1", "3-16-release-validation:1", "3-16-release-validation:4"]
 exposure = false
 expected = "The user's browser: the form as JSON (now JSON, with form_nonce) and as HTML (a form_nonce input), each setting the nonce cookie; a POST with mcp_client and the GET callback: a code, the cookie cleared, the token (trust_type mcp_client) and tools/list; a POST choosing Apple and Apple's form-POST callback: a code; a second client's Google and Apple buttons followed with no type chosen: a code each, the trust mcp_client (the client default, not admin). No confirmation is asked."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-10 a client's level is the user's choice: anonymous registration refused admin and client_credentials, the form bound to the browser by a nonce cookie, a confirmation otherwise, the Apple button and the JSON form fixed (grant-enforcement-per-route:3)", "2026-11-16 the default redirect_uri is /oauth/callback, the path that is served (3-16-pre-validation-fixes:3)", "2026-11-17 initialize advertises listChanged: false; the server sends no list-change notification (3-16-pre-rc1-fixes:1)", "2026-11-18 the library version recorded as <library-version> (an actor's /meta, the MCP serverInfo): a release bump is not a wire change (3-16-release-validation:1)"]
 
 [rows."WG17"]
 test = "test_wire_grants.py::test_wg17_owner_created_client"
-owners = ["3-16-pre-rc1-fixes:1", "3-16-release-validation:1"]
+owners = ["3-16-pre-rc1-fixes:1", "3-16-release-validation:1", "3-16-release-validation:4"]
 exposure = false
 expected = "A client the actor's owner created uses client_credentials: the token is bound to the owner's actor; tools/list."
 reason = ["2026-11-10 first recording (grant-enforcement-per-route:0)", "2026-11-17 initialize advertises listChanged: false; the server sends no list-change notification (3-16-pre-rc1-fixes:1)", "2026-11-18 the library version recorded as <library-version> (an actor's /meta, the MCP serverInfo): a release bump is not a wire change (3-16-release-validation:1)"]

@@ -233,7 +233,7 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
 
 
 # The regression app's config (an owner's OAuth2 client is created through
-# the library: 3.16 refuses client_credentials to an anonymous registration).
+# the library: 4.0 refuses client_credentials to an anonymous registration).
 _REGRESSION_CONFIG: dict = {}
 
 

@@ -1,4 +1,4 @@
-"""Edges of the grant enforcement (3.16, plan Phase 1).
+"""Edges of the grant enforcement (4.0, plan Phase 1).
 
 A diff never carries an object the filter emptied (the subscriber replaces a
 property with what a diff carries, so ``{}`` would wipe the parts it may

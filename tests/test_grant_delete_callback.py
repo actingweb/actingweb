@@ -1,4 +1,4 @@
-"""Deleting a peer's grant tells the peer (3.16, plan Phase 4, C10).
+"""Deleting a peer's grant tells the peer (4.0, plan Phase 4, C10).
 
 ``DELETE /<actor>/trust/<rel>/<peer>/permissions`` puts the peer back on its
 trust type's default grant. It sends the permission callback with that

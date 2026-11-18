@@ -19,7 +19,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
-   v3.16
+   v4.0
    v3.15
    v3.14
    v3.13
@@ -32,31 +32,15 @@ Contents
 Version Migrations
 ==================
 
-**v3.16 Migration**
-   Guide for upgrading to ActingWeb 3.16, a security release for the actor
-   factory. An unauthenticated ``POST /`` could squat an address, and the
-   owner's first OAuth login adopted the squatter's actor with the squatter's
-   credentials still live. Every actor now records how it was created;
-   a sign-in that proves an address over an actor nobody vouched for replaces
-   it (factory-created) or cleans it in place (everything else, including
-   every actor created before 3.16), with ``actingweb-mark-actors-vouched``
-   to opt known-good actors out before the first sign-in. A creator changed
-   over ``PUT /<id>/trust/trustee`` now unvouches the actor. Adds
-   ``with_open_factory`` to close the factory, the ``actor_adopted`` hook, and
-   ``prompt=select_account`` on the SPA sign-in. Database faults now raise
-   ``DbError`` (answered 503 with ``Retry-After``) instead of reading as
-   absence, which custom backends must follow. Creator uniqueness
-   (``with_unique_creator()``, **on by default**) makes the database hold one
-   actor per creator; the application refuses to start until Step 0 has run
-   (``with_unique_creator(False)`` opts out). The
-   legacy reverse lookup (GSI, v1 table, PostgreSQL scan,
-   ``USE_PROPERTY_LOOKUP_TABLE``) is removed: ``check_ready()`` refuses a store
-   whose indexed property names were never backfilled, and
-   ``actingweb-property-lookup`` makes it ready. It conforms to
-   specification 1.5 (announced at ``/meta/actingweb/version``): deletes
-   reach subscribers at every level, a resync sweeps the replica, list items
-   are addressed by path, the passphrase is not returned to a peer, a write's
-   callbacks are sent concurrently, and ``FanOutManager`` is removed.
+**v4.0 Migration**
+   Guide for upgrading from 3.15.1 to ActingWeb 4.0, a major release. It
+   closes a squat on the actor factory, makes a database fault an error
+   instead of a guess, makes creator uniqueness (on by default) a guarantee
+   the database enforces, binds every peer to its own paths and grants, and
+   conforms to specification 1.5. An application refuses to start until the
+   operator commands it needs have run; the guide's "Start here" lists them
+   in order, says how to roll back and what happens with peers still on
+   3.15.1, and groups the changes by who they affect.
 
 **v3.15 Migration**
    Guide for upgrading to ActingWeb 3.15, a security release for the MCP
@@ -98,7 +82,7 @@ Version Migrations
    sign-in providers.
 
 **v3.10 Migration**
-   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager (removed in 3.16), and peer capabilities.
+   Guide for upgrading to ActingWeb 3.10, covering automatic subscription processing with CallbackProcessor, RemotePeerStore, FanOutManager (removed in 4.0), and peer capabilities.
 
 **v3.7 Migration**
    Guide for upgrading to ActingWeb 3.7, covering developer API extensions for SubscriptionManager and TrustManager with cleaner APIs and automatic lifecycle hooks.

@@ -169,7 +169,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
 
     @patch("actingweb.handlers.properties.get_permission_evaluator")
     def test_permission_evaluator_error_fallback(self, mock_get_evaluator):
-        """An evaluator error denies (3.16): no fallback to legacy auth,
+        """An evaluator error denies (4.0): no fallback to legacy auth,
         which used to turn an excluded_patterns denial into an allow."""
         # Setup mock permission evaluator to raise exception
         mock_evaluator = StubEvaluator()
@@ -195,7 +195,7 @@ class TestHandlerPermissionIntegration(unittest.TestCase):
     def test_not_found_permission_fallback(self, mock_get_evaluator):
         """A grant that does not mention properties leaves the decision to
         the access table (``config.access``) for the peer's relationship
-        (3.16: decided from the trust row, not the request's Auth object)."""
+        (4.0: decided from the trust row, not the request's Auth object)."""
         mock_evaluator = StubEvaluator(relationship="friend")
         mock_evaluator.evaluate_property_access = Mock(
             return_value=PermissionResult.NOT_FOUND

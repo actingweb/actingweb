@@ -1,4 +1,4 @@
-"""The fetch after a grant takes the baseline's decision (3.16).
+"""The fetch after a grant takes the baseline's decision (4.0).
 
 When a peer grants a property, the subscriber fetches it
 (``CallbacksHandler._fetch_single_property``). A text value that is not JSON

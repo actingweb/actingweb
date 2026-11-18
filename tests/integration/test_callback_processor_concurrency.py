@@ -1,5 +1,5 @@
 """Two concurrent deliveries of one in-order callback run the handler once
-(3.16, owner-decided plan D13), against the real store of the backend the
+(4.0, owner-decided plan D13), against the real store of the backend the
 run is configured for (``DATABASE_BACKEND``; DynamoDB by default).
 
 Each delivery runs in its own thread with its own event loop. A barrier holds

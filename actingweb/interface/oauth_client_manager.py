@@ -55,7 +55,7 @@ class OAuth2ClientManager:
             ValueError: the client's metadata is refused.
             ClientRegistrationError: the client's trust row could not be
                 created (the actor is missing, the trust was refused, or an
-                unexpected error); nothing of the client is stored (3.16).
+                unexpected error); nothing of the client is stored (4.0).
             DbError: a storage fault.
 
         Example:

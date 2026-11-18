@@ -106,6 +106,9 @@ page, or create one via the API:
       -d '{"creator": "you@example.com"}'
 
 The response contains the new actor ID. The actor root is ``http://localhost:5000/<actor_id>``.
+Creator uniqueness is on by default (4.0), so a second request for the same
+creator answers ``403``, whatever the passphrase: keep the id and passphrase
+from the first ``201``.
 
 .. note::
 

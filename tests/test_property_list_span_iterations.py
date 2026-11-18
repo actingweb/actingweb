@@ -509,7 +509,7 @@ class TestM8AndL4ActorLevelSweep:
 
 
 class TestV1PreReleaseItemsAreNeverSwept:
-    """Second verification, V1: a user item stored before 3.16 that merely
+    """Second verification, V1: a user item stored before 4.0 that merely
     starts like an envelope is an item, read as such and never removed."""
 
     def test_it_reads_and_survives_the_sweep(

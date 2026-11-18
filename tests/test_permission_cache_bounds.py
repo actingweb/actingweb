@@ -60,7 +60,7 @@ def test_an_evicted_pair_is_read_again() -> None:
     assert bucket.get_attr.call_count == 4
 
 
-# 3.16: the override cache expires an entry after 300 seconds, so a change
+# 4.0: the override cache expires an entry after 300 seconds, so a change
 # another process stored is in force here within that window.
 
 

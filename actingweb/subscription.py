@@ -21,7 +21,7 @@ GRANULARITIES = frozenset({"high", "low", "none"})
 def wire_timestamp(value: Any) -> str:
     """A diff's or a callback's ``timestamp`` as the wire carries it: ISO 8601
     in UTC with ``Z`` and microseconds (``2026-11-15T10:00:00.000000Z``), the
-    form both polls use (3.16, specification 1.5: callbacks sent ``str()`` of
+    form both polls use (4.0, specification 1.5: callbacks sent ``str()`` of
     the stored value, and resync callbacks an offset). A naive value is
     taken as UTC; text is passed through."""
     if isinstance(value, str):
@@ -314,7 +314,7 @@ class Subscriptions:
         config = self.config
         if wipe_diffs and self.subscriptions and config:
             # Every caller wipes the whole actor (deletion, purge, adoption):
-            # its diffs go by actor id (3.16; before, one diff read per
+            # its diffs go by actor id (4.0; before, one diff read per
             # subscription).
             _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(
                 self.actor_id
@@ -351,7 +351,7 @@ def _store(build: Callable[[], _T]) -> _T:
     """A store built by ``build``; any error building it (the DynamoDB table
     check runs in the constructor) is a ``DbError``, so a resumable delete,
     a create's rollback and ``actingweb-deletions`` see the fault they
-    handle (3.16)."""
+    handle (4.0)."""
     try:
         return build()
     except DbError:
@@ -361,7 +361,7 @@ def _store(build: Callable[[], _T]) -> _T:
 
 
 def delete_actor_subscription_rows(actor_id: str, config: Any) -> None:
-    """Every subscription row of ``actor_id``, by actor id (3.16): the rows
+    """Every subscription row of ``actor_id``, by actor id (4.0): the rows
     only, their diffs go with :func:`delete_actor_diffs_and_suspensions`. A
     fault raises ``DbError``."""
     rows = _store(lambda: get_subscription_list(config))
@@ -370,7 +370,7 @@ def delete_actor_subscription_rows(actor_id: str, config: Any) -> None:
 
 
 def clear_actor_suspensions(actor_id: str, config: Any) -> None:
-    """Every subscription suspension of ``actor_id`` (3.16). Raises
+    """Every subscription suspension of ``actor_id`` (4.0). Raises
     ``DbError`` unless the store confirms it, also when building the store
     fails (the DynamoDB store checks its table first), so a caller's rollback
     or resumable delete runs."""
@@ -386,7 +386,7 @@ def clear_actor_suspensions(actor_id: str, config: Any) -> None:
 
 def delete_actor_diffs_and_suspensions(actor_id: str, config: Any) -> None:
     """Every subscription diff of ``actor_id`` (by actor id, one diff at a
-    time is never fetched) and every suspension (3.16). A missing diff or
+    time is never fetched) and every suspension (4.0). A missing diff or
     suspension table holds none. A fault raises ``DbError``."""
     _store(lambda: get_subscription_diff_list(config)).delete_all_of_actor(actor_id)
     clear_actor_suspensions(actor_id, config)

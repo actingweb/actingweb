@@ -1,4 +1,4 @@
-"""Adoption after the sixth verification (3.16).
+"""Adoption after the sixth verification (4.0).
 
 Strict creator listings (index lag, a missing victim, a successor that cannot
 be read), the record a recursive clean reports, factory actors beside a
@@ -225,7 +225,7 @@ class TestCreateRollbackAndTheBridgeWinner:
             with (
                 marker_write_fault(config, actor_id),
                 patch.object(type(get_actor(config)), "delete", lambda self: False),
-                pytest.raises(DbError),  # 3.16: the fault is raised after the rollback
+                pytest.raises(DbError),  # 4.0: the fault is raised after the rollback
             ):
                 actor.create(
                     url="https://test.example.com/",

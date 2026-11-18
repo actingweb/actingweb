@@ -114,7 +114,7 @@ requests might modify the same attribute simultaneously.
 - Session management with concurrent requests
 - Any scenario requiring optimistic locking
 
-Create if absent (v3.16+)
+Create if absent (v4.0+)
 -------------------------
 
 ``create_attr_if_absent()`` creates an attribute only if no live row holds its name,
@@ -167,7 +167,7 @@ an idempotency key) where a read-then-write would let two requests both win.
   still carries meaning (a consumed marker kept for ``consumed_ttl``): it replaces an
   expired row.
 
-Writes are bound to their bucket (v3.16+)
+Writes are bound to their bucket (v4.0+)
 -----------------------------------------
 
 Both backends key an attribute as ``<bucket>:<name>``, so bucket ``a`` with name
@@ -179,7 +179,7 @@ never replaces the other bucket's row. It is not an availability fault: a retry 
 the same row. The subscription replica refuses such a key and logs it (``another
 bucket holds the key``).
 
-Attribute lists (v3.16+)
+Attribute lists (v4.0+)
 ------------------------
 
 ``actor.attribute_lists(bucket)`` returns an ``AttributeListStore`` for one bucket.
@@ -201,11 +201,11 @@ rows of items over the span threshold and the key rows of ``append_once()``. Cod
 that enumerates an actor's buckets sees these ``$aux`` buckets; leave them alone, the
 list owns them (``clear()`` and ``delete()`` remove them with the list).
 
-**The old layout.** Before 3.16 an attribute list was ``list:<name>:meta`` and
+**The old layout.** Before 4.0 an attribute list was ``list:<name>:meta`` and
 ``list:<name>:<i>``. Such a list is read in place and converted on its first change,
 its metadata included; reads never convert. ``ListAttributeIterator`` is removed:
 iterate the list itself. ``get_metadata()["length"]`` is advisory and ``updated_at``
-best effort. A pre-3.16 process reads a converted list as empty, and a write it makes
+best effort. A pre-4.0 process reads a converted list as empty, and a write it makes
 lands in the old layout beside the new one: the list then raises
 ``ListLayoutConflictError`` on every access. Finish a rolling deploy before lists
 convert, and check with ``actingweb-verify-property-lists --attributes --bucket
@@ -213,7 +213,7 @@ convert, and check with ``actingweb-verify-property-lists --attributes --bucket
 
 **Custom backends.** Attribute lists need nine more ``DbAttribute`` methods
 (``ATTRIBUTE_LIST_PRIMITIVES`` in ``actingweb.db.protocols``); see
-:doc:`../migration/v3.16`, "Custom database backends". On PostgreSQL they need
+:doc:`../migration/v4.0`, "Custom database backends". On PostgreSQL they need
 revision ``a7b8c9d0e1f2`` (``check_ready()`` raises ``AttributeSchemaNotReady``
 until it is applied).
 
@@ -444,79 +444,19 @@ the client. The registration and every other actor's connection stay.
 Token Expiration Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Current Behavior: Lazy Deletion Only**
+A token past its expiry is refused when it is read, and removed then. The
+rest is removed in bulk without anything on the serving path doing a scan:
 
-Expired tokens are deleted only when accessed and found to be expired:
+- **DynamoDB**: the rows carry a TTL attribute; enable DynamoDB's native
+  TTL on the attributes table and it removes every kind of expired token
+  and session.
+- **PostgreSQL**: ``/oauth/spa/token`` and ``/oauth/token`` each purge
+  their expired tokens at most once an hour per process; OAuth sign-in
+  sessions, orphaned index entries and consumed refresh tokens past the
+  reuse window need the scheduled ``cleanup_expired_tokens()``.
 
-.. code-block:: python
-
-   # Example from token_manager.py
-   def validate_access_token(self, token):
-       token_data = self._get_access_token(token)
-       if token_data and int(time.time()) > token_data["expires_at"]:
-           self._remove_access_token(token)  # Lazy deletion
-           return None
-       return token_data
-
-**Known Limitations:**
-
-- No scheduled garbage collection
-- No DynamoDB TTL configured
-- Expired but never-accessed tokens accumulate
-- Abandoned OAuth sessions may persist
-
-Cleanup Methods Available
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The following cleanup methods exist but are not automatically called:
-
-.. code-block:: python
-
-   from actingweb.oauth_session import OAuth2SessionManager
-
-   session_mgr = OAuth2SessionManager(config)
-
-   # Clear expired OAuth sessions (10 min TTL)
-   cleared = session_mgr.clear_expired_sessions()
-
-   # Clear expired SPA tokens
-   cleared = session_mgr.cleanup_expired_tokens()
-
-Known Issues and Gaps
----------------------
-
-Data That May Accumulate
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. list-table:: Potential Data Accumulation
-   :widths: 25 15 60
-   :header-rows: 1
-
-   * - Data Type
-     - Risk Level
-     - Description
-   * - Expired OAuth sessions
-     - Medium
-     - Sessions from abandoned OAuth flows (10 min TTL, lazy cleanup)
-   * - Expired SPA refresh tokens
-     - High
-     - 2-week TTL, accumulates if users don't refresh
-   * - Expired MCP refresh tokens
-     - Critical
-     - 30-day TTL, significant accumulation potential
-   * - Expired auth codes
-     - Medium
-     - Codes from abandoned OAuth flows (10 min TTL)
-   * - Orphaned Google token data
-     - Medium
-     - May remain if refresh token deleted before access token
-
-Cleanup Not Implemented
-~~~~~~~~~~~~~~~~~~~~~~~
-
-1. **Reverse Token Lookups** - ``_revoke_refresh_tokens_for_access_token()`` logs warning but doesn't delete
-2. **Scheduled Cleanup** - No cron/background task for expired data
-3. **DynamoDB TTL** - Not configured on the attributes table
+:doc:`../guides/database-maintenance` has the setup for both backends and
+what each cleanup removes.
 
 Maintenance Recommendations
 ---------------------------

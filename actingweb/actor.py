@@ -473,7 +473,7 @@ _suspension_check_error_logged_at: float | None = None
 
 class TrustReplaced(Exception):
     """A trust delete with an expected secret found the row replaced (a
-    re-pair landed): the new row is left alone (3.16)."""
+    re-pair landed): the new row is left alone (4.0)."""
 
 
 _EMPTIED = object()
@@ -853,7 +853,7 @@ class Actor:
 
         One read of the actor row. Under ``with_email_as_creator`` the
         creator follows the stored email where the email is written
-        (:mod:`actingweb.creator_sync`), not here (3.16).
+        (:mod:`actingweb.creator_sync`), not here (4.0).
         """
         if not actor_id and not self.id:
             return None
@@ -1035,7 +1035,7 @@ class Actor:
                 tail_left = SWEEP_LIMIT
         self.creator_classes = classes
         # Best first; an actor deleted between the ranking and its load is
-        # passed over for the next one, as the per-row loop did before 3.16.
+        # passed over for the next one, as the per-row loop did before 4.0.
         for _rank, candidate_id in sorted(ranked):
             self.get(actor_id=candidate_id)
             if self.id:
@@ -1221,7 +1221,7 @@ class Actor:
             # stalled deletion. A fault fails the create (503); the swap's row
             # is kept, as the marker rollback below keeps it.
             try:
-                # Suspensions a deletion before 3.16 (or one that faulted
+                # Suspensions a deletion before 4.0 (or one that faulted
                 # after its row went) left under this id would make the new
                 # actor send no diffs. After the row, never before: a create
                 # under a live actor's id answers False and must not touch
@@ -1645,7 +1645,7 @@ class Actor:
         The wipe covers properties, peer trustees, subscriptions and their
         diffs, every trust with its side-stores, a subscription a peer created
         during the wipe, every remaining subscription diff of the actor, its
-        subscription suspensions (3.16) and its attribute buckets. A
+        subscription suspensions (4.0) and its attribute buckets. A
         suspension delete that cannot be confirmed raises ``DbError``.
 
         The actor row is removed **last**, so the actor keeps resolving for the
@@ -1722,7 +1722,7 @@ class Actor:
         return gone
 
     def _wipe_subscription_leftovers(self) -> None:
-        """Remove what subscriptions leave behind (3.16): a subscription a
+        """Remove what subscriptions leave behind (4.0): a subscription a
         peer created while its trust row still lived, every diff of the actor
         (one created between the list read and its wipe has no row to be
         found through), and the suspension rows. A fault raises ``DbError``,
@@ -2106,7 +2106,7 @@ class Actor:
         """Changes a trust relationship and notifies the peer if approval is
         changed. ``approved``, ``verified`` and ``peer_approved`` are a bool
         or ``"true"``/``"false"``; anything else raises ``ValueError``
-        (3.16), before anything is read or written."""
+        (4.0), before anything is read or written."""
         try:
             # Text is a flag here too: "true" meets the approval gate, the
             # binding to the row read and the peer's notification below.
@@ -2127,7 +2127,7 @@ class Actor:
                 and not this_trust.get("verified")
                 and not self.reverify_pending_trust(peerid)
             ):
-                # Only a verified row is approved (3.16): its secret is whatever
+                # Only a verified row is approved (4.0): its secret is whatever
                 # the requester chose, and anyone can file a request under a
                 # peer's id (Trust.modify refuses the write as well).
                 logger.warning(
@@ -2182,7 +2182,7 @@ class Actor:
                     "approved": True,
                 }
                 # The base URI this call wrote, else the row's as it stands after
-                # the write (3.16: the notification went to the URL the row had
+                # the write (4.0: the notification went to the URL the row had
                 # before, also when another request had moved it meanwhile).
                 if not baseuri:
                     try:
@@ -2244,7 +2244,7 @@ class Actor:
         finally:
             # A peer may subscribe back while this call runs (the request
             # above lets it): the next subscription read on this instance
-            # reads the list again (3.16).
+            # reads the list again (4.0).
             self.subs_list = None
 
     async def modify_trust_and_notify_async(
@@ -2273,7 +2273,7 @@ class Actor:
         Delegates to the sync method in a worker thread, so the two cannot
         drift: the notification is the ``POST trust/<rel>/<id>`` the peer
         handles as an approval, with the same error handling around the
-        trust write. (Until 3.16 this method built its own proxy with a peer
+        trust write. (Until 4.0 this method built its own proxy with a peer
         target ``AwProxy`` cannot read, so it never notified the peer.)
         ``asyncio.to_thread`` copies context variables, so request
         correlation carries over. Cancelling the await does not stop the
@@ -2317,7 +2317,7 @@ class Actor:
             trust_type: Expected peer mini-app type for validation (optional)
         """
         if is_reserved_relationship(relationship):
-            # A role or an access-table keyword (3.16): a peer named so
+            # A role or an access-table keyword (4.0): a peer named so
             # would read as the creator or the trustee.
             logger.warning(f"Refused a trust with the reserved name {relationship!r}")
             return False
@@ -2505,7 +2505,7 @@ class Actor:
         finally:
             # A peer may subscribe back while this call runs (the request
             # above lets it): the next subscription read on this instance
-            # reads the list again (3.16).
+            # reads the list again (4.0).
             self.subs_list = None
 
     async def create_reciprocal_trust_async(
@@ -2689,7 +2689,7 @@ class Actor:
                 return False
             except Exception as e:  # folds DbError: peer HTTP only
                 # Any failure of the request drops the attempt, as the sync twin
-                # does (3.16: an exception that was not an httpx error, an
+                # does (4.0: an exception that was not an httpx error, an
                 # invalid URL say, left the half-made row behind).
                 logger.debug(
                     f"Not able to create trust with peer async: {e}, deleting my trust."
@@ -2721,12 +2721,12 @@ class Actor:
         finally:
             # A peer may subscribe back while this call runs (the request
             # above lets it): the next subscription read on this instance
-            # reads the list again (3.16).
+            # reads the list again (4.0).
             self.subs_list = None
 
     def reverify_pending_trust(self, peerid: str) -> bool:
         """Whether the trust row for ``peerid`` is verified, re-running the
-        creation's verification for one that is not (3.16).
+        creation's verification for one that is not (4.0).
 
         A row stored unverified holds the secret its requester chose. Before
         anything approves it, ask the host at its base URI for our own trust
@@ -3052,7 +3052,7 @@ class Actor:
             logger.debug(
                 f"Verifying trust at requesting peer({peerid}) at url ({requrl})"
             )
-            # Bounded: an unauthenticated request names this URL (3.16).
+            # Bounded: an unauthenticated request names this URL (4.0).
             verify_deadline = _verification_deadline()
             status, data = _bounded_get_json(requrl, headers, verify_deadline)
             self.last_response_code = status if status is not None else 408
@@ -3072,7 +3072,7 @@ class Actor:
                 # The requester's own row must be approved: an initiator
                 # creates its row approved before it sends the request, and
                 # a pending row anyone filed under the requester's id answers
-                # with whatever token its filer chose (3.16, the
+                # with whatever token its filer chose (4.0, the
                 # mirrored-request hole). A 2xx: the spec's "200 OK".
                 verified = bool(
                     _answered_by_approved_row(data)
@@ -3243,7 +3243,7 @@ class Actor:
         ``notify_peers=False`` skips the remote DELETE (``delete_peer`` is then
         ignored) and runs only the local cleanup.
 
-        ``expected_secret`` (3.16): delete only the row with this secret, the
+        ``expected_secret`` (4.0): delete only the row with this secret, the
         one the caller authorised against. It is compared before the remote
         DELETE, again just before the local cleanup, and by the row delete
         itself; a row a re-pair replaced is left alone and ``TrustReplaced``
@@ -3251,7 +3251,7 @@ class Actor:
         keeps its row, without the subscriptions the cleanup removed (the
         remaining window; the peer's next sync re-creates them).
 
-        ``before_local_delete`` (3.16): called with each row after its last
+        ``before_local_delete`` (4.0): called with each row after its last
         secret check and before its local cleanup (the trust handler fires
         ``trust_deleted`` there, so a delete that loses fires nothing).
 
@@ -3262,7 +3262,7 @@ class Actor:
         that list when the caller has already read it (``Actor.delete``,
         ``purge_relationships``). Whatever happens after the subscriptions
         are deleted, the trust row kept included, the memo is left unread
-        (3.16).
+        (4.0).
         """
         failed_once = False  # For multiple relationships, this will be True if at least one deletion at peer failed
         success_once = False  # True if at least one relationship was deleted at peer
@@ -3346,7 +3346,7 @@ class Actor:
                     raise TrustReplaced(rel.get("peerid"))
             if before_local_delete is not None and current:
                 # After the last secret check and before anything local goes
-                # (3.16): a lost race fires nothing, a row another delete
+                # (4.0): a lost race fires nothing, a row another delete
                 # already removed fires nothing, and the caller's hook can
                 # still read the row's data (the cached peer profile).
                 before_local_delete(dict(current))
@@ -3659,7 +3659,7 @@ class Actor:
             # this instance sees the new subscription; every creation path
             # (REST, the interface layer) comes through here. In a finally: a
             # fault may follow a write that landed. This refreshes *this*
-            # instance only: another instance keeps the list it read (3.16,
+            # instance only: another instance keeps the list it read (4.0,
             # see get_subscriptions()).
             self.subs_list = None
         return new_sub.get()
@@ -3674,7 +3674,7 @@ class Actor:
             not isinstance(granularity, str)
             or granularity not in subscription.GRANULARITIES
         ):
-            # Refused before it is sent (3.16, specification 1.5).
+            # Refused before it is sent (4.0, specification 1.5).
             logger.warning(f"Refused a subscription with granularity {granularity!r}")
             return False
         relationships = self.get_trust_relationships(peerid=peerid)
@@ -3718,7 +3718,7 @@ class Actor:
         except Exception:  # folds DbError: peer HTTP only
             return None
         if self.last_response_code == 403:
-            # The peer's grant does not admit it (3.16: a subscription needs
+            # The peer's grant does not admit it (4.0: a subscription needs
             # read access to what it names); said, not only returned as None.
             logger.warning(
                 f"Peer {peerid} refused a subscription to "
@@ -3790,7 +3790,7 @@ class Actor:
         Raises:
             DbError: on a read fault (unless ``strict=False``)
 
-        One fetch per ``Actor`` instance, an empty list included (3.16): the
+        One fetch per ``Actor`` instance, an empty list included (4.0): the
         list is read on the first call and served from memory after that. It
         is read again only after this instance's own create and delete
         methods, a resume, and the trust calls that send a request to the
@@ -3959,7 +3959,7 @@ class Actor:
             result = sub.delete()
         finally:
             # Clear the memo on every exit: a fault may follow a delete that
-            # landed (3.16).
+            # landed (4.0).
             self.subs_list = None
 
         processing = getattr(self.config, "_subscription_config", None)
@@ -3996,7 +3996,7 @@ class Actor:
     def _owe_covered_rebuilds(self, peerid: str, covered: list[dict[str, Any]]) -> None:
         """Mark a rebuild owed for each subscription to one property that a
         deleted whole-target subscription covered: its diffs were not stored
-        (3.16, one subscription per name writes the replica), so its replica
+        (4.0, one subscription per name writes the replica), so its replica
         names may be stale. Best effort, logged; the next callback or sync
         runs the rebuild."""
         from .callback_processor import CallbackProcessor
@@ -4063,13 +4063,13 @@ class Actor:
             return None
         if not _has_peer_endpoint(trust_rel, self.id):
             # An OAuth2 client's row (its subscriptions are kept under it
-            # since 3.16): the client reads its diffs, nothing is pushed to
+            # since 4.0): the client reads its diffs, nothing is pushed to
             # it. Its base URI is empty or this actor's own.
             return None
 
         # The one filter the pull paths use too: a properties diff as the
         # peer may read it; another target's diff only while the peer may
-        # still have the subscription (3.16).
+        # still have the subscription (4.0).
         filtered_blob = self.filter_subscription_blob(
             peerid, sub, blob, snapshot=self.grant_for(peerid, row=trust_rel)
         )
@@ -4244,7 +4244,7 @@ class Actor:
         without any object the filter emptied: the subscriber replaces a
         property with what a diff carries, so an emptied ``{}`` would wipe
         its copy of the parts it may read. ``_EMPTIED`` when nothing is left
-        of a non-empty object (3.16).
+        of a non-empty object (4.0).
 
         A value that is JSON text of an object (a form-posted property, an
         SDK write of a JSON string: what a direct read parses) is filtered
@@ -4254,7 +4254,7 @@ class Actor:
         passes as it is, unwalked (its depth does not matter)."""
         as_object = as_json_object(value)
         if as_object is TOO_DEEP:
-            return _EMPTIED  # never to a peer, whatever its grant (3.16)
+            return _EMPTIED  # never to a peer, whatever its grant (4.0)
         if not exclusion_patterns(rules):
             return value
         if as_object is not None:
@@ -4271,7 +4271,7 @@ class Actor:
         return _prune_emptied(value, kept)
 
     def grant_for(self, peerid: str, *, row: Any = None) -> GrantSnapshot | None:
-        """What ``peerid`` is granted here, read once (3.16), or None when it
+        """What ``peerid`` is granted here, read once (4.0), or None when it
         cannot be read for a reason other than storage (callers send
         nothing). ``row``: the trust row when the caller read it already.
         ``DbError`` raises."""
@@ -4297,7 +4297,7 @@ class Actor:
         snapshot: GrantSnapshot | None = None,
     ) -> str | None:
         """A subscription diff as ``peerid`` may read it, or None when it may
-        read none of it (3.16). The one filter for the pushed callback
+        read none of it (4.0). The one filter for the pushed callback
         (``callback_subscription``) and the pulled diffs
         (``GET /subscriptions/<peer>/<subid>`` and ``/<seq>``).
 
@@ -4327,7 +4327,7 @@ class Actor:
             snapshot = self.grant_for(peerid)
         if sub.get("target") != "properties":
             # Another target's content is the application's; whether the
-            # peer may still have the subscription is asked again (3.16): a
+            # peer may still have the subscription is asked again (4.0): a
             # grant narrowed after it was made delivers nothing.
             return as_text if self._may_still_subscribe(sub, snapshot) else None
         if snapshot is None or not self.config:
@@ -4336,7 +4336,7 @@ class Actor:
             parsed: Any = json.loads(as_text)
         except RecursionError:
             # Nested beyond the parser: never to a peer, whatever its grant
-            # (3.16).
+            # (4.0).
             logger.warning(
                 f"A diff for {peerid} is nested too deep to filter; not sent"
             )
@@ -4366,13 +4366,13 @@ class Actor:
                 )
             ):
                 # A list's diff passes whole once the
-                # list may be read (3.16): decided by what the name is, its
+                # list may be read (4.0): decided by what the name is, its
                 # keys are not property paths an exclusion could name.
                 return as_text
             rules = snapshot.rules(PermissionType.PROPERTIES)
             if isinstance(parsed, str):
                 # The property's value as JSON text: filtered as the object
-                # a direct read would parse (3.16).
+                # a direct read would parse (4.0).
                 part = self._diff_part(rules, path, parsed)
                 if part is _EMPTIED:
                     return None
@@ -4383,7 +4383,7 @@ class Actor:
                 kept_value = self._diff_part(rules, path, parsed)
             else:
                 # A resource-level write arrives as the property's value
-                # (whole since 3.16, or ``{resource: value}``): kept whole
+                # (whole since 4.0, or ``{resource: value}``): kept whole
                 # except the parts the grant excludes, at their paths under
                 # the subtarget. A ``list:<name>`` key is a list, decided by
                 # its bare name (fail closed: a grant under which the bare
@@ -4406,9 +4406,9 @@ class Actor:
                 )
                 for key, value in lists.items():
                     # A list's diff object passes whole once its name may be
-                    # read (3.16): its keys are not property paths. Anything
+                    # read (4.0): its keys are not property paths. Anything
                     # else under such a key is part of the stored object (the
-                    # whole value is sent since 3.16) and loses what the
+                    # whole value is sent since 4.0) and loses what the
                     # grant excludes beneath it, as any other key does.
                     if not (isinstance(value, dict) and _list_diff_shaped(value)):
                         value = self._diff_part(rules, f"{subtarget}/{key}", value)
@@ -4433,7 +4433,7 @@ class Actor:
         self, sub: dict[str, Any], snapshot: GrantSnapshot | None
     ) -> bool:
         """The creation check for a subscription to a target other than
-        ``properties``, asked at delivery (3.16). Fail closed.
+        ``properties``, asked at delivery (4.0). Fail closed.
 
         A target the grant has a category for (``resources``, ``methods``,
         ``actions``) is decided by the grant as at creation; an
@@ -4473,7 +4473,7 @@ class Actor:
 
     def _may_read(self, snapshot: GrantSnapshot, path: str) -> bool:
         """Whether the peer may read ``path``: the one access decision, as a
-        direct read asks it (3.16): a stated rule answers, a grant that does
+        direct read asks it (4.0): a stated rule answers, a grant that does
         not mention properties leaves it to the access table (never for a
         client)."""
         assert self.config is not None
@@ -4521,7 +4521,7 @@ class Actor:
             ):
                 # A list's diff object (list, operation, items): a list's
                 # unit is its name, decided above; its keys are not property
-                # paths an exclusion could name (3.16). A list is recognised
+                # paths an exclusion could name (4.0). A list is recognised
                 # by what its name is, not by the value's shape: a scalar
                 # shaped like a list diff is filtered as any object.
                 kept[key] = value
@@ -4544,7 +4544,7 @@ class Actor:
             True if suspended, False otherwise
 
         Raises:
-            DbError: the suspension could not be read (3.16). "Not suspended"
+            DbError: the suspension could not be read (4.0). "Not suspended"
                 and "could not tell" are different answers; register_diffs()
                 lets it propagate after the write committed, so the caller
                 answers 503 rather than firing callbacks a suspension meant to
@@ -4647,7 +4647,7 @@ class Actor:
             # the subscribers strictly before the marker goes: a fault then
             # answers 503 with the suspension still in place. Read again,
             # not from the memo: the first suspended write filled it, and a
-            # subscriber that arrived since is owed this resync (3.16).
+            # subscriber that arrived since is owed this resync (4.0).
             self.subs_list = None
             subs = self.get_subscriptions(
                 target=target, subtarget=None, callback=False, strict=True
@@ -4699,7 +4699,7 @@ class Actor:
 
     def request_resync(self, target: str, subtarget: str | None = None) -> int:
         """Send a resync of ``target``/``subtarget`` to its subscribers now,
-        without a suspension (3.16). For a change too large to announce as
+        without a suspension (4.0). For a change too large to announce as
         diffs, such as a bulk list update over 25 items.
 
         The subscribers are read afresh (the memo is reset). Only those whose
@@ -4714,7 +4714,7 @@ class Actor:
         ``resume_subscriptions()`` for the same target re-sends to it; an
         asynchronous send counts as sent once scheduled, so nothing is
         recorded for it. Every subscriber is sent a resync, whatever
-        option tags it advertises (3.16).
+        option tags it advertises (4.0).
 
         Returns:
             The number of resync callbacks sent
@@ -4873,7 +4873,7 @@ class Actor:
                     fault = fault or e
 
         finally:
-            # Every prepared resync, delivered together (3.16): concurrently, own
+            # Every prepared resync, delivered together (4.0): concurrently, own
             # host one at a time. Waiting (off the loop, or with
             # with_sync_callbacks), one not delivered (refused, a timeout, a 503
             # from a subscriber that could not fetch its baseline) is missed, so
@@ -4972,7 +4972,7 @@ class Actor:
         """Send a resync callback to a single subscription.
 
         Every subscriber with a callback endpoint is sent a callback of type
-        ``resync``, whatever option tags it advertises (3.16).
+        ``resync``, whatever option tags it advertises (4.0).
 
         Respects the sync_subscription_callbacks configuration to determine
         whether to send callbacks synchronously (blocking) or asynchronously
@@ -5013,7 +5013,7 @@ class Actor:
             not _has_peer_endpoint(trust_data, self.id)
             or subscription.get("granularity") == "none"
         ):
-            # A subscription that is never called (3.16, specification 1.5:
+            # A subscription that is never called (4.0, specification 1.5:
             # a ``none`` subscription is sent no resync callback either; the
             # resync is the only record of what changed while suspended, so
             # it waits in its queue as the marker it polls), or an OAuth2
@@ -5050,7 +5050,7 @@ class Actor:
             # ``request_resync`` pushing to a subscription to the whole
             # target: a resync of the whole target. A receiver resets the
             # whole subscription's sequence on a resync, so a baseline of one
-            # subtarget would drop the other keys' diffs in flight (3.16). An
+            # subtarget would drop the other keys' diffs in flight (4.0). An
             # OAuth2 client above gets a marker for the subtarget: it only
             # re-reads that URL.
             sub_subtarget = subscription.get("subtarget")
@@ -5084,7 +5084,7 @@ class Actor:
             return False
         resource_url = _resync_url(self.config, self.id, target, sub_subtarget)
 
-        # Always a resync callback (3.16): the subscriber fetches the
+        # Always a resync callback (4.0): the subscriber fetches the
         # baseline under its own grant. No capability is read: every library
         # since 3.10 advertises ``subscriptionresync``, and a subscriber that
         # does not know the type re-reads on its own schedule (specification
@@ -5257,7 +5257,7 @@ class Actor:
     def deferred_callbacks(self) -> Iterator[None]:
         """Inside, :meth:`register_diffs` stores and numbers each diff as
         always but holds its callbacks; they are delivered together when the
-        block ends, also when it raises (3.16, verification H1: a clear
+        block ends, also when it raises (4.0, verification H1: a clear
         registers first and deletes after, and its subscribers are told
         after the deletes). Nested blocks deliver once, at the outermost."""
         if getattr(self, "_deferred_units", None) is not None:
@@ -5284,7 +5284,7 @@ class Actor:
         ``target`` when None): the value before the write, as a callable to
         pass to :meth:`register_diffs` as ``previous``, read now with
         ``read()`` and only when a resource-level subscription would need it
-        (3.16, specification 1.5: a resource that went with its parent is
+        (4.0, specification 1.5: a resource that went with its parent is
         told). None, and nothing read, when there is no such subscription:
         the decision uses the memoised subscription list."""
         subs = self.get_subscriptions(
@@ -5314,7 +5314,7 @@ class Actor:
 
         If resource is set, the blob is expected to be the FULL resource object, not a diff.
 
-        ``previous`` (3.16): what the written level held before the write
+        ``previous`` (4.0): what the written level held before the write
         (:meth:`previous_for_resource_subscribers`): the subtarget's value
         for a subtarget write, or a dict of the values a target-level write
         replaced. A resource-level subscriber whose resource is not in the
@@ -5322,7 +5322,7 @@ class Actor:
         resource existed; without ``previous`` it is sent nothing, as before.
         A name a target-level blob does not carry is untouched.
 
-        ``whole`` (3.16): for a write at ``resource``, the subtarget's whole
+        ``whole`` (4.0): for a write at ``resource``, the subtarget's whole
         stored value (JSON). A subscriber above the resource level is sent it
         (``{subtarget: whole}`` at target level), since a receiver applies a
         target- or subtarget-level value whole; without it such a subscriber
@@ -5335,7 +5335,7 @@ class Actor:
         Use suspend_subscriptions() and resume_subscriptions() to manage suspension.
 
         The subscribers are this instance's subscription list, read once per
-        instance (an empty list included, 3.16): a subscription created
+        instance (an empty list included, 4.0): a subscription created
         elsewhere after the first read gets diffs from a new instance, not
         from this one. See :meth:`get_subscriptions`.
         """
@@ -5434,12 +5434,12 @@ class Actor:
                                 else jsonblob
                             )
                             # A parent stored as JSON text is read as what it
-                            # holds (3.16, verification M2).
+                            # holds (4.0, verification M2).
                             parent = _parsed_value(parent)
                             subblob = json.dumps(parent[sub_obj_data["resource"]])
                         except (TypeError, ValueError, KeyError):
                             if _resource_went(blob, previous, subtarget, sub_obj_data):
-                                # The resource went with its parent (3.16).
+                                # The resource went with its parent (4.0).
                                 subblob = json.dumps("")
                             else:
                                 # The diff does not contain the resource
@@ -5545,7 +5545,7 @@ class Actor:
                     else:
                         # Prepared now (sequence, store, filter, body); every
                         # subscriber's callback is delivered together after the
-                        # loop, concurrently (3.16, callback_sender).
+                        # loop, concurrently (4.0, callback_sender).
                         unit = self._prepare_callback(
                             peerid=sub["peerid"],
                             sub_obj=sub_obj,

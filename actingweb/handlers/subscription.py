@@ -70,7 +70,7 @@ def _authorize_subscription_write(
     """Authorise a PUT or DELETE on ``subscriptions/<id>/<subid>`` as the
     method it is, for the peer the path names. The built-in ``owner`` row
     admits a peer to its own subscriptions whatever its relationship's rows
-    say (3.16); another peer is refused by the path binding."""
+    say (4.0); another peer is refused by the path binding."""
     return auth_result.authorize(
         method, "subscriptions", "<id>/<subid>", path_peer=peerid
     )
@@ -199,7 +199,7 @@ class SubscriptionRootHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "Missing target")
             return
         if not isinstance(granularity, str) or granularity not in GRANULARITIES:
-            # Refused before it is sent (3.16, specification 1.5).
+            # Refused before it is sent (4.0, specification 1.5).
             if self.response:
                 self.response.set_status(400, "Unknown granularity")
             return
@@ -245,7 +245,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             subpath="<id>",
             method="GET",
             peerid=peerid,
-            # A peer this actor has not approved is refused (3.16; it was
+            # A peer this actor has not approved is refused (4.0; it was
             # admitted "even if not fully approved").
             path_peer=peerid,
         ):
@@ -335,7 +335,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(400, "No json body")
             return
         if not isinstance(granularity, str) or granularity not in GRANULARITIES:
-            # high, low or none (3.16, specification 1.5; anything else was
+            # high, low or none (4.0, specification 1.5; anything else was
             # stored and then never delivered).
             if self.response:
                 self.response.set_status(400, "Unknown granularity")
@@ -352,7 +352,7 @@ class SubscriptionRelationshipHandler(base_handler.BaseHandler):
             return
         # The access row (("subscriptions/<id>", "POST", "a")) admits the
         # route; the grant must let the peer read what it subscribes to
-        # (3.16, spec: subscription creation validates read access). What
+        # (4.0, spec: subscription creation validates read access). What
         # each diff carries is filtered again at delivery.
         decision = subscription_allowed(
             self.config,
@@ -462,7 +462,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
 
         diffs = sub_with_diffs.get_diffs()
         sub_dict = sub_info.to_dict()
-        # One grant read serves every stored diff (3.16).
+        # One grant read serves every stored diff (4.0).
         snapshot = (
             myself.grant_for(peerid)
             if diffs and sub_dict.get("target") == "properties"
@@ -555,7 +555,7 @@ class SubscriptionHandler(base_handler.BaseHandler):
             return
 
         if seqnr > 0:
-            # ``{"sequence": 0}`` clears nothing (3.16, specification 1.5);
+            # ``{"sequence": 0}`` clears nothing (4.0, specification 1.5);
             # ``clear_diffs(0)`` keeps its internal meaning, "all".
             sub_with_diffs.clear_diffs(seqnr=seqnr)
         if self.response:

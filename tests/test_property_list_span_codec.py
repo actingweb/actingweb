@@ -128,7 +128,7 @@ class TestParse:
         "obj",
         [
             {"__aw_env": True, "v": 1},
-            {"__aw_env": "x", "title": "a pre-3.16 user item"},
+            {"__aw_env": "x", "title": "a pre-4.0 user item"},
             {"__aw_env": 1.0, "v": 1},
         ],
     )
@@ -146,7 +146,7 @@ class TestParse:
 
     def test_another_marker_value_is_a_plain_item(self) -> None:
         # Fourth verification, X3: no other envelope format exists, so a
-        # pre-3.16 user item {"__aw_env": 2, ...} reads as itself.
+        # pre-4.0 user item {"__aw_env": 2, ...} reads as itself.
         assert parse(json.dumps({"__aw_env": 2, "span": {}})) is None
 
     def test_round_trip_with_span_preserves_extra(self) -> None:

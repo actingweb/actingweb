@@ -49,7 +49,7 @@ Subcommands:
   "default creator" to its stored email (below).
 - ``report`` and ``resolve`` also list actors left with the default creator
   (``creator``) that have a stored ``email``: under
-  ``force_email_prop_as_creator`` each belongs at that address. Until 3.16
+  ``force_email_prop_as_creator`` each belongs at that address. Until 4.0
   every default-creator create moved them; now ``resolve
   --default-creator-to-email [--apply]`` does, keeping the stored email (an
   actor whose stored email changed since the listing is skipped). Once

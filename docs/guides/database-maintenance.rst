@@ -90,7 +90,7 @@ holder no longer holds the value is moved to the actor that does
 PostgreSQL a stale row two current holders share stays a collision. After a verified run on
 DynamoDB, the old ``<prefix>_property_lookup`` (v1) table and the
 ``property-index`` GSI on the properties table are no longer read and can be
-dropped. See :doc:`../migration/v3.16` ("One reverse-lookup mechanism").
+dropped. See :doc:`../migration/v4.0` ("One reverse-lookup mechanism").
 
 Stalled Deletions
 -----------------
@@ -110,7 +110,7 @@ deletion tombstone. The next ``DELETE`` or sign-in to it finishes it;
     actingweb-deletions resume ACTOR_ID --apply # one, also a legacy one
     actingweb-deletions clear ACTOR_ID --apply  # a stray tombstone on a live actor
 
-``legacy, review`` is a tombstone written before 3.16, which records no
+``legacy, review`` is a tombstone written before 4.0, which records no
 reason: either a ``DELETE`` that stalled (``resume`` it) or a live actor whose
 create failed to clear it (``clear`` it). A finished tombstone whose actor id
 is live again (re-created without the tombstone cleared) reports the same
@@ -144,18 +144,18 @@ tombstone, one point read of the tombstone (an expired one is skipped) and
 one actor-row read; ``resume`` adds one full wipe per stalled actor, and the
 same two reads again per unfinished one.
 
-Peer State Written Before 3.16
+Peer State Written Before 4.0
 ------------------------------
 
-Before 3.16 a callback was accepted without authentication and a peer could
-reach another peer's paths (see the 3.16 ``SECURITY`` entries in the
+Before 4.0 a callback was accepted without authentication and a peer could
+reach another peer's paths (see the 4.0 ``SECURITY`` entries in the
 changelog). What such requests wrote survives the upgrade.
 ``actingweb-peer-state`` finds it and, with ``--apply``, removes it.
 
 .. code-block:: bash
 
     # With the same environment as the application, after every instance
-    # runs 3.16, in a quiet period:
+    # runs 4.0, in a quiet period:
     actingweb-peer-state report                 # every actor
     actingweb-peer-state report ACTOR_ID
     actingweb-peer-state prune                  # dry run
@@ -177,7 +177,7 @@ What it lists, per actor (names compared whole; a peer id may contain
 - ``remote-unknown``: a ``remote:`` bucket whose name the library does not
   build for a peer id; reported, never removed;
 - ``permissions-copy``, only with ``--all-permissions``: every other stored
-  permission copy. A forged copy for a peer the actor trusts (a pre-3.16
+  permission copy. A forged copy for a peer the actor trusts (a pre-4.0
   unauthenticated callback with a current timestamp) looks like a real one.
   With ``--apply`` the command rebuilds each removed copy right after
   removing it, before the next removal, by a permission query to its peer,
@@ -869,11 +869,11 @@ TTL to expire on. ``actingweb-verify-orphans``
 :doc:`../reference/actor-deletion` ("Finding orphaned rows") for what it
 does and the edge cases it exists to get right.
 A leaked property-list side partition (spanned items' body rows under
-``{actor_id}$aux``, left by a pre-3.16 actor delete during a rolling
+``{actor_id}$aux``, left by a pre-4.0 actor delete during a rolling
 deploy or by a write that landed after an actor delete) is reported under
 that raw key once its actor is gone. An attribute list's side rows are
 different: they live in the bucket ``<bucket>$aux`` under the actor's own
-id (3.16), so they are attribute rows like any other, deleted with the
+id (4.0), so they are attribute rows like any other, deleted with the
 actor's buckets and reported under the actor id when orphaned.
 
 Its operational envelope is different enough from the rest of this guide to

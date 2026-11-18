@@ -65,7 +65,7 @@ def delete_dict(d1, path):
     or dict that is specified by path.
     """
     if not d1 or not isinstance(d1, dict):
-        # Nothing to walk (3.16: a list or scalar raised, a 500).
+        # Nothing to walk (4.0: a list or scalar raised, a 500).
         return False
     if len(path) > 1 and path[1] and len(path[1]) > 0:
         return delete_dict(d1.get(path[0]), path[1:])
@@ -181,7 +181,7 @@ class _HookDenied(Exception):
 
 def _hook_denials_are_403(method: Callable[..., Any]) -> Callable[..., Any]:
     """A handler method in which a property hook's PERMISSION_DENIED (raised
-    as ``_HookDenied`` by ``_run_hooks``) answers 403 (3.16)."""
+    as ``_HookDenied`` by ``_run_hooks``) answers 403 (4.0)."""
 
     @functools.wraps(method)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -197,7 +197,7 @@ def _hook_denials_are_403(method: Callable[..., Any]) -> Callable[..., Any]:
 def _decide_property(
     handler: Any, actor_id: str, auth_obj: Any, property_path: str, operation: str
 ) -> bool:
-    """The property check every handler in this module shares (3.16).
+    """The property check every handler in this module shares (4.0).
 
     A peer is answered by the shared access decision
     (:func:`actingweb.access_decision.decide`), with the evaluator this
@@ -209,7 +209,7 @@ def _decide_property(
     peer_id = peer_of(auth_obj)
     handler._decision = None
     if auth_obj is None:
-        # No authenticated caller at all: nothing to decide with (3.16; it
+        # No authenticated caller at all: nothing to decide with (4.0; it
         # raised AttributeError, a 500).
         return False
     if not peer_id:
@@ -254,7 +254,7 @@ def _decide_property(
 
 
 def _forbid(handler: Any, *, refused: list[str] | None = None) -> None:
-    """403 with a body that says little (3.16): ``forbidden``, or
+    """403 with a body that says little (4.0): ``forbidden``, or
     ``not_approved`` for an unapproved row; a refused bulk POST lists the
     names it refused, which the caller sent."""
     if not handler.response:
@@ -278,7 +278,7 @@ def _property_rules(handler: Any) -> Any:
 
 def _parsed(value: Any) -> Any:
     """A stored or posted value as JSON when it is JSON, else as it is;
-    ``TOO_DEEP`` for text nested beyond the parser (3.16)."""
+    ``TOO_DEEP`` for text nested beyond the parser (4.0)."""
     if isinstance(value, str | bytes):
         try:
             return json.loads(value)
@@ -287,7 +287,7 @@ def _parsed(value: Any) -> Any:
         except (TypeError, ValueError):
             # Text a JSON client reads as an object or array (behind a
             # byte-order mark, UTF-16 in its bytes) is one here too: the
-            # read, the write check and the filter agree on it (3.16). Only
+            # read, the write check and the filter agree on it (4.0). Only
             # such text is parsed again.
             # (Bytes that failed are not JSON to a client either:
             # ``json.loads(bytes)`` already decoded as a client does.)
@@ -313,17 +313,17 @@ def _resource_blob(stored: Any, path: list[str], blob: str) -> str:
     """The diff blob for a write at ``path`` (``<name>/<resource>/...``).
 
     ``register_diffs`` takes a resource's blob as the whole resource object:
-    the resource as now stored, after the hooks, at any depth (3.16: the body
+    the resource as now stored, after the hooks, at any depth (4.0: the body
     alone put a value three levels down at the second level of every
     subscriber's copy, and a two-segment write sent the request body before
     the hooks). A resource that is no longer there (a deleted one) is the
     encoded ``""``.
     """
     if not isinstance(stored, dict) or path[1] not in stored:
-        # Gone: the one delete representation, the encoded ``""`` (3.16; a
+        # Gone: the one delete representation, the encoded ``""`` (4.0; a
         # raw ``""`` was dropped before it reached a subscriber).
         return json.dumps("")
-    # The resource as stored, after the hooks (3.16; a two-segment write sent
+    # The resource as stored, after the hooks (4.0; a two-segment write sent
     # the request body).
     return json.dumps(stored[path[1]])
 
@@ -332,7 +332,7 @@ def register_list_diff(
     myself: Any, config: Any, name: str, operation: str, **fields: Any
 ) -> None:
     """Register a list diff (``build_list_diff``) for ``name`` on the
-    subtarget that is the list's own name (3.16: list edits over REST and
+    subtarget that is the list's own name (4.0: list edits over REST and
     the web UI send list diffs, not the scalars they sent before)."""
     myself.register_diffs(
         target="properties",
@@ -346,7 +346,7 @@ _ITEM_INDEX_RE = re.compile(r"(?:0|[1-9][0-9]{0,17})")  # under 10**18
 
 def item_index(segment: str) -> int | None:
     """The item index a path segment names: a canonical non-negative integer
-    (``0``, ``7``; not ``-1``, ``01`` or ``+1``), else None (3.16)."""
+    (``0``, ``7``; not ``-1``, ``01`` or ``+1``), else None (4.0)."""
     if _ITEM_INDEX_RE.fullmatch(segment):
         return int(segment)
     return None
@@ -366,7 +366,7 @@ def delete_list_item(
     """Delete the item at ``index`` and return the ``delete`` diff's fields
     (``index``, ``length``, and ``old_item`` when it was read: on a v2 list
     with a delete hook; a v1 list's diff carries none); None when the index
-    is out of range. Shared by ``/items`` and the path form (3.16).
+    is out of range. Shared by ``/items`` and the path form (4.0).
 
     ``approve`` is given the item before anything is deleted; False raises
     ``_DeleteRefused``. On a v2 list the item it is given is the one the
@@ -407,7 +407,7 @@ def delete_list_item(
 
 
 # A bulk list update over this many changes is announced as one resync of
-# the list after the batch instead of a diff per change (3.16).
+# the list after the batch instead of a diff per change (4.0).
 BULK_LIST_DIFF_LIMIT = 25
 
 
@@ -553,7 +553,7 @@ def _items_problem(name: str, value: Any) -> str | None:
 
 
 class _PropertyHandlerBase(base_handler.BaseHandler):
-    """What every handler of ``/properties`` shares (3.16)."""
+    """What every handler of ``/properties`` shares (4.0)."""
 
     _decision: Decision | None = None
 
@@ -575,7 +575,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         permission_path: str | None = None,
     ) -> dict[str, Any]:
         """Auth context for a property hook: the peer, and the request's
-        decision so the hook's own check does not decide again (3.16)."""
+        decision so the hook's own check does not decide again (4.0)."""
         context: dict[str, Any] = {
             "peer_id": peer_of(auth_obj),
             "config": self.config,
@@ -591,7 +591,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         self, actor_id: str, auth_obj: Any, myself: Any, path: list[str], operation: str
     ) -> bool:
         """A path under an existing list (``<list>/<x>``) is decided on the
-        list's own name as well (3.16): what such a path serves is the list,
+        list's own name as well (4.0): what such a path serves is the list,
         so the grant for the list answers. The list's existence is read only
         after the full path was allowed, so a refusal says nothing about
         which names exist."""
@@ -603,7 +603,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
 
     def _respond_name_taken(self, error: Exception) -> None:
         """409: the name is a list where a property was written, or a
-        property where a list was created (3.16; 400 or 500 before)."""
+        property where a list was created (4.0; 400 or 500 before)."""
         if self.response:
             self.response.set_status(409, "Conflict")
             self.response.headers["Content-Type"] = "application/json"
@@ -625,7 +625,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
     def _touches_excluded(self, myself: Any, path: list[str], incoming: Any) -> bool:
         """Whether a peer's write or delete at ``path`` would touch a part its
         grant excludes: the stored value there, or the value written, holds
-        an excluded descendant (3.16). An admin peer is not refused (its
+        an excluded descendant (4.0). An admin peer is not refused (its
         grant is the owner's; spec: an admin may manage the actor)."""
         decision = self._decision
         if decision is None or decision.snapshot is None or not path:
@@ -639,7 +639,7 @@ class _PropertyHandlerBase(base_handler.BaseHandler):
         stored_whole = _parsed(stored_text)
         if stored_whole is TOO_DEEP or incoming is TOO_DEEP:
             # Too deep to tell whether it holds an excluded part: refused
-            # when the grant excludes anything (3.16); with nothing excluded
+            # when the grant excludes anything (4.0); with nothing excluded
             # there is nothing to tell.
             return bool(exclusion_patterns(rules))
         stored = _value_at(stored_whole, path[1:])
@@ -739,7 +739,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         rejected the update -- the caller must ``return`` immediately. The
         batch was applied before the hook ran (it is not rolled back), so
         ``pair[key]`` is set either way and the caller registers the diff:
-        subscribers learn what changed (3.16; a refusal left them stale).
+        subscribers learn what changed (4.0; a refusal left them stale).
         """
         if self.hooks:
             actor_interface = self._get_actor_interface(myself)
@@ -774,7 +774,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         return True
 
     def _delete_item(self, myself: Any, check: Any, name: str, index: int) -> None:
-        """``DELETE /properties/<list>/<n>`` (3.16): the item goes and the
+        """``DELETE /properties/<list>/<n>`` (4.0): the item goes and the
         rest close up; 404 out of range. The ``delete`` hook runs with
         ``[name, str(n)]`` and the item the delete is conditioned on, and its
         refusal is a 403; the diff is the one ``/items`` registers. Access
@@ -824,7 +824,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             self.response.set_status(204)
 
     def _append_item(self, actor_id: str, myself: Any, check: Any, name: str) -> None:
-        """``POST /properties/<list>`` appends the body as one item (3.16;
+        """``POST /properties/<list>`` appends the body as one item (4.0;
         400 before): 201 with ``Location`` naming the index the append
         landed at. The ``put`` hook runs first with ``[name, str(length)]``,
         as a ``PUT`` at the length does, and its refusal is a 400 with
@@ -968,7 +968,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             )  # Convert empty string to None
             if len(path) == 2 and item_index(path[1]) is not None:
                 # ``/properties/<list>/<n>``: the item, as ``?index=n``
-                # serves it (3.16; it answered the whole list).
+                # serves it (4.0; it answered the whole list).
                 index_param = path[1]
             format_param = (
                 self.request.get("format") or None
@@ -1103,7 +1103,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         jsonblob = _parsed(lookup)
         if jsonblob is TOO_DEEP and peer_of(check):
             # Nested beyond the parser: never to a peer (nothing about it
-            # can be checked, 3.16).
+            # can be checked, 4.0).
             if self.response:
                 self.response.set_status(403, "Forbidden")
             return
@@ -1111,7 +1111,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             # Text as stored (not JSON, or the owner's text beyond the
             # parser). It has no parts (a sub-path is 404), and the read
             # hook and the filter decide it as they do a parsed value
-            # (3.16: the hook's refusal was skipped here).
+            # (4.0: the hook's refusal was skipped here).
             if len(path) > 1:
                 if self.response:
                     self.response.set_status(404)
@@ -1130,7 +1130,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                         return
                     value = transformed
             if isinstance(value, bytes):
-                # For a peer one decode, strict (3.16: a lenient decode on
+                # For a peer one decode, strict (4.0: a lenient decode on
                 # output handed a client an object the strict parse had not
                 # filtered); the owner reads what it stored, as before.
                 try:
@@ -1143,7 +1143,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     value = value.decode("utf-8", "replace")
             if peer_of(check):
                 # What a peer's client reads as JSON is filtered as JSON
-                # (3.16): stored text behind a byte-order mark, or a hook's
+                # (4.0): stored text behind a byte-order mark, or a hook's
                 # object text, went out raw as an object, unfiltered.
                 if isinstance(value, str | bytes):
                     as_object = as_json_object(value)
@@ -1166,7 +1166,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(404)
                 return
             if isinstance(value, str) and jsonblob is lookup:
-                # A value that is not JSON is labelled as what it is (3.16;
+                # A value that is not JSON is labelled as what it is (4.0;
                 # it was labelled application/json).
                 if self.response:
                     self.response.set_status(200, "Ok")
@@ -1207,7 +1207,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                                 self.response.set_status(404)
                             return
                 # A peer reads the value without its excluded descendants,
-                # at any depth (3.16); one too deep to filter, or a hook's
+                # at any depth (4.0); one too deep to filter, or a hook's
                 # text nested beyond the parser, is refused.
                 filtered = drop_excluded(_property_rules(self), property_path, out)
                 if withheld(out, filtered) or (peer_of(check) and beyond_parser(out)):
@@ -1244,7 +1244,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 raise
             except Exception as e:
                 # 500, not an empty listing: a subscriber takes ``{}`` as the
-                # publisher's whole state and deletes its replica (3.16,
+                # publisher's whole state and deletes its replica (4.0,
                 # verification B2).
                 logger.error(f"Error bulk-reading properties: {e}")
                 if self.response:
@@ -1273,7 +1273,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 js = _parsed(value)
                 if js is TOO_DEEP:
                     # Nested beyond the parser: never listed for a peer
-                    # (3.16); the owner gets the text as stored.
+                    # (4.0); the owner gets the text as stored.
                     if peer_of(check):
                         continue
                     js = value
@@ -1281,7 +1281,7 @@ class PropertiesHandler(_PropertyHandlerBase):
 
         # A peer sees the names its grant lets it read, each decided on its
         # own (one grant read for all), and each value without its excluded
-        # descendants (3.16). A name the grant's rule does not cover is not
+        # descendants (4.0). A name the grant's rule does not cover is not
         # listed; a grant that does not mention properties leaves each name
         # to the access table, as a direct read.
         peer_id = peer_of(check)
@@ -1311,7 +1311,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if n not in allowed_names:
                     continue
                 filtered = drop_excluded(rules, n, v)
-                # Too deep to filter (3.16): left out, not listed as null.
+                # Too deep to filter (4.0): left out, not listed as null.
                 if not withheld(v, filtered):
                     kept_pair[n] = filtered
             pair = kept_pair
@@ -1357,7 +1357,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 if name.startswith("list:") and name.endswith("-meta")
             }
 
-            # Lists by the same per-name decision (3.16).
+            # Lists by the same per-name decision (4.0).
             list_names = readable(sorted(all_list_names))
 
         # Build response based on query parameters
@@ -1467,7 +1467,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         check = auth_result.auth_obj
         resource = None
         if not name:
-            # ``PUT /properties`` names nothing to write (3.16: an
+            # ``PUT /properties`` names nothing to write (4.0: an
             # IndexError, a 500).
             if self.response:
                 self.response.set_status(405, "Method Not Allowed")
@@ -1483,7 +1483,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         index_param = self.request.get("index")
         if len(path) == 2 and item_index(path[1]) is not None:
             # ``PUT /properties/<list>/<n>`` writes item n as ``?index=n``
-            # does, when the first segment is a list (3.16). The path is
+            # does, when the first segment is a list (4.0). The path is
             # allowed first, so whether a list exists is read only then;
             # under any other name the segment is a nested key.
             if not check or not self._check_property_permission(
@@ -1499,7 +1499,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             # This is a list item operation - handle it appropriately.
             # Write permission first: the path, and the list it writes into
             # (an item's grant is the list's), so a peer cannot tell a list
-            # it may not write from one that does not exist (3.16).
+            # it may not write from one that does not exist (4.0).
             property_path = "/".join(path) if path else ""
             if (
                 not check
@@ -1526,7 +1526,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 item_value = json.loads(body)
             except RecursionError:
                 # Nested beyond the parser: never stored as text (a list's
-                # items are not walked by the grant filter), 400 (3.16).
+                # items are not walked by the grant filter), 400 (4.0).
                 if self.response:
                     self.response.set_status(400, "Body nested too deep")
                 return
@@ -1683,10 +1683,10 @@ class PropertiesHandler(_PropertyHandlerBase):
         elif body is None:
             body = ""
         # A peer may not overwrite a value that holds, or write one that
-        # would hold, a part its grant excludes (3.16).
+        # would hold, a part its grant excludes (4.0).
         incoming = _parsed(body)
         if incoming is TOO_DEEP:
-            # A body nested beyond the parser cannot be read (3.16: 500).
+            # A body nested beyond the parser cannot be read (4.0: 500).
             self.response.set_status(400, "Body nested too deep")
             return
         if self._touches_excluded(myself, path, incoming):
@@ -1730,7 +1730,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             except ListNameTakenError as e:
                 self._respond_name_taken(e)
                 return
-            # The value stored, after the hooks (3.16; the request body
+            # The value stored, after the hooks (4.0; the request body
             # before them); an empty text is the encoded ``""`` a delete is.
             myself.register_diffs(
                 target="properties",
@@ -1757,7 +1757,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         if not isinstance(orig, dict):
             # The stored value has no parts to merge into (text, a list or
             # a scalar, or JSON nested beyond the parser), and replacing the
-            # whole would lose what the write did not name (3.16).
+            # whole would lose what the write did not name (4.0).
             self.response.set_status(409, "Stored value has no parts to update")
             return
         merge_dict(orig, store)
@@ -1843,7 +1843,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             return
         if len(name) > 0:
             # Write access on the name first, so a peer that may not write
-            # it gets the same 403 whether or not it names a list (3.16).
+            # it gets the same 403 whether or not it names a list (4.0).
             if not check or not self._check_property_permission(
                 actor_id, check, name, "write"
             ):
@@ -1856,7 +1856,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                 self.response.set_status(400)
             return
         # What the posted names held, read before anything is applied and
-        # only when a resource-level subscription needs it (3.16): a resource
+        # only when a resource-level subscription needs it (4.0): a resource
         # that goes with its parent's overwrite is told.
         names = [n for n, _ in (self._post_entries() or [])]
         self._post_previous = (
@@ -1871,7 +1871,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         try:
             self._post_root(actor_id, myself, check)
         except ListNameTakenError as e:
-            # A key over a list, or a list over a property (3.16: 500 or
+            # A key over a list, or a list over a property (4.0: 500 or
             # 400): what was applied before it reaches the subscribers.
             self._register_post_diffs(myself, getattr(self, "_post_pair", {}))
             self._respond_name_taken(e)
@@ -1881,11 +1881,11 @@ class PropertiesHandler(_PropertyHandlerBase):
         pair: dict[str, Any] = {}
         self._post_pair = pair
         # The list keys' diffs, kept apart from ``pair``, which is the
-        # response body (3.16: it was the diff too).
+        # response body (4.0: it was the diff too).
         self._post_lists: dict[str, _PostListDiffs] = {}
         # Every name the request writes is validated and authorised before
         # anything is applied: one refusal is a 403 with nothing changed
-        # (3.16, spec: a bulk POST is one operation).
+        # (4.0, spec: a bulk POST is one operation).
         if not self._post_is_admissible(actor_id, check, myself):
             return
         # Handle the form with property type support
@@ -1905,7 +1905,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     list_prop = getattr(myself.property_lists, prop_name)
                     # The ListProperty is now created with metadata, but no items
 
-                    # The post hook first: a refused list leaves nothing behind (3.16)
+                    # The post hook first: a refused list leaves nothing behind (4.0)
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -1932,7 +1932,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     if explanation:
                         list_prop.set_explanation(explanation)
                     if not description and not explanation:
-                        # Persist the metadata, or the list does not exist (3.16:
+                        # Persist the metadata, or the list does not exist (4.0:
                         # a form without a description created nothing).
                         list_prop.set_description("")
 
@@ -1997,7 +1997,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                         myself.property[name] = val
                     pair[name] = val
             except (DbError, _HookDenied):
-                # As the JSON branch (3.16): the keys already written get
+                # As the JSON branch (4.0): the keys already written get
                 # their diffs before the 503 (or a hook's 403).
                 self._register_post_diffs(myself, pair)
                 raise
@@ -2065,7 +2065,7 @@ class PropertiesHandler(_PropertyHandlerBase):
 
     def _post_is_admissible(self, actor_id: str, check: Any, myself: Any) -> bool:
         """Validate every key of a POST and authorise it for a peer, before
-        anything is applied (3.16). Answers the 400 or the 403 itself and
+        anything is applied (4.0). Answers the 400 or the 403 itself and
         returns False; True when the apply pass may run.
 
         A 403 lists the names refused (``refused``): a name the peer may not
@@ -2075,7 +2075,7 @@ class PropertiesHandler(_PropertyHandlerBase):
         if entries is None:
             if self._json_body_is_not_an_object():
                 # Valid JSON that is not an object: a 400 here (the apply
-                # pass indexed it as one and answered 500, 3.16).
+                # pass indexed it as one and answered 500, 4.0).
                 if self.response:
                     self.response.set_status(400, "The JSON body must be an object")
                 return False
@@ -2096,7 +2096,7 @@ class PropertiesHandler(_PropertyHandlerBase):
             return False
         # Whether an ``items`` write names a list reads storage: only after
         # the names are authorised, so a peer learns nothing of a list it
-        # may not write (3.16).
+        # may not write (4.0).
         for name, value in entries:
             if (
                 isinstance(value, dict)
@@ -2163,7 +2163,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     list_prop = getattr(myself.property_lists, key)
 
                     # The post hook first: a refused list leaves nothing
-                    # behind (3.16; the metadata was written before it).
+                    # behind (4.0; the metadata was written before it).
                     if self.hooks:
                         actor_interface = self._get_actor_interface(myself)
                         if actor_interface:
@@ -2659,7 +2659,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(500, "Internal error")
                 return
             # A peer deletes everything only when it may delete every name
-            # stored (3.16): the root is not decided as a whole.
+            # stored (4.0): the root is not decided as a whole.
             if peer_of(check) and not self._may_delete_every_name(
                 actor_id, check, actor_interface
             ):
@@ -2679,7 +2679,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(403)
                     return
             # One diff for every deleted name, registered before the deletes
-            # (PropertyStore.clear, 3.16); lists are not cleared.
+            # (PropertyStore.clear, 4.0); lists are not cleared.
             actor_interface.properties.clear()
             self.response.set_status(204)
             return
@@ -2753,7 +2753,7 @@ class PropertiesHandler(_PropertyHandlerBase):
                         return
             if myself and myself.property:
                 myself.property[name] = None
-            # The encoded ``""`` (3.16): a raw one was dropped, so a REST
+            # The encoded ``""`` (4.0): a raw one was dropped, so a REST
             # delete reached no subscription on the name itself.
             myself.register_diffs(
                 target="properties",
@@ -3189,7 +3189,7 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                 # (``old_item``) when it was read: the receiver deletes the one
                 # equal item, or the one at the index among equal ones, so
                 # duplicates do not take the wrong row. The same helper serves
-                # ``DELETE /properties/<list>/<n>`` (3.16).
+                # ``DELETE /properties/<list>/<n>`` (4.0).
                 try:
                     delete_fields = delete_list_item(list_prop, index)
                 except _ConcurrentlyModified as e:

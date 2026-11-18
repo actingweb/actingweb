@@ -1,4 +1,4 @@
-"""A subscription ``callback`` is a bool on both backends (3.16).
+"""A subscription ``callback`` is a bool on both backends (4.0).
 
 PynamoDB stored any truthy value (a URL) as ``True``; PostgreSQL failed the
 cast as a store fault. Both now refuse a non-bool with ``TypeError`` before

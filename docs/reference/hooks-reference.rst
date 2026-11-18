@@ -24,7 +24,7 @@ Signature: ``func(actor, operation: str, value: Any, path: List[str]) -> Optiona
   decision as the route). On a denial ``execute_property_hooks`` returns
   ``actingweb.access_decision.PERMISSION_DENIED`` for every operation and
   the handlers answer 403; ``None`` keeps its meaning. An error in the check
-  denies. ``path`` is passed as it was before 3.16 (on some routes it starts
+  denies. ``path`` is passed as it was before 4.0 (on some routes it starts
   with the property name); a hook that reads a name from it keeps working.
 - In a bulk ``POST /properties`` every name is authorised before any hook
   runs; a hook that rejects a later name does not undo earlier ones.
@@ -59,19 +59,19 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 
 - Return ``True`` when processed; optionally return a ``dict`` as response payload
 - Used for custom endpoints registered by the framework (e.g., ``bot``, ``www``)
-- ``/callbacks/<name>`` requests are authenticated (3.16): without
+- ``/callbacks/<name>`` requests are authenticated (4.0): without
   credentials they answer 401, and any authenticated caller reaches the
   hook. The library's own names (``permissions``, ``subscription``,
   ``subscriptions``, ``www`` and any ``resource_*``) answer 403 on a direct
   ``/callbacks/<name>`` request, so their hooks only receive data the
   library built (the web UI still dispatches ``www``)
 - An authenticated request to a name **no hook is registered for** (and no
-  ``"*"`` hook) answers 403 (3.16; it answered 200 with ``false``). A hook
+  ``"*"`` hook) answers 403 (4.0; it answered 200 with ``false``). A hook
   that ran and returned ``False`` or ``None`` keeps its answer (200 with
   ``false``): only "nothing registered" changed
 - For an application's own name, ``data`` on ``POST`` and ``PUT`` holds the
   JSON object the body carried (an empty dict for any other body; a JSON
-  array raised before 3.16), then what the library sets from the request,
+  array raised before 4.0), then what the library sets from the request,
   which a body cannot override: ``method`` (``"POST"`` or ``"PUT"``),
   ``anonymous`` (``False`` for an authenticated request), ``headers`` (the
   request's headers without ``Authorization`` and ``Cookie``) and
@@ -81,7 +81,7 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
 - A hook registered for ``permissions`` is run by the library's permission
   callback, with the callback's body plus ``granting_actor_id``, ``method``
   and ``permission_changes``. It runs only for a callback the store accepted
-  (3.16): not for one older than the sender's last stored callback, and not
+  (4.0): not for one older than the sender's last stored callback, and not
   for one refused (400, 403) or answered 503. It still runs when the accepted
   callback changed nothing
 
@@ -89,7 +89,7 @@ Anonymous webhooks (``allow_anonymous``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A third party's webhook (a payment or SMS provider) cannot send an actor's
-credentials. Registering the hook with ``allow_anonymous=True`` (3.16) lets a
+credentials. Registering the hook with ``allow_anonymous=True`` (4.0) lets a
 ``POST /<actor_id>/callbacks/<name>`` without credentials reach it:
 
 - **Admitted:** a ``POST`` that arrived as a ``POST`` (no ``_method``
@@ -165,7 +165,7 @@ The special ``www`` callback hook can render custom templates by returning a dic
                 },
             }
 
-        return False  # Not handled: the page answers 404 (3.16)
+        return False  # Not handled: the page answers 404 (4.0)
 
 The template will receive:
 
@@ -176,7 +176,7 @@ This allows applications to add custom web UI pages without modifying the core l
 
 A template dict renders on a ``GET`` only; on a ``POST``, and without
 ``template``, a dict is answered as JSON. ``False`` or ``None`` answers 404
-(3.16). Any other result, a string included, is answered as the text
+(4.0). Any other result, a string included, is answered as the text
 ``True``: return a template dict to show a page.
 
 Application Callback Hooks
@@ -215,7 +215,7 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
 - ``target``: matches the ``target`` argument, or ``"*"`` to receive every
   target
 - ``data`` is the callback's data as the publisher sent it, after the
-  library applied it to the replica (with ``auto_storage``). A list edit (3.16: from the SDK, REST
+  library applied it to the replica (with ``auto_storage``). A list edit (4.0: from the SDK, REST
   and the web UI alike) is a list diff, ``{"list", "operation", "length"}``
   plus ``item``, ``index``, ``old_item`` or ``items`` as the operation needs
   (``append``, ``extend``, ``insert``, ``update``, ``delete``, ``pop``,
@@ -229,16 +229,16 @@ Signature: ``func(actor, peer_id: str, target: str, data: dict, sequence: int, c
   by ``"list" in value``: a property's value may carry those keys. The
   legacy ``callback_hook("subscription")`` receives the same diff in its
   ``data["data"]``.
-- A delete (3.16, specification 1.5) is ``""`` at the subscribed level:
+- A delete (4.0, specification 1.5) is ``""`` at the subscribed level:
   ``{"name": ""}`` for a whole-target subscription, ``""`` for one to the
   name or to a resource that went with its parent. A clear is one call with
   every deleted name. A nested write gives a subscription above the resource
   the parent's whole value. Treat ``""`` as absent.
 - The hook also runs for each change the library's poll applies (the gap
-  resync's poll included, 3.16; it ran for none), once per sequence, with
+  resync's poll included, 4.0; it ran for none), once per sequence, with
   ``callback_type`` ``"diff"`` or ``"resync"``. ``data`` never carries a
   ``timestamp`` key the publisher did not send.
-- **A rebuild tells its baseline** (3.16). A subscriber rebuilds from the
+- **A rebuild tells its baseline** (4.0). A subscriber rebuilds from the
   publisher's baseline when a rebuild is owed (a resync whose fetch failed,
   a list diff the replica could not apply, a rebuild that did not settle),
   a resync marker is polled, or a poll was behind the publisher with
@@ -300,7 +300,7 @@ Decorator: ``app.lifecycle_hook(event: str)``
 
 Signature: ``func(actor, **kwargs) -> Any``
 
-``oauth2_trust_requested`` (3.16): an OAuth2/MCP client is about to get a
+``oauth2_trust_requested`` (4.0): an OAuth2/MCP client is about to get a
 trust on ``actor``. Keyword arguments: ``trust_type``, ``client_id``,
 ``client_name``, ``redirect_uri``, ``provider``, ``email``, ``confirmed``
 (the user approved on the confirmation page). Return ``None`` to accept, a
@@ -332,7 +332,7 @@ Event Details
     provider metadata on the actor — so at hook time, fields like
     ``oauth_token``, ``oauth_provider``, ``created_at``, ``email`` and
     ``email_verified`` are **not yet set**. ``auth_method`` is the exception
-    (3.16): ``Actor.create()`` writes it before the hook fires, so the hook can
+    (4.0): ``Actor.create()`` writes it before the hook fires, so the hook can
     tell a factory-created actor from an OAuth one. ``oauth_success`` (below)
     is the hook that carries the tokens and provider info.
 
@@ -354,7 +354,7 @@ Event Details
        stored, once from inside ``Actor.create()``. The single remaining
        call is the earlier (pre-metadata) one; a hook that read those
        fields (other than ``auth_method``, which has been written since
-       3.16) on the second call now sees them absent.
+       4.0) on the second call now sees them absent.
 
 ``actor_deleted``
     Triggered when an actor is deleted, **before any data is removed**. The
@@ -375,7 +375,7 @@ Event Details
        in ``actor_deleted_complete`` instead. See
        :doc:`actor-deletion`.
 
-    Also fires (3.16) when a sign-in **replaces** an unvouched,
+    Also fires (4.0) when a sign-in **replaces** an unvouched,
     factory-created actor (see ``actor_adopted``), with the keyword arguments
     ``reason="replaced_at_adoption"`` and ``replaced_by_identifier=<creator>``,
     so a hook that mails "your account was deleted" or cancels billing can tell
@@ -441,7 +441,7 @@ Event Details
 
     **Signature**: ``func(actor: None, actor_id: str, **kwargs) -> None``
 
-    Fires on the HTTP ``DELETE /<actor_id>`` path and (3.16) when a sign-in
+    Fires on the HTTP ``DELETE /<actor_id>`` path and (4.0) when a sign-in
     replaces an unvouched actor, with the same ``reason`` and
     ``replaced_by_identifier`` keyword arguments as ``actor_deleted``. See
     :doc:`actor-deletion` for the full contract.
@@ -449,7 +449,7 @@ Event Details
 Faults and hooks
 ~~~~~~~~~~~~~~~~
 
-An actor's wipe can stop part-way and is then resumed (3.16). Which hook
+An actor's wipe can stop part-way and is then resumed (4.0). Which hook
 runs on which path:
 
 .. list-table::
@@ -498,7 +498,11 @@ and the next sign-in retries.
 
     **Signature**: ``func(actor: ActorInterface, email: str, access_token: str, token_data: dict, user_info: dict) -> Optional[bool]``
 
-    **Returns**: ``False`` to reject authentication, ``True`` or ``None`` to accept
+    **Returns**: ``False`` to reject authentication, ``True`` or ``None`` to accept.
+    The provider's access and refresh tokens are written onto the actor only
+    once the hook accepts (4.0; they were stored before it ran, so a rejected
+    sign-in kept them): a hook reads this sign-in's tokens from its
+    ``access_token`` and ``token_data`` arguments, not from the store.
 
     **Normalized ``user_info``**: regardless of provider, ``user_info`` is
     normalized before the hook fires so you can read one shape:
@@ -506,7 +510,7 @@ and the next sign-in retries.
     - ``display_name`` — derived, or GitHub ``name``
     - ``given_name`` — Apple ``firstName`` / Google ``given_name``
     - ``family_name`` — Apple ``lastName`` / Google ``family_name``
-    - ``email`` — the email claim, only when the provider verified it (3.16);
+    - ``email`` — the email claim, only when the provider verified it (4.0);
       an unverified one is in ``unverified_email`` instead (Apple's
       first-sign-in ``user`` payload address is always there, it is not
       signed)
@@ -526,8 +530,9 @@ and the next sign-in retries.
        address the user typed (normalised — stripped and lowercased), not a
        value the provider vouched for; ``user_info["email"]`` is absent
        (the provider returned none); and at hook time
-       ``actor.store.email_verified == "false"`` until the user clicks the
-       verification link. A hook returning a falsy value here answers the
+       ``actor.store.email_verified == "false"`` until the user confirms the
+       emailed link (opening it shows a Confirm page and changes nothing,
+       4.0). A hook returning a falsy value here answers the
        request with 403 and writes no verification token or index row.
 
 ``trust_initiated``
@@ -572,7 +577,7 @@ and the next sign-in retries.
 
     **Use Cases**: UI notification "You approved! Relationship established", analytics, triggering subscriptions
 
-    **Note**: Fires once, when this actor's approval completes the mutual trust (the peer had already approved), on every approving route: ``PUT /trust/<rel>/<peer>`` and the web UI, ``TrustManager.approve_relationship`` and ``approve_relationship_async``, and creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). A repeat approval of a trust already approved fires nothing (3.16). ``trust_data`` is the row as approved. The trustee path (``Actor.get_peer_trustee``) fires nothing. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
+    **Note**: Fires once, when this actor's approval completes the mutual trust (the peer had already approved), on every approving route: ``PUT /trust/<rel>/<peer>`` and the web UI, ``TrustManager.approve_relationship`` and ``approve_relationship_async``, and creating the trust toward a peer whose verified request was waiting (``POST /trust``, the web form, ``TrustManager.create_relationship``). A repeat approval of a trust already approved fires nothing (4.0). ``trust_data`` is the row as approved. The trustee path (``Actor.get_peer_trustee``) fires nothing. A pending request replaced by a request that verifies, or by the owner's own, fires no ``trust_deleted``.
 
     **Built-in Behavior**: none on this hook. With ``with_peer_profile()`` the peer's profile is fetched and cached by the first sync (``sync_peer``) or ``refresh_peer_profile()``, not when this hook fires.
 
@@ -595,7 +600,7 @@ and the next sign-in retries.
     **Built-in Behavior**: none on this hook (the peer profile, as above, is cached by the first sync).
 
 ``trust_approved`` (deprecated)
-    The pre-3.16 name of ``trust_fully_approved_local``. It runs in its place, with the same arguments, only when no ``trust_fully_approved_local`` hook is registered; registering it logs a deprecation warning (once per process). With both registered only ``trust_fully_approved_local`` runs. Rename the hook.
+    The pre-4.0 name of ``trust_fully_approved_local``. It runs in its place, with the same arguments, only when no ``trust_fully_approved_local`` hook is registered; registering it logs a deprecation warning (once per process). With both registered only ``trust_fully_approved_local`` runs. Rename the hook.
 
 ``trust_deleted``
     Triggered before a trust relationship's local data is deleted, on every route that deletes one: ``DELETE /trust/<rel>/<peer>`` (by the owner or the peer), ``TrustManager.delete_relationship`` and its async twin, and a peer's revocation found by ``sync_peer``. On the REST route and in ``sync_peer`` it fires after the delete has found the row (and, on REST, checked it is still the row the request was authorised against): a delete that loses to a re-pair, or that finds no row, fires nothing. ``sync_peer_async`` fires it the same way, from the delete's own read of the row: a coroutine hook is awaited on the caller's event loop (given up after 120 seconds), a sync hook runs in the delete's worker thread.
@@ -607,7 +612,7 @@ and the next sign-in retries.
     - ``actor``: The ActorInterface for the current actor
     - ``peer_id``: The ID of the peer in the trust relationship
     - ``relationship``: The type of trust relationship (e.g., "friend", "partner")
-    - ``trust_data``: The trust row as it was before the delete (3.16: on every route)
+    - ``trust_data``: The trust row as it was before the delete (4.0: on every route)
     - ``initiated_by_peer``: True when the peer deleted the trust (its ``DELETE``, or its revocation found by a sync)
 
     A hook must accept ``**kwargs``: one that names only some arguments raises ``TypeError``, which is logged (the hook named at ERROR once per process) and does not stop the delete.
@@ -667,7 +672,7 @@ and the next sign-in retries.
             )
 
 ``email_sign_in_code_required``
-    Triggered (3.16) when a user whose provider has no verified address types,
+    Triggered (4.0) when a user whose provider has no verified address types,
     in the email form, an address that already has a verified actor. Without
     this hook the form answers 409; with it the form asks for this code.
 

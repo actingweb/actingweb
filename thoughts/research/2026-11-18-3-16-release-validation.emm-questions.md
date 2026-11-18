@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-18
 **Belongs to:** [`2026-11-18-3-16-release-validation.md`](2026-11-18-3-16-release-validation.md)
-**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `963ac34`.
+**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `15b0e35`.
 
 
 Sources read: `usage.md` (the consumer inventory), the release inventory,
@@ -141,7 +141,7 @@ row. Text: "This release was developed as 3.16 and is published as 4.0.0: it
 removes public names and changes wire answers, which the version policy makes a
 major. Every '3.16' in this guide, in messages and in code comments means 4.0.0."
 Not verifiable in code (`pyproject.toml:3` and `actingweb/__init__.py:31` still say
-`3.15.1`); it is the release decision of commit `963ac34`.
+`3.15.1`); it is the release decision of commit `15b0e35`.
 
 **B1 (1.2) The creators table under infrastructure-as-code.** Belongs: guide,
 "Creator uniqueness", after "DynamoDB permissions"; and a row in

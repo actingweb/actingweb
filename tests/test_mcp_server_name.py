@@ -141,7 +141,7 @@ def _all_three_hooks():
 
 
 def test_initialize_advertises_no_list_change_notifications() -> None:
-    # 3.16: the server never sends notifications/*/list_changed.
+    # 4.0: the server never sends notifications/*/list_changed.
     handler = make_mcp_handler(cfg=make_mcp_config(), hooks=_all_three_hooks())
     result = handler.post(
         {

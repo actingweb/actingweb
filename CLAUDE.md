@@ -444,7 +444,7 @@ app.with_indexed_properties(["oauthId", "email", "externalUserId"])
 ```
 
 **Key Points:**
-- **One mechanism** (since 3.16): DynamoDB `property_lookup_v2` (digest keys) or PostgreSQL `property_lookup`. The legacy GSI path, the v1 table, the PostgreSQL value scan, `USE_PROPERTY_LOOKUP_TABLE` and `with_legacy_property_index()` are gone; the last two fail at configure time with a pointer to the migration guide.
+- **One mechanism** (since 4.0): DynamoDB `property_lookup_v2` (digest keys) or PostgreSQL `property_lookup`. The legacy GSI path, the v1 table, the PostgreSQL value scan, `USE_PROPERTY_LOOKUP_TABLE` and `with_legacy_property_index()` are gone; the last two fail at configure time with a pointer to the migration guide.
 - **No size limit on DynamoDB** (digest keys, no plaintext values); on PostgreSQL a value's key row is limited to about 2.7 KB after compression (`backfill` reports larger ones as `UNINDEXABLE`).
 - **Fail closed**: an indexed property write and its lookup row succeed or fail together (`DbError` on a fault); a value another actor holds is a logged collision.
 - **Readiness**: `check_ready()` (called by `integrate_*`) raises `PropertyLookupNotReady` when a configured name has data but no backfill-complete marker, naming `actingweb-property-lookup backfill --apply`. A store with no properties marks itself ready. `with_indexed_properties([])` turns reverse lookup off.
@@ -458,7 +458,7 @@ export INDEXED_PROPERTIES=oauthId,email,externalUserId  # Configure indexed prop
 
 **Operator command** (same environment as the app): `actingweb-property-lookup report | backfill [--apply] | mark-complete [--apply] | unmark [--apply]`.
 
-See `docs/quickstart/configuration.rst` and `docs/migration/v3.16.rst` ("One reverse-lookup mechanism").
+See `docs/quickstart/configuration.rst` and `docs/migration/v4.0.rst` ("One reverse-lookup mechanism").
 
 ## Logging and Request Correlation
 

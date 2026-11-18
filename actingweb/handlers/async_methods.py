@@ -159,7 +159,7 @@ class AsyncMethodsHandler(MethodsHandler):
         check = auth_result.auth_obj
         if not auth_result.authorize("DELETE", "methods", name):
             return
-        # A peer is decided by its grant as well (3.16; DELETE was the one
+        # A peer is decided by its grant as well (4.0; DELETE was the one
         # method verb the grant did not answer).
         if not self._check_method_permission(actor_id, check, name, "DELETE"):
             if self.response:

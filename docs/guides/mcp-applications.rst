@@ -415,7 +415,11 @@ entirely, and others discard text blocks whenever it is present.
    payload is prose, return prose alone and set no ``structuredContent``.
 
 The ``title`` and ``output_schema`` set on ``@mcp_tool`` also surface in the
-``tools/list`` response as the ``title`` and ``outputSchema`` fields.
+``tools/list`` response as the ``title`` and ``outputSchema`` fields. A tool
+declared without ``input_schema`` is listed with ``inputSchema`` ``{"type":
+"object", "properties": {}}`` (4.0; it was listed without one, which MCP
+requires, and a spec-checking client refused the whole list); declare
+``input_schema`` on every tool that takes arguments.
 
 Protocol Version Negotiation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -919,7 +923,7 @@ the token-store reads and the trust lookup:
 
 - **One actor read per warm request.** The validated token and the client's
   trust relationship come from memory; the actor itself is loaded for every
-  request (one strongly consistent row read, since 3.16), so a hook always
+  request (one strongly consistent row read, since 4.0), so a hook always
   sees current values. A backend throttle on that read answers 503.
 - **Zero configuration required** - caching is automatic and transparent
 
@@ -1184,7 +1188,7 @@ The application provides an OAuth2 client generation endpoint:
 .. code-block:: python
 
     # A route that signs the user in itself and grants an existing client
-    # access (3.16) calls the server's helper instead of writing the trust:
+    # access (4.0) calls the server's helper instead of writing the trust:
     #
     #     server = get_actingweb_oauth2_server(config)
     #     answer = server.complete_client_authorization(
@@ -1221,7 +1225,7 @@ The application provides an OAuth2 client generation endpoint:
             ),
         }
         
-        # Register client: ValueError is bad metadata (400); since 3.16
+        # Register client: ValueError is bad metadata (400); since 4.0
         # ClientRegistrationError means the client's trust row could not be
         # created, and nothing was stored (500). A DbError is a storage
         # fault the integration answers with 503.
@@ -1266,7 +1270,8 @@ Users can delete OAuth2 clients they no longer need:
             raise HTTPException(status_code=403, detail="Not authorized")
         
         # Delete the client
-        success = client_registry.delete_client(client_id)
+        # actor_id: refused (False) unless this actor owns the client (4.0)
+        success = client_registry.delete_client(client_id, actor_id=actor_id)
         
         return JSONResponse(content={
             "success": success, 

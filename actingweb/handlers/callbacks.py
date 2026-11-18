@@ -27,7 +27,7 @@ RESERVED_CALLBACK_NAMES = frozenset(
     {"permissions", "subscription", "subscriptions", "www"}
 )
 
-# The largest body an anonymous webhook POST may carry (3.16); larger answers
+# The largest body an anonymous webhook POST may carry (4.0); larger answers
 # 413. An authenticated caller is not limited here.
 ANONYMOUS_CALLBACK_MAX_BYTES = 1024 * 1024
 # Left out of the headers a callback hook is given (see _request_headers).
@@ -110,7 +110,7 @@ def run_subscription_data_hooks(
     """Run the application's subscription data hooks for one applied
     change: the target's own, then the wildcard ones. A hook's error is
     logged and folded (at most once: it must not get the change applied
-    twice). Shared by the callback handler and the poll (3.16: a gap resync's
+    twice). Shared by the callback handler and the poll (4.0: a gap resync's
     poll ran none)."""
     hooks = getattr(config, "subscription_data_hooks", None) or {}
     if not hooks:
@@ -150,7 +150,7 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     Every request is authenticated (401 with a challenge when it carries no
     credentials), except a ``POST`` to a name whose hook was registered with
-    ``allow_anonymous=True`` (3.16), which that hook authenticates itself. The two peer branches, ``subscriptions/<peer>/<subid>`` and
+    ``allow_anonymous=True`` (4.0), which that hook authenticates itself. The two peer branches, ``subscriptions/<peer>/<subid>`` and
     ``permissions/<peer>``, admit only the peer they name (403 for anyone
     else, the creator and an ``admin`` peer included). The generic branch
     admits any authenticated caller to the application's callback hook,
@@ -219,7 +219,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         """Run the rebuild the processor answered REBUILD for (this
         callback's out-of-step list diff, or one owed from before) and tell
         its settled baseline to the hooks, unless another subscription's
-        replica covers it (3.16: a settled rebuild always tells; the hooks
+        replica covers it (4.0: a settled rebuild always tells; the hooks
         may hear this callback's diff first). With nothing to rebuild and
         nobody to tell, the debt is dropped instead; one that failed stays
         owed. The callback answers as processed either way: the delivered
@@ -275,7 +275,7 @@ class CallbacksHandler(base_handler.BaseHandler):
     ) -> None:
         """A resync whose baseline could not be fetched: answer 503 with
         ``Retry-After`` (the handler's retry-later answer) and mark the
-        rebuild owed (3.16), when it has work (``owe``: a replica or a hook
+        rebuild owed (4.0), when it has work (``owe``: a replica or a hook
         that hears it)."""
         from ..callback_processor import CallbackProcessor
 
@@ -308,7 +308,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         applied: Any,
     ) -> bool:
         """After a pushed resync's baseline: remove from the replica what the
-        baseline no longer has (3.16, specification 1.5), under the rebuild's
+        baseline no longer has (4.0, specification 1.5), under the rebuild's
         limit of one attempt a minute per subscription, since it lists the
         replica. False when the limit holds it back."""
         from ..interface.subscription_manager import sweep_after_baseline
@@ -331,7 +331,7 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def _refuse_unhandled_name(self, name: str) -> bool:
         """403 for an authenticated request to a callback name no hook is
-        registered for (3.16, specification 1.5; it answered 200 with
+        registered for (4.0, specification 1.5; it answered 200 with
         ``false``). A hook that ran and returned a falsy value is not this:
         it keeps its answer."""
         if self.hooks is not None and self.hooks.has_callback_hook(name):
@@ -341,7 +341,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         return True
 
     def _anonymous_webhook(self, name: str, method: str) -> bool:
-        """Whether this request is an anonymous webhook (3.16): a POST that
+        """Whether this request is an anonymous webhook (4.0): a POST that
         arrived as a POST (no ``_method`` override on either side), with no
         ``Authorization`` header, to a callback name whose hook was
         registered with ``allow_anonymous=True``."""
@@ -375,7 +375,7 @@ class CallbacksHandler(base_handler.BaseHandler):
     ) -> dict[str, Any]:
         """A callback hook's ``data``: the body's JSON object, then what the
         library sets from the request itself, which a body cannot override
-        (3.16, verification M1: an authenticated caller's JSON supplied
+        (4.0, verification M1: an authenticated caller's JSON supplied
         ``headers`` and ``raw_body``)."""
         hook_data = self._hook_data(raw)
         hook_data["method"] = method
@@ -394,7 +394,7 @@ class CallbacksHandler(base_handler.BaseHandler):
 
     def _hook_data(self, raw: bytes) -> dict[str, Any]:
         """The JSON object a body holds, or an empty dict for any other body
-        (3.16: a JSON array or scalar raised, a 500)."""
+        (4.0: a JSON array or scalar raised, a 500)."""
         try:
             parsed = json.loads(raw.decode("utf-8", "ignore") or "{}")
         except (TypeError, ValueError, RecursionError):
@@ -1158,7 +1158,7 @@ class CallbacksHandler(base_handler.BaseHandler):
         if "data" in params and callback_type != "resync":
             carried_seq = params.get("sequence")
             if not isinstance(carried_seq, int) or isinstance(carried_seq, bool):
-                # A diff with data and no sequence (3.16, specification 1.5):
+                # A diff with data and no sequence (4.0, specification 1.5):
                 # 400, as a low-granularity one without a sequence is; it was
                 # taken as sequence 0, a duplicate, and dropped with 204.
                 logger.warning(
@@ -1177,7 +1177,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             legacy_hook or rebuilds_for(config, sub_target)
         ):
             # An owed rebuild that is due runs on the next callback, whatever
-            # its sequence (3.16): after a resync whose fetch failed, the
+            # its sequence (4.0): after a resync whose fetch failed, the
             # next diff arrives behind a gap and would otherwise wait. The
             # baseline is read after the publisher stored this callback's
             # change, so the rebuild carries it. Also without a replica when
@@ -1198,7 +1198,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 )
                 if rebuilt.success:
                     # The hooks are told the baseline that answered for this
-                    # callback, as a resync, once the rebuild settled (3.16,
+                    # callback, as a resync, once the rebuild settled (4.0,
                     # verification B1: no hook saw this callback's change),
                     # unless another subscription's replica covers it: that
                     # subscription's callbacks tell the same change.
@@ -1255,7 +1255,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             if callback_type == "resync":
                 # Resync callback - use shared baseline fetch method for consistency
                 # This ensures proper handling of ?metadata=true and property list transformations
-                # At the stored subscription's level, not the body's (3.16):
+                # At the stored subscription's level, not the body's (4.0):
                 # the fetch and the sweep after it have one scope.
                 target = subscription.get("target") or params.get(
                     "target", "properties"
@@ -1296,7 +1296,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                             f"{'keys' if isinstance(callback_data, dict) else 'items'}"
                         )
                     else:
-                        # A failed fetch (3.16): not applied as an empty
+                        # A failed fetch (4.0): not applied as an empty
                         # baseline. 503 with Retry-After, the sequence not
                         # written, and the rebuild owed so the next callback
                         # or sync rebuilds the replica.
@@ -1397,7 +1397,7 @@ class CallbacksHandler(base_handler.BaseHandler):
             and not callback_data
         ):
             # A target-level "" is everything deleted (DELETE /properties):
-            # an empty set of keys, as before 3.16.
+            # an empty set of keys, as before 4.0.
             callback_data = {}
 
         sequence = params.get("sequence", 0)
@@ -1601,7 +1601,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     from ..interface.subscription_manager import SubscriptionManager
 
                     mgr = SubscriptionManager(actor_interface._core_actor)
-                    # With the application's configuration (3.16): its data
+                    # With the application's configuration (4.0): its data
                     # hooks run for each change the poll applies.
                     sync_result = mgr.sync_subscription(
                         peer_id, subscription_id, config=config
@@ -1616,7 +1616,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                             and sync_result.final_sequence < sequence
                         ):
                             # The poll did not bring the change that triggered
-                            # it (3.16: it was dropped): apply it now. A
+                            # it (4.0: it was dropped): apply it now. A
                             # REBUILD answer is run as on first delivery.
                             replayed = processor.process_callback_sync(
                                 peer_id=peer_id,
@@ -1849,7 +1849,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                     f"Failed to fetch property {property_name} from {peer_id}: {error_msg}"
                 )
                 return
-            # The baseline's decision (3.16): only the publisher's own 2xx
+            # The baseline's decision (4.0): only the publisher's own 2xx
             # answer is the value; a redirect to another host (a login page
             # behind a proxy) is not, JSON or not.
             code = int(proxy.last_response_code or 0)
@@ -1927,7 +1927,7 @@ class CallbacksHandler(base_handler.BaseHandler):
                 logger.debug(f"Stored property '{property_name}' from {peer_id}")
             elif isinstance(response, str | int | float | bool):
                 # A value that is not an object: wrapped, as the receiver
-                # stores one (3.16: dropped before, so a deleted string or
+                # stores one (4.0: dropped before, so a deleted string or
                 # number was not restored).
                 remote_store.set_value(property_name, {"value": response})
             else:

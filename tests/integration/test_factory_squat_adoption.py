@@ -1,7 +1,7 @@
-"""End-to-end: the factory squat and the owner's first OAuth login (3.16).
+"""End-to-end: the factory squat and the owner's first OAuth login (4.0).
 
 An unauthenticated ``POST /`` creates an actor for any address nobody has
-claimed, with a passphrase of the caller's choosing. Before 3.16 the address
+claimed, with a passphrase of the caller's choosing. Before 4.0 the address
 owner's first OAuth login adopted that actor with the squatter's credentials
 still live: the passphrase and any ``admin`` trust made with a chosen secret.
 Now the login replaces it.

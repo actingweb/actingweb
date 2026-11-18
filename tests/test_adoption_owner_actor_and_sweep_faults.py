@@ -1,4 +1,4 @@
-"""Adoption after the fifth verification (3.16).
+"""Adoption after the fifth verification (4.0).
 
 The owner's unvouched actor beside factory ones, the backfill's resume hint,
 the sibling sweep under read faults, what a clean leaves in ``_internal``, a
@@ -73,7 +73,7 @@ def _with_id(config: Any, creator: str, prefix: str, auth_method: str | None) ->
 
 
 class TestOwnersActorBesideFactoryOnes:
-    """Issue AN: the owner's actor from before 3.16 must not be left behind."""
+    """Issue AN: the owner's actor from before 4.0 must not be left behind."""
 
     def test_sign_in_cleans_the_owners_actor_not_a_lower_factory_one(
         self, auth
@@ -160,7 +160,7 @@ class TestSweepReadFaults:
         cls = type(get_actor(config))
 
         def faulting(self: Any, creator: str | None = None, **kw: Any) -> Any:
-            raise DbError("simulated listing fault")  # 3.16: a fault raises
+            raise DbError("simulated listing fault")  # 4.0: a fault raises
 
         def empty(self: Any, creator: str | None = None, **kw: Any) -> Any:
             return []  # a listing that misses the actor being replaced
@@ -188,7 +188,7 @@ class TestSweepReadFaults:
 
         def get(self: Any, actor_id: str | None = None, **kw: Any) -> Any:
             if actor_id == sibling.id:
-                raise DbError("simulated read fault")  # 3.16: a fault raises
+                raise DbError("simulated read fault")  # 4.0: a fault raises
             return real_get(self, actor_id=actor_id, **kw)
 
         with patch.object(cls, "get", get), pytest.raises(DbError):

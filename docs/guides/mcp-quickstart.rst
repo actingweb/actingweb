@@ -116,7 +116,9 @@ and a JSON-RPC response sent by the client; both are answered
 ``202 Accepted`` with an empty body). A body that is not a single JSON-RPC
 object, such as a batch array, is answered ``400`` with a ``-32600`` error.
 An unauthenticated ``GET /mcp`` is a ``401`` challenge too,
-not a discovery document. There is **no dev bypass**;
+not a discovery document (an authenticated one with ``Accept:
+text/event-stream`` answers ``405`` with ``Allow: POST``: the server opens no
+stream). There is **no dev bypass**;
 ``with_devtest(True)`` does not open the MCP endpoint. Sending these without a
 token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
 

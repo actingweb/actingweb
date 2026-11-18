@@ -115,7 +115,7 @@ WRONG_CREDENTIALS_TEXT = (
     "close the browser (or open a private window) and open this page again "
     "to sign in with the creator and passphrase.\n"
 )
-"""The body of the web UI's 403 for refused Basic credentials (3.16): the
+"""The body of the web UI's 403 for refused Basic credentials (4.0): the
 browser shows it instead of a bare error page and will not prompt again."""
 
 
@@ -124,7 +124,7 @@ class WwwHandler(base_handler.BaseHandler):
         self, actor_id: str, path: str, method: str = "GET", subpath: str = ""
     ) -> Any | None:
         """As the base handler's; a 403 for a wrong creator or passphrase
-        gets a body that says how to retry (3.16), since a browser keeps the
+        gets a body that says how to retry (4.0), since a browser keeps the
         refused credentials and shows a bare error page on every reload.
         Only that refusal: another 403 (an actor with no passphrase, say)
         is not helped by retrying."""
@@ -280,7 +280,7 @@ class WwwHandler(base_handler.BaseHandler):
 
     def _trust_uri(self, actor_id: str, relationship: str, peerid: str) -> str:
         """The trust row's URL, with the relationship and peer id quoted as
-        path segments: a stored id from before 3.16 may hold characters
+        path segments: a stored id from before 4.0 may hold characters
         (``/``, ``?``) that would point the link somewhere else. Empty for
         an id that is only dots."""
         from urllib.parse import quote
@@ -627,7 +627,7 @@ class WwwHandler(base_handler.BaseHandler):
                     # This is a regular property
                     myself.property[prop_name] = None
                     # Register diff for subscription callbacks: the encoded
-                    # ``""`` every writer sends for a delete (3.16)
+                    # ``""`` every writer sends for a delete (4.0)
                     myself.register_diffs(
                         target="properties",
                         subtarget=prop_name,
@@ -855,7 +855,7 @@ class WwwHandler(base_handler.BaseHandler):
                     t["has_custom_permissions"] = self._has_custom_permissions(
                         myself.id or "", peerid, rel
                     )
-                    # What both sides have done (3.16): the list showed this
+                    # What both sides have done (4.0): the list showed this
                     # actor's side only.
                     try:
                         t["status_label"] = trust_status_label(t, myself.id)
@@ -987,7 +987,7 @@ class WwwHandler(base_handler.BaseHandler):
             return
         # Execute callback hook for custom web paths. A path no ``www`` hook
         # is registered for, or one the hook does not handle (it returns
-        # ``False`` or ``None``), is 404 (3.16; it answered 200 "False").
+        # ``False`` or ``None``), is 404 (4.0; it answered 200 "False").
         output = None
         if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)
@@ -1041,7 +1041,7 @@ class WwwHandler(base_handler.BaseHandler):
 
             permission_store = get_trust_permission_store(self.config)
             permissions = permission_store.get_permissions(actor_id, peer_id)
-            # A client's override for another type is not applied (3.16).
+            # A client's override for another type is not applied (4.0).
             return override_applies(permissions, peer_id, relationship)
         except DbError:
             raise
@@ -1117,7 +1117,7 @@ class WwwHandler(base_handler.BaseHandler):
 
     def _handle_new_trust_relationship(self, myself, actor_id: str) -> None:
         """Handle creation of a new trust relationship. Every outcome is a
-        redirect (3.16; a failure was a bare 400 or 500 page): to the trust
+        redirect (4.0; a failure was a bare 400 or 500 page): to the trust
         list on success or when the peer already has a trust, to the form
         with a message code otherwise."""
         # Typed or pasted: surrounding whitespace is not part of the URL.
@@ -1274,7 +1274,7 @@ class WwwHandler(base_handler.BaseHandler):
                                 list_prop.set_description(description)
                             if explanation is not None:
                                 list_prop.set_explanation(explanation)
-                            # 3.16: subscribers are told (nothing was sent).
+                            # 4.0: subscribers are told (nothing was sent).
                             register_list_diff(
                                 myself,
                                 self.config,
@@ -1374,7 +1374,7 @@ class WwwHandler(base_handler.BaseHandler):
                             logger.debug(f"Getting list property: {prop_name}")
                             list_prop = getattr(myself.property_lists, prop_name)
                             list_prop.append(parsed_value)
-                            # 3.16: web-UI edits notify subscribers.
+                            # 4.0: web-UI edits notify subscribers.
                             length = list_length_hint(list_prop)
                             register_list_diff(
                                 myself,
@@ -1717,7 +1717,7 @@ class WwwHandler(base_handler.BaseHandler):
                             list_prop
                         )  # This will trigger metadata creation if it doesn't exist
 
-                        # The post hook first: a refused list leaves nothing behind (3.16)
+                        # The post hook first: a refused list leaves nothing behind (4.0)
                         if self.hooks:
                             actor_interface = self._get_actor_interface(myself)
                             if actor_interface:
@@ -1744,10 +1744,10 @@ class WwwHandler(base_handler.BaseHandler):
                         if explanation:
                             list_prop.set_explanation(explanation)
                         if not description and not explanation:
-                            # Persist the metadata, or the list does not exist (3.16:
+                            # Persist the metadata, or the list does not exist (4.0:
                             # a form without a description created nothing).
                             list_prop.set_description("")
-                        # 3.16: subscribers learn of the new list.
+                        # 4.0: subscribers learn of the new list.
                         register_list_diff(
                             myself,
                             self.config,
@@ -1807,7 +1807,7 @@ class WwwHandler(base_handler.BaseHandler):
                         lambda: myself.property[property_name],
                     )
                     myself.property[property_name] = final_value
-                    # 3.16: as the REST PUT registers it (nothing was sent).
+                    # 4.0: as the REST PUT registers it (nothing was sent).
                     myself.register_diffs(
                         target="properties",
                         subtarget=property_name,
@@ -1856,7 +1856,7 @@ class WwwHandler(base_handler.BaseHandler):
                 return
 
         # Handle other POST operations or custom web paths (404 when no
-        # ``www`` hook is registered or it does not handle the path, 3.16)
+        # ``www`` hook is registered or it does not handle the path, 4.0)
         output = None
         if self.hooks and self.hooks.has_callback_hook("www"):
             actor_interface = self._get_actor_interface(myself)

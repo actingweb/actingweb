@@ -1,4 +1,4 @@
-"""Removed in 3.16.
+"""Removed in 4.0.
 
 ``CallbackOauthHandler`` redirected ``?code=...&state=<actor id>`` to a
 per-actor ``/<actor id>/oauth`` path. Neither integration routed it, and

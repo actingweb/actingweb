@@ -77,7 +77,7 @@ class TestMatchesPattern(unittest.TestCase):
 
 class TestUriPrefixFold(unittest.TestCase):
     """A pattern ending in ``://`` with no wildcard is matched as that
-    pattern plus ``*`` through the glob path (3.16): one code path instead
+    pattern plus ``*`` through the glob path (4.0): one code path instead
     of a separate ``startswith`` branch, and the same matches it had."""
 
     def setUp(self) -> None:

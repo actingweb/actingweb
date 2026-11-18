@@ -1,8 +1,8 @@
 # The Flask integration cannot hand a browser its SPA sign-in session
 
-**Filed:** 2026-11-18, from the 3.16 release validation
+**Filed:** 2026-11-18, from the 4.0 release validation
 (`thoughts/research/2026-11-18-3-16-release-validation.md`, Phase 2).
-Checked against `963ac34` and `v3.15.1`.
+Checked against `15b0e35` and `v3.15.1`.
 
 ## What is wrong
 

@@ -1,4 +1,4 @@
-"""The evaluator reads the live permission store (3.16, plan
+"""The evaluator reads the live permission store (4.0, plan
 grant-enforcement-per-route, Phase 4 finding).
 
 The store is a singleton rebuilt when another application's config asks for

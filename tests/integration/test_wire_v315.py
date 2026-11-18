@@ -12,7 +12,7 @@ still has to answer them:
 - WV2: a resync callback stamped with a ``+00:00`` offset;
 - WV3: a write below a property, sent as the changed part only;
 - WV4: a second trust request for a peer already trusted, sent without a
-  bearer and with a new secret. Refused since 3.16 (the re-pair rule), and
+  bearer and with a new secret. Refused since 4.0 (the re-pair rule), and
   the trust the release holds is left as it was.
 
 One file serves both backends; one topology, since the peer is the test.

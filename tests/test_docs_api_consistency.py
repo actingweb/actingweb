@@ -385,6 +385,6 @@ def test_the_removed_name_scan_sees_a_use_and_excuses_a_notice():
         (1, "with_legacy_property_index")
     ]
     assert not _teaches_removed_names(
-        "``with_legacy_property_index()`` was removed in 3.16."
+        "``with_legacy_property_index()`` was removed in 4.0."
     )
     assert not _teaches_removed_names("def on_trust_approved(actor): ...")

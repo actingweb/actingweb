@@ -100,7 +100,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
         )
 
         # The hook did not run and the value is not handed back: the
-        # denial is its own answer, a 403 at the handler (3.16)
+        # denial is its own answer, a 403 at the handler (4.0)
         self.assertIs(result, PERMISSION_DENIED)
         test_hook.assert_not_called()  # Hook should not have been called
         mock_evaluator.evaluate_property_access.assert_called_once()
@@ -199,7 +199,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
 
     @patch("actingweb.interface.hooks.get_permission_evaluator")
     def test_hook_permission_error_fallback(self, mock_get_evaluator):
-        """An evaluator error denies the hook (3.16; it used to allow)."""
+        """An evaluator error denies the hook (4.0; it used to allow)."""
         # Setup mock permission evaluator to raise exception
         mock_evaluator = StubEvaluator()
         mock_evaluator.evaluate_property_access = Mock(
@@ -357,7 +357,7 @@ class TestTransparentHookPermissions(unittest.TestCase):
             self.actor_id, self.peer_id, "memory_travel", "read"
         )
         test_hook.assert_not_called()
-        # A denied get is the denial, not the value (3.16)
+        # A denied get is the denial, not the value (4.0)
         self.assertIs(result, PERMISSION_DENIED)
 
 

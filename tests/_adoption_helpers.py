@@ -1,4 +1,4 @@
-"""Shared fixtures for the adoption (3.16) tests.
+"""Shared fixtures for the adoption (4.0) tests.
 
 Plants the state a squatter can leave on an actor created from unauthenticated
 input: a chosen passphrase, an ``admin`` trust with a chosen secret and a peer
@@ -53,7 +53,7 @@ def create_core_actor(
     passphrase: str = "squatter-passphrase",
 ) -> Actor:
     """Create an actor through ``Actor.create``; ``auth_method=None`` leaves
-    the marker unset, as a pre-3.16 actor would be."""
+    the marker unset, as a pre-4.0 actor would be."""
     actor = Actor(config=config)
     assert actor.create(
         url="https://test.example.com/",
@@ -123,7 +123,7 @@ def backend_fault(
 
 
 def raise_db_error() -> Any:
-    """A backend fault as both backends report it since 3.16."""
+    """A backend fault as both backends report it since 4.0."""
     raise DbError("simulated backend fault")
 
 

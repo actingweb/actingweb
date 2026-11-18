@@ -383,7 +383,7 @@ def test_maybe_purge_runs_once_per_interval(
     assert len(store.purges) == 1
     purged = store.purges[0]
     assert purged is not None
-    assert len(purged) == 9  # with the pending authorisations (3.16)
+    assert len(purged) == 9  # with the pending authorisations (4.0)
     assert {
         TOKENS,
         REFRESH,
@@ -810,7 +810,7 @@ class TestAnUnconfirmedDeleteStillRevokes:
 
 
 # ---------------------------------------------------------------------------
-# A revocation that races a rotation (chain-revoked marker, 3.16)
+# A revocation that races a rotation (chain-revoked marker, 4.0)
 # ---------------------------------------------------------------------------
 
 REVOKED = "mcp_revoked_chains"

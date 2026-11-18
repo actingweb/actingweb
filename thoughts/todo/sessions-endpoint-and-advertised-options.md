@@ -2,7 +2,7 @@
 
 ## What happens
 
-`/meta/actingweb/supported` no longer advertises `sessions` (3.16: the list is
+`/meta/actingweb/supported` no longer advertises `sessions` (4.0: the list is
 computed from the configuration and only names what exists; the tag table, the
 `onewaytrust`, `listproperties` and `callbackcompression` audit are recorded in
 `thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`, D14), but the

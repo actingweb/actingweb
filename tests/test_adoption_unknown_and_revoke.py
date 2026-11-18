@@ -1,4 +1,4 @@
-"""Sign-in adoption follow-ups of 3.16 (owner-decided plan, Phase 2).
+"""Sign-in adoption follow-ups of 4.0 (owner-decided plan, Phase 2).
 
 - K: a clean in place refuses an UNKNOWN deletion status (503).
 - J: the clean revokes tokens again after the client registrations go.
@@ -142,7 +142,7 @@ class TestSecondRevoke:
 
 
 class TestSeedMissingEmail:
-    """The flag is stated per case (3.16): under ``with_email_as_creator`` a
+    """The flag is stated per case (4.0): under ``with_email_as_creator`` a
     write of a vouched actor's email to another address renames it, and a
     sign-in without an address is refused before it gets here, so the
     provider-id cases run with the flag off."""

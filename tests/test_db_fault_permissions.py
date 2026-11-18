@@ -1,4 +1,4 @@
-"""A permission-store fault never grants access (3.16 iteration, Issue A of
+"""A permission-store fault never grants access (4.0 iteration, Issue A of
 ``thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness.md``).
 
 The permission evaluator raises ``DbError`` on a store fault instead of
@@ -115,7 +115,7 @@ def test_evaluator_raises_on_a_store_fault_against_a_deny_override(
     evaluator = PermissionEvaluator(config)
     with (
         # An approved peer: a peer with no trust row is denied before the
-        # store is read (3.16), and the fault is what this test is about.
+        # store is read (4.0), and the fault is what this test is about.
         mock.patch.object(evaluator, "_approval", return_value=(False, "friend")),
         mock.patch.object(
             evaluator.permission_store,

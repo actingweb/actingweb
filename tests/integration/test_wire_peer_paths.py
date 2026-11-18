@@ -243,7 +243,7 @@ def test_wd10_import(wire_pair):
 def test_wd12_resume_to_a_peer_cached_without_resync(wire_pair, topology):
     """WD12: as WD10, with A's trust row for B lacking ``subscriptionresync``
     (freshly stamped, so no refresh) and B already holding a list. Since
-    3.16 the resume sends a resync all the same (it sent the full state as
+    4.0 the resume sends a resync all the same (it sent the full state as
     ordinary diffs)."""
     from actingweb.trust import Trust
 

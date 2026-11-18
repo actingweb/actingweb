@@ -76,7 +76,7 @@ class ActingWebTokenManager:
         # Chain-revoked markers (single_use.mark_chain_revoked), under the
         # user's actor like the chains themselves.
         self.revoked_chains_bucket = "mcp_revoked_chains"
-        # Authorisations paused for the user's confirmation (3.16), on the
+        # Authorisations paused for the user's confirmation (4.0), on the
         # OAuth2 system actor, keyed by a hash of their token.
         self.pending_authorizations_bucket = "mcp_pending_authorizations"
         self.token_prefix = "aw_"  # Prefix to distinguish from Google tokens
@@ -154,7 +154,7 @@ class ActingWebTokenManager:
         return auth_code
 
     # ------------------------------------------------------------------
-    # Pending authorisations (3.16): a sign-in the library could not bind to
+    # Pending authorisations (4.0): a sign-in the library could not bind to
     # the browser that showed the form waits for the user's confirmation.
     # ------------------------------------------------------------------
 

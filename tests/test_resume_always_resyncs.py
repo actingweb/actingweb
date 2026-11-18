@@ -1,4 +1,4 @@
-"""A resume always sends a resync callback (3.16).
+"""A resume always sends a resync callback (4.0).
 
 The publisher used to read the subscriber's cached option tags and, for a
 peer cached without ``subscriptionresync``, send the full subscribed state

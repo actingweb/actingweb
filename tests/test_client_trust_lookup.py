@@ -1,4 +1,4 @@
-"""Client deletion removes exactly the client's trust row (3.16).
+"""Client deletion removes exactly the client's trust row (4.0).
 
 ``_delete_client_trust_relationship`` matched ``pattern in peer_id or
 peer_id.endswith(client_id)`` and deleted the first hit, so deleting client

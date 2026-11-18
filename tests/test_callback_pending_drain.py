@@ -1,5 +1,5 @@
 """A callback that arrives while the previous one is being processed is
-processed too, without waiting for later traffic (3.16).
+processed too, without waiting for later traffic (4.0).
 
 Callback N+1 that meets N's live claim is queued. N's delivery read the queue
 before it claimed, so nothing took N+1 until a later callback outlived the

@@ -1,4 +1,4 @@
-"""``DbActorList.iter_rows``: the streamed actor enumeration (3.16).
+"""``DbActorList.iter_rows``: the streamed actor enumeration (4.0).
 
 Runs on the run's backend (DynamoDB Local or the PostgreSQL test schema).
 Seeded actors are deleted in ``finally``; the store is shared, so the

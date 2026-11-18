@@ -108,7 +108,7 @@ for initialisation errors during the rollout.
 Callback Delivery by Deployment Shape
 -------------------------------------
 
-Since 3.16 one write's callbacks are sent concurrently, at most
+Since 4.0 one write's callbacks are sent concurrently, at most
 ``max_concurrent_callbacks`` (default 4) to subscribers on other hosts, and
 subscribers on the publisher's own host one at a time
 (``serialize_own_host_callbacks``). A send takes at most 15 s (5 s to
@@ -211,7 +211,7 @@ Kubernetes
 
 With several replicas, each write's callbacks are bounded per write, in the
 process that served the write; there is no process-wide or cross-replica
-limit and no per-peer back-off (3.16 removed the unused ``FanOutManager``).
+limit and no per-peer back-off (4.0 removed the unused ``FanOutManager``).
 
 Notes
 =====
@@ -301,7 +301,7 @@ Then:
   not move it.
 
 Run ``creator-to-email`` again after a restore or after any period
-with the email flag off. :doc:`../migration/v3.16` gives the details.
+with the email flag off. :doc:`../migration/v4.0` gives the details.
 
 Health Checks
 =============

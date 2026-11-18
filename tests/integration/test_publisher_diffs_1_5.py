@@ -163,7 +163,7 @@ def test_a_nested_delete_reaches_the_resource(pub: _Pub) -> None:
     r = pub.request("DELETE", f"/{pub.actor_id}/properties/x/r")
     assert r.status_code == 204
     assert pub.diffs("resource") == [""]
-    # Above the resource: the parent's whole stored value (3.16).
+    # Above the resource: the parent's whole stored value (4.0).
     assert pub.diffs("subtarget") == [{"s": 2}]
     assert pub.diffs("target") == [{"x": {"s": 2}}]
 

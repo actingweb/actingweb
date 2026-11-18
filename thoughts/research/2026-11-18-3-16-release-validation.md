@@ -541,7 +541,7 @@ once, identical over repeated runs on both backends.
 ## `actingwebdemo` against this branch (Phase 3, item 5, AC-13)
 
 A worktree of `actingwebdemo` with its library pin pointed at this branch
-(`8654613`), on its own DynamoDB Local.
+(`881205a`), on its own DynamoDB Local.
 
 **Its tests.** `pytest tests/ -v` on a fresh store collects nothing and
 stops with `UniqueCreatorNotReady`: the store is new and uniqueness is on
@@ -713,3 +713,94 @@ fallback).
 After the fixes `create_note` ran through Claude Code and stored the note.
 The server and the tunnel were stopped and the `mcpqs` tables dropped; the
 `aw-qs` entry in the owner's Claude Code configuration is theirs to remove.
+
+## Running Emm's suite against this library (moved from the todo, 2026-11-18)
+
+The todo `emm-suite-against-master.md` asked for Emm's suite on `master`
+and on every 4.0 plan's branch before its PR; with this plan, the last of
+them, it is done and deleted. How a run is done stays here, for the rc pass
+(`thoughts/todo/rc-pass-against-real-consumers.md`) and any later release.
+The worktrees are `.claude/worktrees/master-5a7e07f` here and
+`.claude/worktrees/emm-3-16` (branch `actingweb-3-16-adoption`) in Emm;
+environment 9; the baseline is the five names in "Emm's suite: the new
+baseline (Phase 1)" above.
+
+### How a run is done
+
+Two worktrees and a virtualenv of Emm's own, so that neither repository's
+main checkout moves and Emm's working environment stays on 3.15.1 (owner,
+2026-11-07):
+
+1. A git worktree of this repository at the commit under test (`master`, or
+   a plan's branch). This checkout's `HEAD` does not move.
+2. A git worktree of Emm on its 4.0 adoption branch, with its own
+   virtualenv: `poetry install` there creates one for that checkout, so the
+   path dependency, the lock and the installed library differ from Emm's
+   main checkout without touching it. Its preview server and database are
+   its own (`scripts/preview-start.sh N --no-ngrok`, Emm's `CLAUDE.md`).
+3. In that worktree: switch `pyproject.toml` to the path form (line 12),
+   pointed at the worktree from step 1; `poetry lock && poetry install`.
+4. Emm's Full tier, the Python lines, as its `CLAUDE.md` gives them: the
+   pytest line on PostgreSQL against its preview server (through
+   `scripts/preview-start.sh N --no-ngrok` and `scripts/with-preview-env.sh
+   N` when another session may hold `:5000`), and `scripts/test-backends.sh
+   N` for DynamoDB. The frontend lines are not needed.
+5. Before anything is committed in Emm: `git checkout pyproject.toml
+   poetry.lock && poetry install`, as Emm's `CLAUDE.md` requires.
+6. One run at a time, and not while a run of this repository's suite is
+   going: both use Docker and local ports.
+
+### What a result means
+
+- **The first run, on `master`:** every failure is triaged as a library
+  regression (fixed here before plan 0 starts), a documented 4.0 change Emm
+  must adopt (fixed on Emm's branch; if the migration guide does not name
+  it, the guide is corrected here), or a test of Emm's that was already
+  failing. The list of what is left is the baseline for the later runs.
+- **A later run, on a plan's branch:** no failure the baseline did not have.
+  A new one is a regression to fix in the plan, or a consumer-visible change
+  the plan's changelog and migration text must name and Emm's branch adapts
+  to. The result goes in the plan's verification document.
+
+## The changelog, cut to what changed since 3.15.1 (Phase 4, AC-24)
+
+Owner, 2026-11-18: the release's section names only changes a 3.15.1 user
+sees. Every one of the 285 entries was classified against `v3.15.1`
+(`git show v3.15.1:`, `git grep … v3.15.1`, `git log -S` for when a name
+appeared); each removal and fold was checked again against the tag.
+261 entries remain.
+
+**Removed (9).** Fixes to things 3.15.1 did not have: a vouched rename left
+half-done; the trust's shared properties refusing a row without an approval
+field; an abandoned verification address left behind; the marker restore's
+log line; an unreadable sign-in marker ranked as unvouched; every sign-in
+reading every factory actor; the MCP bridge's race winner. And two entries
+that said "no behaviour change" (docstrings that promised no size limit;
+one matching path for permission patterns).
+
+**Folded (15).** Refinements of something new in this release, moved into
+the entry that introduces it so the reader sees the end state: the missed
+resync re-sent, the owed rebuild's hook, the side partition's sweep and the
+REST list's spanned items (into "Spanned list items"), the
+`with_list_item_limits` ceiling, `allows_anonymous_callback`,
+`creator-to-email`, `--email-as-creator`, `EmailAsCreatorNotReady`, the
+sign-in's `trust_type` hook (into the client-level entry), the `list:<x>`
+filter (into its `SECURITY` entry), the `_internal` read (one `GetItem`),
+the PostgreSQL `UNINDEXABLE` backfill, the adoption follow-ups (into
+`actor_adopted`), and the `SECURITY` entry on tokens outliving a clean in
+place, whose clean is new: merged into the `SECURITY` entry that introduces
+the clean, so that section's other leads are unchanged in text and order.
+
+**Reworded (36).** Mostly "3.16" as the name of this release (the Phase 4
+rename); the rest drop development wording ("found by running the MCP
+quickstart", "now the default" relative to an earlier change, "a test now
+pins", an intermediate 400 for a broken span).
+
+**Then, as it reads.** An opening note names the start-up steps and points
+at the guide's "Start here"; the 31 **Breaking:** entries lead `CHANGED`;
+a `CHANGED` entry says that a 3.15.1 application and a 4.0 one can be
+peers and points at "Other versions beside this one". The entries are not
+re-sorted by the guide's audience groups: within each category they stay
+in the order of the work, which keeps related entries together; sorting
+260 entries by audience without reading each against the guide again
+risked separating an entry from the ones it refers to.

@@ -53,7 +53,7 @@ This eliminates the need for custom route handlers to redirect browsers.
 A ``/<actor_id>/www/<path>`` that the library does not serve is passed to
 the application's ``www`` callback hook. A path the hook does not handle
 (it returns ``False`` or ``None``), or any path when no ``www`` hook is
-registered, answers 404 (3.16; it answered 200 with the text ``False``).
+registered, answers 404 (4.0; it answered 200 with the text ``False``).
 *What to check:* a hook that returned ``False`` for a page it does serve
 returns a dict instead. On a ``GET``, ``{"template": "<name>.html",
 "data": {...}}`` renders that template (see
@@ -98,7 +98,7 @@ Trust Relationships
 The trust interface (``/<actor_id>/www/trust``) allows users to:
 
 - View existing trust relationships with a status that covers both sides
-  (3.16): **Active** (both approved), **Waiting for peer** (you approved),
+  (4.0): **Active** (both approved), **Waiting for peer** (you approved),
   **Awaiting your approval** (the peer approved), **Awaiting both**, and
   **Unverified** (the request did not verify and cannot be approved). A row
   whose peer has no side of its own (an OAuth2 or MCP client) keeps the
@@ -114,7 +114,7 @@ The trust interface (``/<actor_id>/www/trust``) allows users to:
 - Specify peer actor URL and relationship details  
 - Creates reciprocal trust relationships
 - Linked from the dashboard and from the trust list
-- Every submit answers with a redirect (3.16): to the trust list when the
+- Every submit answers with a redirect (4.0): to the trust list when the
   trust was created, to the trust list with a notice when this actor
   already approved a trust with the peer (paired again with a new secret
   for the same relationship; nothing changed for another), and back to the
@@ -274,7 +274,7 @@ Available Templates
     Available variables:
     - ``url``: Base URL for navigation
     - ``id``: Actor ID
-    - ``trusts``: List of trust relationship objects; each has ``status_label`` (3.16: ``Active``, ``Waiting for peer``, ``Awaiting your approval``, ``Awaiting both`` or ``Unverified``; ``None`` for a row whose peer has no side of its own)
+    - ``trusts``: List of trust relationship objects; each has ``status_label`` (4.0: ``Active``, ``Waiting for peer``, ``Awaiting your approval``, ``Awaiting both`` or ``Unverified``; ``None`` for a row whose peer has no side of its own)
     - ``notice``: A message to show above the list (after a new-trust submit for a peer this actor already approved a trust with), or ``None``
     - ``trust_connections``: Connection metadata for each trust with ``peerid``, ``established_via``, ``created_at``, ``last_connected_at``, and ``last_connected_via``
 
@@ -309,10 +309,10 @@ Available Templates
     - ``default_trust_type``: Default trust type selection
     - ``form_action``: Authorization form submission URL
     - ``email_hint``: Pre-filled email for authorization
-    - ``form_nonce``: post it back in every form as a hidden input (3.16)
+    - ``form_nonce``: post it back in every form as a hidden input (4.0)
 
 **aw-oauth-confirm.html**
-    Confirmation of an MCP client's access (3.16), shown when a sign-in is not
+    Confirmation of an MCP client's access (4.0), shown when a sign-in is not
     bound to the browser that showed the form. Post ``token`` and
     ``decision`` (``approve`` or ``decline``) to ``form_action``.
 

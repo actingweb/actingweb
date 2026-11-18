@@ -13,7 +13,7 @@ Available Trust Lifecycle Events:
   as ``trust_data`` and ``initiated_by_peer``
 
 ``trust_approved`` is the deprecated name of ``trust_fully_approved_local``
-(3.16): it runs only when no ``trust_fully_approved_local`` hook is registered.
+(4.0): it runs only when no ``trust_fully_approved_local`` hook is registered.
 
 These hooks are useful for:
 - Logging trust relationship changes

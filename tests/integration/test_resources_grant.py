@@ -1,4 +1,4 @@
-"""``/resources`` follows the peer's ``resources`` grant (3.16, plan Phase 2).
+"""``/resources`` follows the peer's ``resources`` grant (4.0, plan Phase 2).
 
 GET is ``read``, PUT and POST ``write``, DELETE ``delete``, on the same
 decision as every other route; the test app registers no resource hook, so

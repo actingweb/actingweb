@@ -26,14 +26,14 @@ Core Actor Routes
 
 - `/`: Root factory (create actor via web or API). Open by default; answers 403 when the app calls `with_open_factory(False)`
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
-- `/<actor_id>/meta`: Discovery metadata. `/meta` is a JSON object; each scalar path (`/meta/id`, `/meta/version`, `/meta/actingweb/supported`, ...) is `text/plain` (3.16; Flask labelled them `text/html` and FastAPI sent no label)
-- `/<actor_id>/properties`: Get/update/delete properties. A value that is not JSON is read back as `text/plain`, a JSON value as `application/json` (3.16; both were labelled JSON). `PUT /properties` with no name is 405. List items are addressed by path (`/properties/<list>/<n>`, and `POST /properties/<list>` appends); see :doc:`../guides/property-lists`
+- `/<actor_id>/meta`: Discovery metadata. `/meta` is a JSON object; each scalar path (`/meta/id`, `/meta/version`, `/meta/actingweb/supported`, ...) is `text/plain` (4.0; Flask labelled them `text/html` and FastAPI sent no label)
+- `/<actor_id>/properties`: Get/update/delete properties. A value that is not JSON is read back as `text/plain`, a JSON value as `application/json` (4.0; both were labelled JSON). `PUT /properties` with no name is 405. List items are addressed by path (`/properties/<list>/<n>`, and `POST /properties/<list>` appends); see :doc:`../guides/property-lists`
 - `/<actor_id>/resources`: Application resources answered by `resource_<name>` callback hooks; a peer is decided by its `resources` grant (GET `read`, PUT/POST `write`, DELETE `delete`), and no hook runs on a refusal
 - `/<actor_id>/methods`: RPC-style methods (GET returns metadata, POST invokes)
 - `/<actor_id>/actions`: Side-effecting actions (GET returns metadata, POST invokes)
 - `/<actor_id>/trust`: Trust relationships and permissions
 - `/<actor_id>/subscriptions`: Subscriptions to peer updates
-- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name. A name no hook is registered for answers 403 (3.16; 200 with `false` before). The one exception: a hook registered with `allow_anonymous=True` admits an unauthenticated `POST` to its own name and authenticates the caller itself (see :doc:`hooks-reference`)
+- `/<actor_id>/callbacks`: Inbound callbacks (peer/webhooks); every request is authenticated (401 without credentials), and the peer callbacks admit only the peer they name. A name no hook is registered for answers 403 (4.0; 200 with `false` before). The one exception: a hook registered with `allow_anonymous=True` admits an unauthenticated `POST` to its own name and authenticates the caller itself (see :doc:`hooks-reference`)
 
 Web UI Routes (when with_web_ui(True))
 ======================================
@@ -80,7 +80,7 @@ JSON with actor information:
         "trustee_root": "optional-trustee-root"
     }
 
-``passphrase`` is returned to the creator and the trustee only (3.16); a
+``passphrase`` is returned to the creator and the trustee only (4.0); a
 peer, an ``admin`` one included, gets the object without it.
 
 If not authenticated, API clients receive a 401 or 403 error response. A
@@ -132,7 +132,7 @@ and the ``with_web_ui()`` configuration:
    when an OAuth provider is configured (``with_oauth(...)``): a request for
    ``/<actor_id>/www`` without a session is redirected to sign-in. Without a
    provider, such a request is answered 401 with a ``Basic`` challenge in the
-   application's realm (``auth_realm``), on both integrations (3.16; Flask
+   application's realm (``auth_realm``), on both integrations (4.0; Flask
    answered a ``Bearer`` challenge, which a browser does not prompt for), so
    the creator and passphrase sign in through the browser's prompt. A wrong
    passphrase is 403 with a plain-text body saying to close the browser (or
@@ -246,11 +246,14 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   ``client_secret`` in the response), ``client_secret_post`` (default) or
   ``client_secret_basic`` (the response carries ``client_secret`` and
   ``client_secret_expires_at: 0``). Anything else, or a ``client_name`` that
-  is empty after sanitising, is 400 ``invalid_client_metadata``. A client
+  is empty after sanitising, is 400 ``invalid_client_metadata``, as is a
+  ``client_credentials`` grant or a ``trust_type`` the client list does not
+  offer (4.0; an actor's owner creates such a client with
+  ``OAuth2ClientManager.create_client``). A client
   whose trust row cannot be created (its actor is missing, the trust is
   refused, or an unexpected error) is 500 ``{"error": "server_error",
   "error_description": "Client registration failed"}`` and nothing of it is
-  stored (3.16; it was a 201 with credentials that could never authorize). A
+  stored (4.0; it was a 201 with credentials that could never authorize). A
   storage fault is 503 ``{"error": "temporarily_unavailable", "message":
   "Service temporarily unavailable"}`` with ``Retry-After``.
 - ``GET /oauth/authorize`` — shows the sign-in form; ``POST
@@ -261,7 +264,7 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   pre-redirect validation failures. The form sets a nonce cookie
   (``__Host-aw_authz_nonce`` over https) and carries the nonce in a hidden
   ``form_nonce`` input and in each provider link; a ``trust_type`` the
-  client list does not offer is 400 ``access_denied`` (3.16).
+  client list does not offer is 400 ``access_denied`` (4.0).
 - ``GET /oauth/callback`` and ``POST /oauth/callback/apple`` — the provider
   returns the browser. When the browser carries the form's nonce the trust
   is written and the client gets its code; otherwise the browser gets the
@@ -277,15 +280,19 @@ ActingWeb is the OAuth2 authorization server for MCP clients (enabled with
   ``Authorization: Basic`` header (a body ``client_id`` that differs from the
   header's is ``invalid_request``). Errors: 400 ``invalid_request``,
   ``invalid_grant`` (dead, expired, reused or foreign code or refresh
-  token), ``unsupported_grant_type``, ``unauthorized_client`` (a public
-  client asking for ``client_credentials``), ``invalid_scope``; 401
+  token), ``unsupported_grant_type``, ``unauthorized_client`` (a public or
+  anonymously registered client asking for ``client_credentials``),
+  ``invalid_scope``; 401
   ``invalid_client`` with ``WWW-Authenticate``; 500 ``server_error``
   (including a token-store fault). Every refresh returns a new
   ``refresh_token``; the presented one is single-use.
 - ``/mcp`` answers 401 ``invalid_token`` without a valid bearer token and 503
   with ``Retry-After`` when the token store cannot be read. A ``POST`` whose body
   is empty or not JSON answers 400 with JSON-RPC ``-32700`` before authentication
-  (a JSON body that is not an object answers 400 ``-32600``).
+  (a JSON body that is not an object answers 400 ``-32600``). An
+  authenticated ``GET`` with ``Accept: text/event-stream`` (the Streamable
+  HTTP stream opener) answers 405 with ``Allow: POST`` (4.0; it was a 200
+  JSON document); a plain authenticated ``GET`` still returns the document.
 
 Notes
 =====

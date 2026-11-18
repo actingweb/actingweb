@@ -7,7 +7,7 @@ implementing these methods will be compatible, without explicit inheritance.
 All database backends (DynamoDB, PostgreSQL, etc.) must implement these protocols
 to ensure consistent interfaces across the ActingWeb codebase.
 
-The fault contract (3.16), which every method below follows unless its own
+The fault contract (4.0), which every method below follows unless its own
 docstring says otherwise:
 
 - **Absence is an answer.** A read that finds nothing answers ``None``,
@@ -164,7 +164,7 @@ class DbActorProtocol(Protocol):
         """
         Move the creator of ``actor_id`` from ``expected`` to ``creator``
         together with writes to its ``_internal`` attributes, as one atomic
-        operation (since 3.16).
+        operation (since 4.0).
 
         The actor row is changed only if it exists with creator ``expected``;
         with ``unique_creator`` a new non-exempt creator is claimed in the
@@ -883,7 +883,7 @@ class DbTrustProtocol(Protocol):
 
         Returns:
             True when the row is gone after the call (an absent row counts);
-            False without a handle or arguments, and (3.16) when
+            False without a handle or arguments, and (4.0) when
             ``only_if_secret`` is given and a row with another secret is there
             (left alone). A fault raises ``DbError``.
         """
@@ -1302,7 +1302,7 @@ class DbSubscriptionDiffListProtocol(Protocol):
     def delete_all_of_actor(self, actor_id: str) -> bool:
         """
         Delete every subscription diff of an actor, by actor id, without
-        reading the diffs first (actor deletion and purge, 3.16).
+        reading the diffs first (actor deletion and purge, 4.0).
 
         Returns:
             True when none is left; a missing table holds none (True). Any
@@ -1790,7 +1790,7 @@ class SubscriptionSuspensionProtocol(Protocol):
             True if suspended, False otherwise
 
         Raises:
-            DbError: on a read fault (3.16). Do not answer False for
+            DbError: on a read fault (4.0). Do not answer False for
                 "could not tell", a missing table included: a suspend() that
                 failed against it would otherwise go unnoticed.
         """

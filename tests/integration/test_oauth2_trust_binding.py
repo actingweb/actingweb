@@ -1,4 +1,4 @@
-"""An MCP client's access level is the user's choice (3.16, plan Phase 3).
+"""An MCP client's access level is the user's choice (4.0, plan Phase 3).
 
 On the ``wire_oauth`` app (OAuth2 and MCP on, the stand-in provider), not
 recordings: the browser binding, the confirmation and its refusals, the

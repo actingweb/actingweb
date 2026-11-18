@@ -1,4 +1,4 @@
-"""The sign-in adoption rule with ``with_unique_creator()`` on (3.16, PR 2
+"""The sign-in adoption rule with ``with_unique_creator()`` on (4.0, PR 2
 Phase 4).
 
 Under the flag the lookup reads the one holder of the creator consistently,

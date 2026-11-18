@@ -53,10 +53,12 @@ from typing import Any
 
 from actingweb.db.exceptions import DbError
 
+from ..migration_guide import guide_section
+
 logger = logging.getLogger(__name__)
 
 PROG = "actingweb-property-lookup"
-GUIDE = 'docs/migration/v3.16.rst, "One reverse-lookup mechanism"'
+GUIDE = guide_section("One reverse-lookup mechanism")
 
 
 class StoreUnavailable(RuntimeError):

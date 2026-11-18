@@ -204,7 +204,7 @@ _trust_approved_warned = False
 
 def _warn_trust_approved_deprecated() -> None:
     """Registering ``trust_approved`` logs one deprecation warning per
-    process (3.16)."""
+    process (4.0)."""
     global _trust_approved_warned
     if _trust_approved_warned:
         return
@@ -250,7 +250,7 @@ class LifecycleEvent(Enum):
     # proved the address and the actor was replaced or cleaned.
     ACTOR_ADOPTED = "actor_adopted"
     OAUTH_SUCCESS = "oauth_success"
-    # An OAuth2/MCP client is about to get a trust (3.16): the application
+    # An OAuth2/MCP client is about to get a trust (4.0): the application
     # may decline or lower the type. Its own fail-closed dispatcher,
     # HookRegistry.decide_oauth2_trust.
     OAUTH2_TRUST_REQUESTED = "oauth2_trust_requested"
@@ -361,7 +361,7 @@ class HookRegistry:
     def __init__(self) -> None:
         self._property_hooks: dict[str, dict[str, list[Callable[..., Any]]]] = {}
         self._callback_hooks: dict[str, list[Callable[..., Any]]] = {}
-        # Hooks registered with ``allow_anonymous=True`` (3.16), by name: the
+        # Hooks registered with ``allow_anonymous=True`` (4.0), by name: the
         # only hooks an unauthenticated POST to that name runs.
         self._anonymous_callback_hooks: dict[str, list[Callable[..., Any]]] = {}
         self._app_callback_hooks: dict[
@@ -411,7 +411,7 @@ class HookRegistry:
             logger.warning(f"Unknown hook type for permission check: {hook_type}")
             return True
 
-        # Methods and actions (3.16): the shared decision, as their routes
+        # Methods and actions (4.0): the shared decision, as their routes
         # ask it; a stated rule that does not match denies, an error or a
         # missing actor or configuration denies (it allowed).
         actor_id = getattr(actor, "id", None) or getattr(actor, "actor_id", None)
@@ -451,7 +451,7 @@ class HookRegistry:
         self, property_path: str, actor: Any, auth_context: dict[str, Any]
     ) -> bool:
         """A peer's property hook runs only where the shared access decision
-        allows the operation (3.16).
+        allows the operation (4.0).
 
         The handler's own decision for the request rides in the context
         (``decision``) and is used as it is; otherwise the decision is made
@@ -538,7 +538,7 @@ class HookRegistry:
             func: Function with signature (actor, name, data) -> bool
             allow_anonymous: Also run this hook for a ``POST`` to
                 ``/<actor>/callbacks/<callback_name>`` that carries no
-                credentials (3.16), for a third party's webhook. The hook
+                credentials (4.0), for a third party's webhook. The hook
                 then authenticates its caller itself: its ``data`` carries
                 ``anonymous: True``, the request's ``headers`` and its
                 ``raw_body``. Refused (``ValueError``) for ``"*"`` and for
@@ -560,7 +560,7 @@ class HookRegistry:
 
     def has_callback_hook(self, callback_name: str) -> bool:
         """Whether any hook would run for ``callback_name``: one registered
-        for it, or for ``"*"`` (3.16). Tells "nothing handles this name"
+        for it, or for ``"*"`` (4.0). Tells "nothing handles this name"
         apart from "a hook ran and returned a falsy value", which
         :meth:`execute_callback_hooks` answers alike."""
         return bool(
@@ -613,7 +613,7 @@ class HookRegistry:
         self, actor: Any, trust_type: str, config: Any, **kwargs: Any
     ) -> str | None:
         """The type an OAuth2/MCP client gets after the application's
-        ``oauth2_trust_requested`` hooks, or None when it is declined (3.16).
+        ``oauth2_trust_requested`` hooks, or None when it is declined (4.0).
 
         Each hook is called as ``hook(actor, trust_type=..., client_id=...,
         client_name=..., redirect_uri=..., provider=..., email=...,
@@ -744,7 +744,7 @@ class HookRegistry:
         """Execute property hooks with transparent permission checking.
 
         A peer's hooks run only where its grant allows the operation; a
-        denial returns ``PERMISSION_DENIED`` (3.16), distinct from ``None``.
+        denial returns ``PERMISSION_DENIED`` (4.0), distinct from ``None``.
 
         Note: If you have async hooks and are in an async context,
         use execute_property_hooks_async() instead for proper async execution.
@@ -763,7 +763,7 @@ class HookRegistry:
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
             # Distinct from None (a hook hiding a value or rejecting a
-            # write): the caller answers 403 (3.16).
+            # write): the caller answers 403 (4.0).
             return PERMISSION_DENIED
 
         # Execute hooks for specific property
@@ -814,7 +814,7 @@ class HookRegistry:
         """Execute callback hooks and return whether callback was processed or result data.
 
         ``anonymous=True`` runs only the hooks registered for this exact name
-        with ``allow_anonymous=True``, never the ``"*"`` hooks (3.16).
+        with ``allow_anonymous=True``, never the ``"*"`` hooks (4.0).
 
         Note: If you have async hooks and are in an async context,
         use execute_callback_hooks_async() instead for proper async execution.
@@ -960,7 +960,7 @@ class HookRegistry:
     def _report_signature_error(cls, event: str, hook: Any, error: TypeError) -> None:
         """A lifecycle hook that raised ``TypeError``, most often one written
         without ``**kwargs`` that is handed an argument it does not name
-        (3.16: ``trust_deleted`` gets ``initiated_by_peer`` on every route).
+        (4.0: ``trust_deleted`` gets ``initiated_by_peer`` on every route).
         The first one per hook and event, per process, is logged with the
         hook's name and the hint; every later one as any hook error."""
         name = getattr(hook, "__qualname__", None) or repr(hook)
@@ -1230,7 +1230,7 @@ class HookRegistry:
         Returns:
             Modified property value or None if operation was rejected;
             ``PERMISSION_DENIED`` when the caller's grant does not allow the
-            operation (3.16; the caller answers 403)
+            operation (4.0; the caller answers 403)
         """
         path = path or []
 
@@ -1244,7 +1244,7 @@ class HookRegistry:
         ):
             logger.debug(f"Property hook permission denied for {property_path}")
             # Distinct from None (a hook hiding a value or rejecting a
-            # write): the caller answers 403 (3.16).
+            # write): the caller answers 403 (4.0).
             return PERMISSION_DENIED
 
         # Execute hooks for specific property
@@ -1426,7 +1426,7 @@ class HookRegistry:
         self, event: str, loop: asyncio.AbstractEventLoop, actor: Any, **kwargs: Any
     ) -> Any:
         """``execute_lifecycle_hooks`` from a worker thread that an async
-        caller on ``loop`` is waiting on (3.16): a coroutine hook is awaited
+        caller on ``loop`` is waiting on (4.0): a coroutine hook is awaited
         on ``loop``, so its loop-bound resources work, and a sync hook runs
         here, off the loop. Same error policy; a coroutine hook that does not
         finish within ``LOOP_HOOK_TIMEOUT_SECONDS`` (or a loop that stopped)

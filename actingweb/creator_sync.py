@@ -1,7 +1,7 @@
-"""The creator follows the stored email where the email is written (3.16).
+"""The creator follows the stored email where the email is written (4.0).
 
 Under ``with_email_as_creator`` (``config.force_email_prop_as_creator``) a
-vouched actor's creator equals its stored ``_internal`` email. Before 3.16
+vouched actor's creator equals its stored ``_internal`` email. Before 4.0
 every load read the bucket and renamed the creator when they differed; now a
 write of the email to a different address renames the creator in the same
 atomic backend operation (``DbActor.rename_creator``), and a load is one

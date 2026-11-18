@@ -169,7 +169,7 @@ class TestBundledMaintenanceExitCodes:
         self, module: str, monkeypatch: Any, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A streamed scan faults where it is: the sweep stops there, keeps
-        what it did, and says how far it got (3.16)."""
+        what it did, and says how far it got (4.0)."""
         import importlib
         import logging
 

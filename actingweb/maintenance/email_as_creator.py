@@ -1,5 +1,5 @@
 """Move existing actors to their stored email once, and record that it ran
-(3.16): ``actingweb-unique-creators creator-to-email``.
+(4.0): ``actingweb-unique-creators creator-to-email``.
 
 Under ``with_email_as_creator`` a vouched actor's creator follows its stored
 email where the email is written (``actingweb.creator_sync``); a load no
@@ -27,11 +27,13 @@ from typing import Any
 from actingweb.constants import READINESS_BUCKET, READINESS_STORE
 from actingweb.db.exceptions import DbError
 
+from ..migration_guide import guide_section
+
 logger = logging.getLogger("unique_creators")
 
 MARKER_NAME = "email_as_creator"
 COMMAND = "actingweb-unique-creators creator-to-email"
-GUIDE = 'docs/migration/v3.16.rst, "The creator follows the stored email"'
+GUIDE = guide_section("The creator follows the stored email")
 SYSTEM_ACTOR_PREFIX = "_actingweb_"
 
 # Stores whose marker was seen synced in this process: a positive answer is
@@ -114,7 +116,7 @@ def settle(config: Any) -> str | None:
         _seen_synced.add(key)
         return None
     return (
-        "with_email_as_creator is on, but the actors that existed before 3.16 "
+        "with_email_as_creator is on, but the actors that existed before 4.0 "
         f"have not been moved to their stored email. Run '{COMMAND}', read its "
         f"dry run, then '{COMMAND} --apply' ({GUIDE}), or turn the flag off. "
         "(A store whose actor table could not be scanned to tell it empty is "

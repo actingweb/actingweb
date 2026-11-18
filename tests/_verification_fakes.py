@@ -1,7 +1,7 @@
 """Verification GETs through ``requests.get`` in tests that fake peers.
 
 A verification reads its peer through ``actingweb.actor._verification_get``
-(a session whose sockets the caller can shut down; 3.16). Tests that fake a
+(a session whose sockets the caller can shut down; 4.0). Tests that fake a
 peer's answers patch ``actingweb.actor.requests.get``; this fixture routes
 the verification there, with the same arguments, so those fakes see every
 verification GET. The real path is tested on its own, against a real slow

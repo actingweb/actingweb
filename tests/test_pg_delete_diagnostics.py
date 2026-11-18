@@ -249,7 +249,7 @@ class TestDiagnosticsCannotCauseTheBugTheyDiagnose:
             pg_attribute, "get_connection", lambda: DeadConnection([], 1)
         )
 
-        # 3.16: a delete fault raises DbError instead of answering False.
+        # 4.0: a delete fault raises DbError instead of answering False.
         with pytest.raises(DbError):
             pg_attribute.DbAttribute.set_attr(
                 actor_id="actor1", bucket="mcp_clients", name="mcp_abc", data=None

@@ -1,4 +1,4 @@
-"""The web UI's trust pages (3.16): the list says what both sides have done,
+"""The web UI's trust pages (4.0): the list says what both sides have done,
 the new-trust form is linked from the dashboard and the list, and a submit
 that fails returns to the form with a fixed message.
 

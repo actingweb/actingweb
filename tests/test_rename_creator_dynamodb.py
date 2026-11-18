@@ -1,4 +1,4 @@
-"""DynamoDB's ``rename_creator``: which condition cancelled it (3.16).
+"""DynamoDB's ``rename_creator``: which condition cancelled it (4.0).
 
 The codes of a cancelled transaction come back in the order PynamoDB sends
 the items, which is by kind (condition checks, deletes, puts, updates) and

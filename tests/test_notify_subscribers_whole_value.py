@@ -1,5 +1,5 @@
 """``SubscriptionManager.notify_subscribers(resource=...)`` sends a subscriber
-above the resource the subtarget's whole stored value (3.16).
+above the resource the subtarget's whole stored value (4.0).
 
 A receiver applies a target- or subtarget-level value whole, so the partial
 ``{resource: value}`` this call used to send made its replica lose the
@@ -138,7 +138,7 @@ def test_a_subtarget_subscriber_gets_the_whole_value_less_its_exclusion() -> Non
 
 def test_a_plain_notification_passes_no_whole() -> None:
     """An application's override of ``register_diffs`` with the signature
-    from before 3.16 keeps working for every call that needs no whole value."""
+    from before 4.0 keeps working for every call that needs no whole value."""
     w = _world()
     actor = Actor(aid(w.a), config=w.config)
     with mock.patch.object(Actor, "register_diffs", autospec=True) as register:

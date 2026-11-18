@@ -43,7 +43,7 @@ SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS = (
 class ClientRegistrationError(Exception):
     """A client could not be registered because its trust row could not be
     created: the actor is missing, the trust was refused, or an unexpected
-    error occurred (3.16). Nothing of the client is stored and no
+    error occurred (4.0). Nothing of the client is stored and no
     credentials are returned. ``POST /oauth/register`` answers it with a 500
     ``server_error`` whose text names no client and no actor. Not a
     ``ValueError``: that is a bad request (400 ``invalid_client_metadata``).
@@ -84,7 +84,7 @@ class MCPClientRegistry:
         ``client_name`` is sanitised (``actingweb.client_text``).
 
         The client's trust row is written first, then the client row and the
-        index row (3.16). When the trust row cannot be created this raises
+        index row (4.0). When the trust row cannot be created this raises
         :class:`ClientRegistrationError` with nothing stored; a storage fault
         raises ``DbError``, after removing a trust row already written.
 
@@ -114,7 +114,7 @@ class MCPClientRegistry:
             )
         is_public = auth_method == "none"
 
-        # A redirect URI carries no userinfo (3.16): ``https://a.example@b``
+        # A redirect URI carries no userinfo (4.0): ``https://a.example@b``
         # reads as a.example on a confirmation page while the code goes to b.
         for uri in registration_data.get("redirect_uris") or []:
             parsed = urlparse(str(uri))
@@ -137,7 +137,7 @@ class MCPClientRegistry:
             "trust_type": registration_data.get("trust_type", "mcp_client"),
             "created_at": int(time.time()),
             # What an anonymous registration asked for, kept for the owner
-            # to see (3.16; its row is always the default client type).
+            # to see (4.0; its row is always the default client type).
             **(
                 {"requested_trust_type": str(registration_data["requested_trust_type"])}
                 if registration_data.get("requested_trust_type")
@@ -153,7 +153,7 @@ class MCPClientRegistry:
             actor_id, self.config
         )
 
-        # The client's trust row first (3.16): it takes only the values
+        # The client's trust row first (4.0): it takes only the values
         # above, and a registration that cannot create it fails before any
         # client row or index row exists (ClientRegistrationError), so a
         # client that exists always had its trust row created.

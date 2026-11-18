@@ -1,4 +1,4 @@
-"""Flask: the factory form fallback without OAuth (3.16).
+"""Flask: the factory form fallback without OAuth (4.0).
 
 No Flask factory POST test existed before ``with_open_factory``. The refused
 creation must render ``aw-root-failed.html`` with the handler's status, not an

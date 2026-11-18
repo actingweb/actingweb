@@ -181,7 +181,7 @@ Custom clients are either confidential or public, set by
 Clients registered before 3.15 were stored as confidential whatever they
 asked for; a public client registered then must register again.
 
-**Anonymous registration** (``POST /oauth/register``, 3.16): the client
+**Anonymous registration** (``POST /oauth/register``, 4.0): the client
 lives on the OAuth2 system actor until a user signs in for it, so it may not
 choose its own level or a grant that needs no user. A ``trust_type`` the
 client list does not offer, or ``grant_types`` naming
@@ -320,7 +320,7 @@ This split exists because:
 **Important for Contributors:**
 
 ``delete_client(client_id, actor_id=...)`` deletes the client itself, and only for the actor it
-is registered under: since 3.16 a different ``actor_id`` is refused (``False``), because the
+is registered under: since 4.0 a different ``actor_id`` is refused (``False``), because the
 client's index row is global and deleting it would disable the client for every user. To end one
 user's connection to a client registered elsewhere (for example a dynamically registered client,
 which lives under the system actor), call ``delete_client_connection(actor_id, client_id)``, or
@@ -437,7 +437,7 @@ FastAPI Integration
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except ClientRegistrationError:
-            # 3.16: the client's trust row could not be created; nothing
+            # 4.0: the client's trust row could not be created; nothing
             # was stored. Not the caller's fault. (A DbError, a storage
             # fault, is left to the integration's 503.)
             raise HTTPException(status_code=500, detail="Client registration failed")

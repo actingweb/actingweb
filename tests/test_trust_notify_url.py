@@ -1,4 +1,4 @@
-"""The approval notification goes to the base URI the same call wrote (3.16,
+"""The approval notification goes to the base URI the same call wrote (4.0,
 plan Phase 4): ``modify_trust_and_notify(approved=True, baseuri=new)`` told
 the URL the row had before. A modify that does not notify reads nothing more.
 Real storage; both backends through ``DATABASE_BACKEND``.

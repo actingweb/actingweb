@@ -14,7 +14,7 @@ in ``actingweb/handlers/mcp.py``, not a public API — an application built on
 This document provides guidance for implementing caching in ActingWeb
 endpoints. It is based on the MCP endpoint, which caches what authentication
 resolves (the validated token and the client's trust relationship) and
-nothing of the actor: since 3.16 every MCP request loads its own actor (one
+nothing of the actor: since 4.0 every MCP request loads its own actor (one
 strongly consistent row read), because a shared actor object carried stale
 state between requests (its row, ``_internal``, properties and subscription
 list). Cache what a request *resolves*, never an object a request mutates
@@ -49,7 +49,7 @@ and two applications in one process may hold the same actor id.
 The caches are internal to the MCP handler, not an extension point. An entry
 of the token cache is honoured only when its ``"config"`` is the handler's
 own ``Config`` object (an identity test) and it is younger than
-``_cache_ttl``, and no actor is cached (3.16). Code in front of ``/mcp`` that
+``_cache_ttl``, and no actor is cached (4.0). Code in front of ``/mcp`` that
 needs to know whether a token is valid calls the token manager,
 ``get_actingweb_token_manager(config).validate_access_token(token)`` from
 ``actingweb.oauth2_server.token_manager``, not the cache; it returns
@@ -84,7 +84,7 @@ Implementation Pattern
 .. code-block:: python
 
     def authenticate(self) -> Any:
-        """Cache what validation resolved, never the actor (3.16)."""
+        """Cache what validation resolved, never the actor (4.0)."""
         token = self.extract_token()
         if not token:
             return None

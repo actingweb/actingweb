@@ -1168,7 +1168,7 @@ class MCPHandler(BaseHandler):
         # Build capabilities based on what's actually available
         capabilities: dict[str, Any] = {}
 
-        # listChanged is false for all three (3.16): this server never sends
+        # listChanged is false for all three (4.0): this server never sends
         # a notifications/*/list_changed, so a client must not wait for one.
         if self._has_mcp_tools():
             capabilities["tools"] = {"listChanged": False}

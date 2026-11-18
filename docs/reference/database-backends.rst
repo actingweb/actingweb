@@ -209,7 +209,7 @@ Example: 1 million requests/day
     - Storage: 10GB × $0.25/GB = $2.50/month
     Total: ~$12/month (62% savings with provisioned)
 
-With creator uniqueness on (the default since 3.16) an actor create, delete or
+With creator uniqueness on (the default since 4.0) an actor create, delete or
 creator change costs about 4-6 write units on DynamoDB instead of 1 (see
 :ref:`creator-uniqueness-backends`); the figures above assume the opt-out.
 
@@ -454,18 +454,18 @@ Notes:
 
 - ``<prefix>_subscription_suspensions`` is easy to miss: before 3.13 its
   accessor had no auto-create guard, so long-lived deployments may never have
-  created it. Since 3.16 a suspension check that cannot read the table is
+  created it. Since 4.0 a suspension check that cannot read the table is
   not taken for "not suspended": a write that has subscribers answers 503
   until the table exists. Deleting an actor, purging its relationships and
   creating one under an explicit id treat a missing table as holding no
   suspensions. Create it (leave auto-creation on, or create it with the
   others).
 - ``<prefix>_subscriptiondiffs`` is read and written by every actor
-  deletion and purge since 3.16; a missing table holds no diffs.
+  deletion and purge since 4.0; a missing table holds no diffs.
 - ``<prefix>_property_lookup`` (v1, no ``_v2``) and the ``property-index``
   GSI on ``<prefix>_properties`` are no longer read (the legacy reverse
-  lookup was removed in 3.16). Neither is created or required; drop them once
-  the backfill is verified (:doc:`../migration/v3.16`, "One reverse-lookup
+  lookup was removed in 4.0). Neither is created or required; drop them once
+  the backfill is verified (:doc:`../migration/v4.0`, "One reverse-lookup
   mechanism").
 - ``<prefix>_property_lookup_v2`` also holds reserved rows that record
   backfill readiness: ``#meta#backfill#<name>`` (one per indexed name) and
@@ -521,7 +521,7 @@ Index Strategy
   - ``CREATE INDEX idx_actors_creator ON actors(creator)``
   - ``CREATE INDEX idx_trusts_secret ON trusts(secret)``
   - ``CREATE INDEX idx_attributes_ttl ON attributes(ttl_timestamp)`` (for cleanup)
-- A partial index for attribute list range reads (3.16, revision
+- A partial index for attribute list range reads (4.0, revision
   ``a7b8c9d0e1f2``): ``CREATE INDEX ix_attributes_list_rows ON attributes
   (id, bucket, name COLLATE "C") WHERE starts_with(name, 'list:')``
 - ``attributes.bucket_name`` and ``attributes.name`` are ``TEXT`` since revision
@@ -551,7 +551,7 @@ Connection Management
 Fault Contract
 ~~~~~~~~~~~~~~
 
-Since 3.16 both backends answer a database fault the same way, and
+Since 4.0 both backends answer a database fault the same way, and
 ``actingweb.db.protocols`` states it once for every method:
 
 - **Absence is an answer.** A read that finds nothing answers ``None``,
@@ -571,7 +571,7 @@ Since 3.16 both backends answer a database fault the same way, and
   apart with ``get_attr_strict``). ``create_attr_if_absent`` is the one
   conditional write that **raises** ``DbError`` on a fault, because a retried
   create must tell a lost race from an outage. A custom ``DbAttribute`` backend
-  implements it (see :doc:`../migration/v3.16`); two callers writing identical
+  implements it (see :doc:`../migration/v4.0`); two callers writing identical
   data both get True, so a caller that needs one winner stores a nonce.
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises;
   False is kept for the documented refusals (missing arguments or handle, an

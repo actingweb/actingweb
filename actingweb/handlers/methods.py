@@ -19,7 +19,7 @@ from ..permission_evaluator import PermissionType, get_permission_evaluator
 logger = logging.getLogger(__name__)
 
 JSONRPC_FORBIDDEN = -32000
-"""The JSON-RPC error code of a method the caller's grant refuses (3.16)."""
+"""The JSON-RPC error code of a method the caller's grant refuses (4.0)."""
 
 
 class MethodsHandler(base_handler.BaseHandler):
@@ -29,12 +29,12 @@ class MethodsHandler(base_handler.BaseHandler):
         self, actor_id: str, auth_obj: Any, method_name: str, method: str = "POST"
     ) -> bool:
         """The shared access decision for a peer's ``/methods`` request
-        with the request's ``method`` (3.16): a rule the grant states (even
+        with the request's ``method`` (4.0): a rule the grant states (even
         empty) answers, else the access table; an evaluator that cannot be
         built denies. A caller that is not a peer is answered by the access
         table, as before."""
         method = getattr(self, "_verb_override", None) or method
-        # The verb the hooks this request runs are decided with (3.16).
+        # The verb the hooks this request runs are decided with (4.0).
         self._request_method = method
         return named_route_allows(
             self.config,
@@ -48,7 +48,7 @@ class MethodsHandler(base_handler.BaseHandler):
 
     def _listable_methods(self, actor_id: str, auth_obj: Any) -> list[Any]:
         """The methods a listing shows: all for a caller that is not a peer;
-        for a peer, each decided as a call of it would be (3.16), none when
+        for a peer, each decided as a call of it would be (4.0), none when
         the grant cannot be read (it showed all)."""
         assert self.hooks is not None
         entries = self.hooks.get_method_metadata_list()
@@ -184,7 +184,7 @@ class MethodsHandler(base_handler.BaseHandler):
     ) -> tuple[Any, bool] | None:
         """A POST's body, parsed, and whether it is JSON-RPC 2.0; None when
         the request was answered here (403, or 400 for a body that is not
-        JSON). Shared by the sync and async handlers (3.16).
+        JSON). Shared by the sync and async handlers (4.0).
 
         JSON-RPC on the bare ``/methods`` names its method in the body, which
         the JSON-RPC handler decides (:meth:`_body_method_refused`); every
@@ -219,7 +219,7 @@ class MethodsHandler(base_handler.BaseHandler):
         self, myself: Any, auth_obj: Any, params: dict[str, Any]
     ) -> dict[str, Any] | None:
         """On the bare ``/methods`` the URL named nothing to check: the method
-        the body names is decided before it is dispatched (3.16). The JSON-RPC
+        the body names is decided before it is dispatched (4.0). The JSON-RPC
         error when it is refused (answered with HTTP 403, as the named path
         is), else None."""
         if self._check_method_permission(
@@ -277,7 +277,7 @@ class MethodsHandler(base_handler.BaseHandler):
         check = auth_result.auth_obj
         if not auth_result.authorize("DELETE", "methods", name):
             return
-        # A peer is decided by its grant as well (3.16; DELETE was the one
+        # A peer is decided by its grant as well (4.0; DELETE was the one
         # method verb the grant did not answer).
         if not self._check_method_permission(actor_id, check, name, "DELETE"):
             if self.response:

@@ -5,7 +5,7 @@ Subscription Manager
 Overview
 --------
 
-A peer may subscribe only to what it may read (3.16, as the protocol
+A peer may subscribe only to what it may read (4.0, as the protocol
 requires): creating a subscription to a ``properties``, ``resources``,
 ``methods`` or ``actions`` path its grant does not let it read answers 403
 (``{"error": "forbidden"}``). A subscription to a whole target needs a rule
@@ -52,7 +52,7 @@ Usage
 
    # A change inside one property: write it first, then notify. A
    # subscriber above the resource is sent the property's whole stored
-   # value (3.16), one at resource level the resource's value.
+   # value (4.0), one at resource level the resource's value.
    actor.subscriptions.notify_subscribers(
        target="properties", data={"unit": "C"},
        subtarget="settings", resource="display",
@@ -71,14 +71,14 @@ Properties
 - ``all_subscriptions``: all inbound/outbound
 - ``outbound_subscriptions``: to other actors
 - ``inbound_subscriptions``: from other actors
-- ``get_subscriptions_by_peer()`` (3.16): every subscription grouped by peer
+- ``get_subscriptions_by_peer()`` (4.0): every subscription grouped by peer
   id, as ``PeerSubscriptions`` (``peer_id``, ``outbound``, ``inbound``); a
   peer with none has no key. Through a peer view only that peer's key;
   through a client view its trust's peer id and its client id (a client's
-  subscriptions filed before 3.16 are under the client id).
+  subscriptions filed before 4.0 are under the client id).
 
 An actor reads its subscription list once per instance, an empty list too
-(3.16): these listings, and every diff the instance registers, use that
+(4.0): these listings, and every diff the instance registers, use that
 read. The instance reads again after its own creates and deletes, a resume,
 and every call of the trust methods that can send a request to the peer. An instance kept across
 requests does not see subscriptions created elsewhere; the actors the
@@ -87,7 +87,7 @@ library hands to hooks and handlers are built per request.
 Callback Delivery
 -----------------
 
-Since 3.16 one sender delivers every subscriber's callback for a write
+Since 4.0 one sender delivers every subscriber's callback for a write
 (``actingweb.callback_sender``):
 
 - **Concurrently, with a bound per write.** Subscribers on other hosts are
@@ -136,7 +136,7 @@ so a subscriber that was skipped sees the gap at its next callback, or polls.
 Set it under a gateway's response limit, not as a tuning knob. See
 :doc:`../quickstart/deployment` for the two deployment shapes.
 
-Callback sends no longer set ``Actor.last_response_code`` (3.16); trust and
+Callback sends no longer set ``Actor.last_response_code`` (4.0); trust and
 peer calls still do.
 
 ========================
@@ -221,7 +221,7 @@ The ``with_subscription_processing()`` method accepts these parameters:
    * - ``max_concurrent_callbacks``
      - ``4``
      - Callbacks of one write sent at once to subscribers on other hosts
-       (read since 3.16; it was 10 and read by nothing)
+       (read since 4.0; it was 10 and read by nothing)
    * - ``callback_delivery_budget_seconds``
      - ``None``
      - Total time one request may spend delivering its callbacks; off unless
@@ -232,9 +232,9 @@ The ``with_subscription_processing()`` method accepts these parameters:
        only for one request per function instance
 
 ``max_payload_for_high_granularity``, ``circuit_breaker_threshold`` and
-``circuit_breaker_cooldown`` were removed in 3.16 (they configured
+``circuit_breaker_cooldown`` were removed in 4.0 (they configured
 ``FanOutManager``, which was never on the publish path): passing one raises
-``RuntimeError`` naming :doc:`../migration/v3.16`.
+``RuntimeError`` naming :doc:`../migration/v4.0`.
 
 Subscription Data Hooks
 -----------------------
@@ -335,14 +335,14 @@ Resync callbacks include a ``type`` field and a ``url`` to fetch the full state:
    }
 
 A resume sends this callback to every subscriber with a callback endpoint,
-whatever option tags it advertises (3.16; a peer cached without
+whatever option tags it advertises (4.0; a peer cached without
 ``subscriptionresync`` was sent the full state as ordinary diffs before). A
 subscriber that does not know the type re-reads on its own schedule.
 
 What a Subscriber Is Told
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Since 3.16 (specification 1.5) every writer, the REST handlers, the web UI
+Since 4.0 (specification 1.5) every writer, the REST handlers, the web UI
 and ``actor.properties``, registers the same diffs:
 
 - **A delete is ``""``** at the level that was deleted, and ``{name: ""}``
@@ -355,7 +355,7 @@ and ``actor.properties``, registers the same diffs:
 - **A nested write sends the parent's whole stored value** to a subscription
   above the resource (``{name: whole}`` at target level): a receiver applies
   a target- or subtarget-level value whole, so the partial ``{name: {key:
-  value}}`` sent before 3.16 dropped the parent's other keys from replicas.
+  value}}`` sent before 4.0 dropped the parent's other keys from replicas.
   A resource subscription still receives its resource.
 - **A diff carries the value stored after the property hooks**, not the
   request body.
@@ -388,7 +388,7 @@ What the receiver answers and does:
   name what the sweep removed.
 - **A resync whose fetch fails answers 503** with ``Retry-After``, records no
   sequence and marks the rebuild owed. The next callback runs the owed
-  rebuild once it is due, whatever its sequence; a publisher on 3.16 sends
+  rebuild once it is due, whatever its sequence; a publisher on 4.0 sends
   the resync again on its next resume. A gone resource (404) is an empty
   value, not a failure.
 - **A callback with ``data`` and no integer ``sequence`` answers 400**, as a
@@ -478,7 +478,7 @@ List Operations
 ~~~~~~~~~~~~~~~
 
 Every change to a property list registers a *list diff* on the list's own
-subtarget (3.16: the SDK, REST and web-UI edits alike). A diff always
+subtarget (4.0: the SDK, REST and web-UI edits alike). A diff always
 carries ``list`` (the list's name), ``operation`` and ``length`` (the
 publisher's list length after the change, advisory), plus the fields its
 operation needs. ``actingweb.property_list.build_list_diff()`` builds the
@@ -547,7 +547,7 @@ after the batch (``Actor.request_resync``).
 ``update_where()`` (added in 3.14) do not add new operations to this table
 -- the diff vocabulary above is closed, so a peer running an older
 ActingWeb version keeps understanding every diff it receives, except a
-3.16 *reference* (below). Instead:
+4.0 *reference* (below). Instead:
 
 - ``delete_by_handle()`` and a multi-match ``remove_where()`` each emit
   one ``remove`` diff per item actually removed, carrying that item's
@@ -568,7 +568,7 @@ ActingWeb version keeps understanding every diff it receives, except a
   ``PUT ?index=N`` update carries both, so an ambiguous match falls back
   to the index.)
 
-**References (3.16).** A list diff whose encoded blob would exceed the
+**References (4.0).** A list diff whose encoded blob would exceed the
 publisher's span threshold (``list_item_span_threshold``; 390,000 bytes on
 DynamoDB by default, off on PostgreSQL) is sent as a *reference*: the
 value-carrying fields (``item``, ``old_item``, ``value``, ``items``) are
@@ -582,7 +582,7 @@ That covers a spanned item, an ``update`` whose old and new values together
 are too large, and an ``extend`` of many items. The library's receiver does
 not apply a reference and does not fetch the values: the replica is out of
 step, a WARNING names the list and the operation, and the replica is
-rebuilt from a baseline (see `How a replica is stored`_). A reference is the one diff a pre-3.16 peer does not understand:
+rebuilt from a baseline (see `How a replica is stored`_). A reference is the one diff a pre-4.0 peer does not understand:
 with the value fields absent it answers ``unknown operation`` and stores
 nothing.
 
@@ -607,7 +607,7 @@ A subscriber keeps each peer's data in the attribute bucket
 attribute; a list is stored in the property list layout
 (``list:<name>-meta`` and one ``list:<name>-#<rank>`` row per item, an item
 over the span threshold in the side bucket ``remote:<peer_id>$aux``; see
-:doc:`property-lists`). A replica list written before 3.16 is read in place
+:doc:`property-lists`). A replica list written before 4.0 is read in place
 and converted on its first change.
 
 Where a callback's data lands depends on the subscription's level, which is
@@ -883,7 +883,9 @@ When processing subscription callbacks, the library returns these HTTP status co
      - No credentials
    * - 403
      - Forbidden
-     - Credentials of another peer, or a trust not approved
+     - Credentials of another peer, a trust not approved, or a subscription
+       id this actor does not hold for the peer the path names (4.0; that
+       was 404)
 
 ProcessResult Enum
 ~~~~~~~~~~~~~~~~~~

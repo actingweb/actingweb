@@ -51,5 +51,5 @@ def register_ui_hooks(app):
                 "data": {},
             }
 
-        # Not handled: the library answers 404 (3.16)
+        # Not handled: the library answers 404 (4.0)
         return False

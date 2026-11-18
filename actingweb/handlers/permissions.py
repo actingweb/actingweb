@@ -102,7 +102,7 @@ class PermissionsHandler(base_handler.BaseHandler):
                 custom_permissions, peer_id, getattr(trust_rel, "relationship", "")
             ):
                 # A client's override for another type is not applied
-                # (3.16): its type's defaults are its grant.
+                # (4.0): its type's defaults are its grant.
                 custom_permissions = None
 
             response_data: dict[str, Any] = {
@@ -133,7 +133,7 @@ class PermissionsHandler(base_handler.BaseHandler):
                     logger.error(
                         f"Trust type '{trust_rel.relationship}' not found in registry"
                     )
-                    # 404, as the trust permissions endpoint answers (3.16,
+                    # 404, as the trust permissions endpoint answers (4.0,
                     # specification 1.5; it was a 500).
                     if self.response:
                         self.response.set_status(

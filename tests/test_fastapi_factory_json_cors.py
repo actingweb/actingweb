@@ -1,4 +1,4 @@
-"""FastAPI: ``GET /?format=json`` CORS headers (3.16).
+"""FastAPI: ``GET /?format=json`` CORS headers (4.0).
 
 The configuration document is public, so any origin may read it and no
 credentials are allowed. It used to reflect the ``Origin`` together with

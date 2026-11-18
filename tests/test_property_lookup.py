@@ -663,7 +663,7 @@ class TestConfigurationIntegration:
             delattr(Config, "_instance")
 
         config = Config()
-        # The lookup table is the only reverse-lookup mechanism (3.16)
+        # The lookup table is the only reverse-lookup mechanism (4.0)
         assert not hasattr(config, "use_lookup_table")
         # Default indexed properties
         assert "oauthId" in config.indexed_properties
@@ -718,14 +718,16 @@ class TestBuilderConfigPrecedence:
 
 
 class TestRemovedLegacySwitch:
-    """The legacy-lookup switch fails loudly at configure time (3.16)."""
+    """The legacy-lookup switch fails loudly at configure time (4.0)."""
 
     def test_env_false_refuses_with_the_migration_pointer(self, monkeypatch):
         monkeypatch.setenv("USE_PROPERTY_LOOKUP_TABLE", "false")
         with pytest.raises(RuntimeError) as exc_info:
             Config()
         message = str(exc_info.value)
-        assert "docs/migration/v3.16.rst" in message
+        from actingweb.migration_guide import GUIDE_URL
+
+        assert GUIDE_URL in message
         assert "actingweb-property-lookup" in message
 
     def test_env_true_warns_and_is_ignored(self, monkeypatch):

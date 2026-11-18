@@ -1,4 +1,4 @@
-"""``/meta/actingweb/supported`` advertises what the app serves (3.16).
+"""``/meta/actingweb/supported`` advertises what the app serves (4.0).
 
 ``Config.aw_supported`` is computed from the configuration on every read, so
 a feature switched on after construction cannot leave a stale tag, and a tag
@@ -101,7 +101,7 @@ def test_with_mcp_adds_and_removes_the_tag_without_a_recompute() -> None:
 
 def test_the_permission_tags_are_advertised_with_caching_off() -> None:
     """Both endpoints are always served, so both tags are always there
-    (3.16; they needed peer permission caching)."""
+    (4.0; they needed peer permission caching)."""
     config = Config()
     assert not getattr(config, "peer_permissions_caching", False)
     assert {"permissioncallback", "permissionquery"} <= _tags(config)
@@ -110,7 +110,7 @@ def test_the_permission_tags_are_advertised_with_caching_off() -> None:
 
 
 def test_subscriptionbatch_is_not_advertised() -> None:
-    """Defined by no specification and served by nothing (3.16)."""
+    """Defined by no specification and served by nothing (4.0)."""
     for config in (Config(), Config(mcp=True, ui=False)):
         assert "subscriptionbatch" not in _tags(config)
 

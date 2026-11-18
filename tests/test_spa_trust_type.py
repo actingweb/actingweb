@@ -1,5 +1,5 @@
 """The SPA authorize route applies the client list to ``trust_type``
-(3.16, plan Phase 3): the field is the level for an MCP client."""
+(4.0, plan Phase 3): the field is the level for an MCP client."""
 
 from __future__ import annotations
 

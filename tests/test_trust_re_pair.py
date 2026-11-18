@@ -410,7 +410,7 @@ class TestTheInitiator:
         assert not Trust(actor_id=aid(w.b), peerid=other, config=w.config).get()
 
     def test_the_async_create_drops_its_row_on_any_send_error(self) -> None:
-        """3.16 (plan grant-enforcement-per-route, Phase 4): an exception
+        """4.0 (plan grant-enforcement-per-route, Phase 4): an exception
         that is not an httpx error (an invalid URL, say) dropped nothing, and
         the next attempt was taken for a re-pair of the half-made row."""
         w = Initiator()
@@ -1066,7 +1066,7 @@ class TestTheMetaCheckAndThePendingReplacement:
 class TestTheInitiatorAfterTheWholeBranchReview:
     def test_creating_the_trust_approves_a_pending_request(self) -> None:
         """Issue 1: the owner creating the trust toward a peer whose request
-        waits approves it, as before 3.16, instead of a re-pair."""
+        waits approves it, as before 4.0, instead of a re-pair."""
         w = Initiator()
         assert Trust(actor_id=aid(w.b), peerid=w.a, config=w.config).modify(
             approved=False
@@ -1826,7 +1826,7 @@ class TestTheApprovalPathAfterReverify7:
         assert w.row(w.b)["approved"] is False
 
     def test_an_approved_unverified_row_takes_a_repeated_approval(self) -> None:
-        """Issue 4: a row approved before 3.16 without a verification: an
+        """Issue 4: a row approved before 4.0 without a verification: an
         idempotent approval with another change neither probes nor fails."""
         w = Receiver()
         assert Trust(actor_id=aid(w.a), peerid=w.b, config=w.config).modify(

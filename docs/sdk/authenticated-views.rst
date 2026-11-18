@@ -165,7 +165,7 @@ is easy to guess wrong from its name:
     notes.update_by_handle(handle, item)   # requires "write"
     notes.update_where("status", "open", item)   # requires "write"
     notes.remove_where("status", "archived")     # requires "delete"
-    notes.append_once(item, key=draft_key)       # requires "write" (3.16)
+    notes.append_once(item, key=draft_key)       # requires "write" (4.0)
 
 ``delete_by_handle()`` requires ``write`` rather than ``delete`` because
 it targets exactly one item you already have a reference to, the same
@@ -232,7 +232,7 @@ Subscription Listings
 ``inbound_subscriptions`` list only the rows of the accessor's own trust: a
 peer view the subscriptions whose peer is that peer, a client view the ones
 whose peer is its trust's peer id, and a client view with no trust nothing.
-Owner mode lists every row. Before 3.16 a peer or client view listed every
+Owner mode lists every row. Before 4.0 a peer or client view listed every
 peer's subscriptions.
 
 .. code-block:: python

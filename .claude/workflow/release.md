@@ -17,6 +17,12 @@
 - A minor's changelog entry opens with a `.. note::` pointing at
   `docs/migration/vX.Y.rst`; confirm that file and its `index.rst` row exist.
   A patch has no migration file.
+- A major (`X.0.0`, the rule is in `CONTRIBUTING.rst`, "Which number a
+  release gets") is handled as a minor, with its guide at
+  `docs/migration/vX.0.rst`. Before tagging, also confirm that
+  `actingweb/migration_guide.py` points at that guide, that no message
+  spells a guide path itself (`tests/test_migration_guide.py`), and that
+  the tombstones the release leaves say they go at the next major.
 - After the tag: delete every `thoughts/todo/` file the release closed (and
   its `INDEX.md` row) and set the plan's `status: done` with its
   `verified:` link.

@@ -54,7 +54,7 @@ during a transition, `migrate_to_v2()`-style explicit per-list conversion,
    differ from DynamoDB's per-partition byte ceiling, so the case for moving
    PostgreSQL's `properties` table layout at all should be argued
    independently rather than assumed to follow DynamoDB's reasoning.
-4. The legacy GSI machinery is gone (3.16, `thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`),
+4. The legacy GSI machinery is gone (4.0, `thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`),
    so the new scheme is designed against the final lookup-table-only shape,
    with the lookup row written in the same `TransactWriteItems` as an indexed
    property.
@@ -117,7 +117,7 @@ cap.
 The attribute composite key `bucket + ":" + name` can collide, because both
 halves may contain `:`. Both backends now attribute a colliding row to the last
 writer and compare `bucket` exactly on every read and delete, which is the most
-that can be done without a key change. Since 3.16 every attribute write is
+that can be done without a key change. Since 4.0 every attribute write is
 conditioned on its bucket (`AttributeKeyCollision`), so a colliding write
 fails instead of replacing another bucket's row
 (`thoughts/plans/2026-11-13-attribute-list-v2-port.md`); the two names still

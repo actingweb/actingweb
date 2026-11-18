@@ -181,7 +181,7 @@ class TestActingWebOAuth2Server:
 
     @pytest.mark.parametrize("failure", ["trust refused", "client row fault"])
     def test_a_failed_registration_stores_nothing(self, test_app, failure):
-        """3.16: a registration whose trust row cannot be created answers 500
+        """4.0: a registration whose trust row cannot be created answers 500
         and stores nothing; a storage fault on the client row after the
         trust row answers 503 and removes that row and its token entry.
         Registration writes the trust row first."""

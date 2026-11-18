@@ -1,4 +1,4 @@
-"""The grant filter sees stored objects that arrive as JSON text (3.16,
+"""The grant filter sees stored objects that arrive as JSON text (4.0,
 verification 2026-11-10 of the grant-enforcement plan, Issues 1 and 2).
 
 The stores hand a property back as the text the database holds, and a
@@ -204,7 +204,7 @@ class TestListDiffObjects:
         self, actor
     ) -> None:
         """A subscriber to one property is sent its whole stored value
-        (3.16). A key named ``list:<x>`` in it that is not a list diff is
+        (4.0). A key named ``list:<x>`` in it that is not a list diff is
         part of that object: an exclusion beneath it holds (it passed
         whole)."""
         from actingweb.permission_evaluator import GrantSnapshot

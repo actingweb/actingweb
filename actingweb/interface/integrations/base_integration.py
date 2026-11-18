@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def template_fallback_status(status: int | None) -> int:
     """The status of the JSON answer sent when a template failed to render:
     the handler's own error status (a refusal page keeps it), else 500 (a
-    page that could not be shown is not a 200; 3.16)."""
+    page that could not be shown is not a 200; 4.0)."""
     return status if status and status >= 400 else 500
 
 

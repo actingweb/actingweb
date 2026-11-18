@@ -542,7 +542,7 @@ class TestSubscriptionsCollection:
 
         assert result is True
         mock_db_sub_list.delete.assert_called_once()
-        # The actor's diffs go in one delete by actor id, unread (3.16)
+        # The actor's diffs go in one delete by actor id, unread (4.0)
         mock_diff_list.delete_all_of_actor.assert_called_once_with("test_actor")
         mock_diff_list.fetch.assert_not_called()
 

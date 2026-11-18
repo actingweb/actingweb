@@ -532,7 +532,7 @@ class DbTrust:
             params.append(peer_approved)
             self.handle["peer_approved"] = peer_approved
 
-        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # The trust type (4.0: an OAuth2/MCP client's row follows the level
         # the user approved at its latest authorisation).
         if relationship:
             updates.append("relationship = %s")
@@ -623,7 +623,7 @@ class DbTrust:
         params.extend([actor_id, peerid])
         conditions = ["id = %s", "peerid = %s"]
         if only_if_verified:
-            # Verified, or approved already (a row approved before 3.16
+            # Verified, or approved already (a row approved before 4.0
             # without a verification: approving it again changes nothing).
             conditions.append("(verified = true OR approved = true)")
         if only_if_secret is not None:
@@ -660,7 +660,7 @@ class DbTrust:
 
         Returns:
             True when the row is gone after the call (an absent row counts);
-            False for missing arguments or handle, and (3.16) when
+            False for missing arguments or handle, and (4.0) when
             ``only_if_secret`` is given and a row with another secret is
             there (a re-pair replaced it), which is left alone
 

@@ -827,7 +827,7 @@ def oauth2_client(test_app, worker_info):
     """
     Create an authenticated OAuth2 client for testing OAuth2-protected endpoints.
 
-    An actor's owner creates the client for that actor (3.16: an anonymously
+    An actor's owner creates the client for that actor (4.0: an anonymously
     registered client may not use ``client_credentials``), and the client
     holds a ``client_credentials`` token bound to that actor.
 
@@ -1510,7 +1510,7 @@ def remote_store_verifier():
             list_name: str,
         ) -> bool:
             """Check if a list exists in the remote store (its ``-meta`` row
-            since 3.16; ``:meta`` for a list still in the old layout)."""
+            since 4.0; ``:meta`` for a list still in the old layout)."""
             data = self.get_stored_data(actor_url, actor_auth, peer_id)
             return f"list:{list_name}-meta" in data or f"list:{list_name}:meta" in data
 

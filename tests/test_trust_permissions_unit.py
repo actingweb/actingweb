@@ -878,7 +878,7 @@ def test_an_update_cannot_change_whose_override_it_is() -> None:
     )
     written: list[TrustPermissions] = []
     with (
-        # The stored override (3.16: an update merges from storage).
+        # The stored override (4.0: an update merges from storage).
         mock.patch.object(store, "get_permissions_uncached", return_value=existing),
         mock.patch.object(
             store,

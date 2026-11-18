@@ -48,7 +48,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
                 }
             ]
         )
-        # The PUT reads the row first (3.16: 404 for a missing row or another
+        # The PUT reads the row first (4.0: 404 for a missing row or another
         # relationship).
         self.actor.get_trust_relationship = Mock(
             return_value=self.actor.get_trust_relationships.return_value[0]
@@ -163,7 +163,7 @@ class TestTrustHandlerPermissions(unittest.TestCase):
                 "methods": {"allowed": ["get_profile"]},
             },
         )
-        # Stored silently; the peer is told once the trust write landed (3.16).
+        # Stored silently; the peer is told once the trust write landed (4.0).
         self.permission_store.store_permissions.assert_called_once_with(
             mock_permissions, notify_peer=False
         )
@@ -214,7 +214,7 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------------------------
-# 3.16 (plan grant-enforcement-per-route, Phase 4): the PUT writes the grant
+# 4.0 (plan grant-enforcement-per-route, Phase 4): the PUT writes the grant
 # first, then the trust; a failure leaves both as they were. Real storage.
 # ---------------------------------------------------------------------------
 

@@ -94,7 +94,7 @@ class TestFetchAndTransformBaseline:
             {"id": "1", "location": "Paris"},
             {"id": "2", "location": "Tokyo"},
         ]
-        # The list's items, then its metadata (3.16: an array is a list's
+        # The list's items, then its metadata (4.0: an array is a list's
         # only when the metadata route answers).
         mock_proxy.get_resource.side_effect = [items, {"description": ""}]
         mock_proxy.last_response_code = 200
@@ -423,7 +423,7 @@ class TestSyncSubscriptionBaselineFetch:
     )
     def test_an_empty_answer_elsewhere_is_still_a_success(self, target, resource):
         """A resource-level or another target's empty answer stores nothing
-        and succeeds (advisor on iteration 28). Since 3.16 (spec-1-5 Phase 3)
+        and succeeds (advisor on iteration 28). Since 4.0 (spec-1-5 Phase 3)
         an empty answer is ``{}`` and ``None`` is a failed fetch at every
         level."""
         actor = FakeCoreActor()

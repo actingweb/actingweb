@@ -41,7 +41,8 @@ The core ``Actor`` class provides these async methods:
         ) -> Optional[Dict]
 
         async def delete_reciprocal_trust_async(
-            self, peerid=None, delete_peer=False,
+            self, peerid=None, delete_peer=False, *,
+            expected_secret=None, before_local_delete=None,  # 4.0
         ) -> bool
 
         # Subscription operations

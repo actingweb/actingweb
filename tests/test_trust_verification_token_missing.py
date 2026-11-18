@@ -20,7 +20,7 @@ pytestmark = pytest.mark.usefixtures("verification_through_requests_get")
 
 
 def _streamed(response: MagicMock) -> MagicMock:
-    """The verification reads its answer streamed (3.16)."""
+    """The verification reads its answer streamed (4.0)."""
     body = response.content
     response.iter_content = lambda chunk_size=1: iter([body])
     return response
@@ -44,7 +44,7 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
-        # No row before the request (3.16: a creation request never replaces
+        # No row before the request (4.0: a creation request never replaces
         # one), then the row it created.
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
@@ -72,14 +72,14 @@ class TestVerificationTokenMissingFromPeerResponse:
         peer_response = MagicMock()
         peer_response.status_code = 200
         # The initiator's own row, approved before it sent the request
-        # (3.16: an unapproved answering row does not verify).
+        # (4.0: an unapproved answering row does not verify).
         peer_response.content = (
             b'{"verification_token": "expected-token", "approved": true}'
         )
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
-        # No row before the request (3.16: a creation request never replaces
+        # No row before the request (4.0: a creation request never replaces
         # one), then the row it created.
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 
@@ -88,7 +88,7 @@ class TestVerificationTokenMissingFromPeerResponse:
                 "actingweb.actor.requests.get", return_value=_streamed(peer_response)
             ),
             patch("actingweb.actor.trust.Trust", return_value=mock_trust),
-            # The base URI serves the claimed id (3.16 binds the two).
+            # The base URI serves the claimed id (4.0 binds the two).
             patch.object(Actor, "_base_uri_serves", return_value=True),
         ):
             actor.create_verified_trust(
@@ -111,7 +111,7 @@ class TestVerificationTokenMissingFromPeerResponse:
 
         mock_trust = MagicMock()
         mock_trust.create.return_value = True
-        # No row before the request (3.16: a creation request never replaces
+        # No row before the request (4.0: a creation request never replaces
         # one), then the row it created.
         mock_trust.get.side_effect = [None, {"peerid": "peer-1"}]
 

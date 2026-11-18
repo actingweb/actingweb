@@ -222,7 +222,7 @@ SUBSCRIBER_ACL_RULES: list[tuple[str, str, str]] = [
     ("permissions/<id>", "GET", "a"),
 ]
 
-# The two rows the consumer adds when it adopts 3.16 (the security plan's
+# The two rows the consumer adds when it adopts 4.0 (the security plan's
 # migration step): PUT and DELETE on the path the GET row covers.
 SUBSCRIBER_ADOPTION_ROWS: list[tuple[str, str, str]] = [
     ("subscriptions/<id>/<subid>", "PUT", "a"),
@@ -422,7 +422,7 @@ def _add_recording_hooks(aw_app: ActingWebApp) -> None:
 
     @aw_app.callback_hook("wire_webhook", allow_anonymous=True)
     def record_webhook(actor, name, data):
-        """A third party's webhook (``allow_anonymous``, 3.16): records what
+        """A third party's webhook (``allow_anonymous``, 4.0): records what
         the hook is given to verify its caller with."""
         record_event(
             "callback",

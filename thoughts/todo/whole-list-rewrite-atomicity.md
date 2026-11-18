@@ -91,7 +91,7 @@ and the rank-collision retry loop becomes unnecessary. Cut on three findings:
   sorts inside list `foo`'s v1 range. So "the inactive namespace" has a defined
   extent under v1. `sweep_foreign_format_rows()` is the existing consumer.
 
-## Attribute lists (3.16)
+## Attribute lists (4.0)
 
 Attribute lists are now the same list core (`thoughts/plans/2026-11-13-attribute-list-v2-port.md`):
 `ListAttribute.compact()` has the window `ListProperty.compact()` has, and
@@ -104,4 +104,4 @@ window. A design here now covers both stores through `ListCore`.
 - `thoughts/plans/2026-08-15-property-list-metadata-integrity.md` — the plan
   that deferred this; "Designs cut" is the long form of both post-mortems.
 - `thoughts/plans/2026-11-13-attribute-list-v2-port.md` — put attribute
-  lists on the list core (3.16), which inherited this gap, as noted above.
+  lists on the list core (4.0), which inherited this gap, as noted above.

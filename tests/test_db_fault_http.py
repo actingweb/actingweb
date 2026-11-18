@@ -1,4 +1,4 @@
-"""A database fault answers 503 over HTTP, in both integrations (3.16).
+"""A database fault answers 503 over HTTP, in both integrations (4.0).
 
 ``DbError`` is an availability fault: the answer is ``503`` with
 ``Retry-After: 5`` and a fixed body that never carries the exception text (it

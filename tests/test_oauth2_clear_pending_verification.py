@@ -35,7 +35,7 @@ class TestClearPendingEmailVerification:
             assert clear_pending_email_verification(actor, config) is True
 
         mock_index.delete_attr.assert_called_once_with("tok-abc")
-        # The flag decides the vouch, so its delete is confirmed (3.16).
+        # The flag decides the vouch, so its delete is confirmed (4.0).
         actor.store.set_confirmed.assert_called_once_with("email_verified", None)
         assert actor.store.email_verification_token is None
         assert actor.store.email_verification_created_at is None

@@ -308,7 +308,7 @@ class ListNameTakenError(ValueError):
     """A name is taken across the scalar and list namespaces: a list cannot
     be created where a scalar row of the same name exists (a property, or an
     attribute), and a property cannot be written where a list of that name
-    exists (3.16; a plain ``ValueError`` before). A ``ValueError`` as before;
+    exists (4.0; a plain ``ValueError`` before). A ``ValueError`` as before;
     the replica path catches it to replace the scalar with the list, and the
     HTTP handlers answer it 409."""
 
@@ -322,7 +322,7 @@ class ListRankExhaustedError(RuntimeError):
 
 
 class ListLayoutConflictError(ListCorruptionError):
-    """The list's rows are in two layouts at once (what a pre-3.16 writer
+    """The list's rows are in two layouts at once (what a pre-4.0 writer
     leaves beside a converted attribute list), or a conversion met rows it
     did not write. Neither copy is known to be right; nothing is merged."""
 
@@ -2366,7 +2366,7 @@ class ListCore:
 
     def append_indexed(self, item: Any) -> int | None:
         """Add ``item`` to the end of the list and return the index it landed
-        at (3.16), or None when the item was written but its index could not
+        at (4.0), or None when the item was written but its index could not
         be read.
 
         The index is the position of the rank this append wrote, in a read
@@ -2771,7 +2771,7 @@ class ListCore:
 
         **v2 only.** Raises ``ValueError`` naming ``migrate_to_v2()`` on a v1
         list. The first keyed item makes the list unreadable to readers
-        older than 3.16 (as a spanned item does).
+        older than 4.0 (as a spanned item does).
 
         Raises:
             ValueError: The key is invalid, the list is v1, or the item

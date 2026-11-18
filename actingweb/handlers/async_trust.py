@@ -64,7 +64,7 @@ class AsyncTrustHandler(TrustHandler):
             self.response.set_status(400, "Missing peer URL")
             return
         if is_reserved_relationship(relationship):
-            # A role or an access-table keyword, never a peer (3.16).
+            # A role or an access-table keyword, never a peer (4.0).
             self.response.set_status(400, "Reserved relationship name")
             return
 

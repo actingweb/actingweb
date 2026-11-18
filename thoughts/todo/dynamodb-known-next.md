@@ -85,7 +85,7 @@ matters.
 
 ## 7. Lookup-table write path amplification
 
-Since 3.16 an indexed property write is one `TransactWriteItems` (the property,
+Since 4.0 an indexed property write is one `TransactWriteItems` (the property,
 its lookup row and the old value's lookup row), which closes the "property
 saved, lookup write failed" window (it raises `DbError` instead) and costs
 about twice the write units of a plain put on indexed names only. What
@@ -99,4 +99,4 @@ often.
 - `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md` — the
   subscription-list memo, which cost one strongly-consistent Query per
   property write for actors with no subscribers, keeps an empty list too
-  since 3.16. Its fetch is still one of item 2's relaxation candidates.
+  since 4.0. Its fetch is still one of item 2's relaxation candidates.

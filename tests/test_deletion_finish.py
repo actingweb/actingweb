@@ -555,7 +555,7 @@ class TestLeaseKeeper:
 
     def test_the_generation_is_bumped_before_the_token_sweep(self, env: Any) -> None:
         """A refresh whose consume preceded the sweep mints after it; the
-        bump makes its generation guard delete what it minted (3.16)."""
+        bump makes its generation guard delete what it minted (4.0)."""
         from actingweb import session_generation
 
         config, hooks, _events = env

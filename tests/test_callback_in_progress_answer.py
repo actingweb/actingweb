@@ -1,5 +1,5 @@
 """A callback whose sequence another delivery is handling answers 503, not
-204 (3.16, owner-decided plan D13).
+204 (4.0, owner-decided plan D13).
 
 A 204 to a high-granularity callback clears the diff on the publisher, which
 does not retry; if the delivery holding the claim then fails, the diff would

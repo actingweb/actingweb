@@ -1,4 +1,4 @@
-"""Removed in 3.16.
+"""Removed in 4.0.
 
 ``FanOutManager`` and ``FanOutResult`` were never on the publish path: the
 library sends subscription callbacks with ``actingweb.callback_sender``,

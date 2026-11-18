@@ -163,11 +163,11 @@ class PermissionType(Enum):
 
 # Categories where an exclusion covers a path's descendants (a property or
 # resource tree), and where a rule the grant states but does not match denies
-# (3.16; methods and actions follow in a later phase of the same plan).
+# (4.0; methods and actions follow in a later phase of the same plan).
 TREE_CATEGORIES = frozenset({PermissionType.PROPERTIES, PermissionType.RESOURCES})
 # Categories where a rule the grant states but that does not match a named
 # target denies (DENIED, not NOT_FOUND): the access table never overrides a
-# stated rule (3.16). Tools and prompts are MCP's, which denies anything but
+# stated rule (4.0). Tools and prompts are MCP's, which denies anything but
 # ALLOWED already.
 STATED_RULE_CATEGORIES = TREE_CATEGORIES | {
     PermissionType.METHODS,
@@ -200,7 +200,7 @@ def _excluded_by(patterns: list[str], node: str) -> bool:
 
 
 def path_excluded(rules: Any, path: str) -> bool:
-    """Whether ``path`` or any ancestor of it is excluded by ``rules`` (3.16).
+    """Whether ``path`` or any ancestor of it is excluded by ``rules`` (4.0).
 
     An exclusion covers its node and the node's descendants: with
     ``settings/private`` excluded, ``settings/private/x`` is excluded too.
@@ -227,7 +227,7 @@ def drop_excluded(rules: Any, path: str, value: Any) -> Any:
 
     A value nested deeper than :data:`MAX_FILTER_DEPTH` (or text nested
     beyond the JSON parser, :data:`TOO_DEEP`) cannot be walked safely: it is
-    withheld, ``None``, rather than returned unfiltered (3.16).
+    withheld, ``None``, rather than returned unfiltered (4.0).
     """
     patterns = exclusion_patterns(rules)
     if not patterns:
@@ -243,7 +243,7 @@ def drop_excluded(rules: Any, path: str, value: Any) -> Any:
 MAX_FILTER_DEPTH = 100
 """How deep the exclusion filter walks a value (objects and arrays). A value
 nested deeper is withheld from a peer whose grant excludes anything, and a
-peer's write of one is refused (3.16): the walk and the comparisons after it
+peer's write of one is refused (4.0): the walk and the comparisons after it
 recurse, and Python's recursion limit would end them with an error."""
 
 
@@ -283,7 +283,7 @@ class _TooDeepToWalk(Exception):
 
 
 def _drop(patterns: list[str], path: str, value: Any, depth: int) -> Any:
-    """One walk (3.16): objects are filtered, kept arrays only measured; a
+    """One walk (4.0): objects are filtered, kept arrays only measured; a
     kept part deeper than :data:`MAX_FILTER_DEPTH` raises (an excluded part
     is dropped unwalked, whatever its depth)."""
     if isinstance(value, list):
@@ -308,10 +308,10 @@ def as_json_object(value: Any) -> Any:
     anything else (a plain string, a number, text that is not JSON);
     :data:`TOO_DEEP` for text nested beyond the parser (withheld by the
     filter, not sent as text). The stores hand objects back as text, and a
-    property can be written as the text of an object (3.16: the grant filter
+    property can be written as the text of an object (4.0: the grant filter
     walks objects only).
 
-    Text is read as a JSON client reads it (3.16): a client parses the UTF-8
+    Text is read as a JSON client reads it (4.0): a client parses the UTF-8
     bytes it receives with ``json.loads(bytes)``, which skips a byte-order
     mark and reads UTF-16/32, so such text is JSON here too (a filter that
     took it for plain text sent the client an object it never filtered).
@@ -352,7 +352,7 @@ def _client_text(data: bytes) -> str | None:
     except (UnicodeDecodeError, LookupError):
         return None
     # The codec consumed the one byte-order mark ``json.loads`` skips; no
-    # other is stripped (3.16: every leading one was, so text a client
+    # other is stripped (4.0: every leading one was, so text a client
     # rejects was parsed here).
     return text if text.lstrip()[:1] in ("[", "{") else None
 
@@ -360,12 +360,12 @@ def _client_text(data: bytes) -> str | None:
 def withheld(value: Any, filtered: Any) -> bool:
     """Whether :func:`drop_excluded` withheld ``value`` (too deep to
     filter): it answered ``None`` for a value that was not ``None``. The
-    caller leaves the value out (3.16), never sends it as ``null``."""
+    caller leaves the value out (4.0), never sends it as ``null``."""
     return filtered is None and value is not None
 
 
 def beyond_parser(value: Any) -> bool:
-    """Whether ``value`` is JSON text nested beyond the parser (3.16). Such
+    """Whether ``value`` is JSON text nested beyond the parser (4.0). Such
     text is never sent to a peer, whatever its grant (nothing about it can
     be checked: a sub-path, an exclusion, a read hook); the owner reads it
     as plain text is read. A caller that parses the value anyway uses
@@ -386,7 +386,7 @@ def holds_excluded(rules: Any, path: str, *values: Any) -> bool:
 
 @dataclass(frozen=True)
 class GrantSnapshot:
-    """What one peer is granted at one actor, read once (3.16).
+    """What one peer is granted at one actor, read once (4.0).
 
     ``has_row``/``approved``: the actor's trust row for the peer and its
     approval. ``relationship``: the row's trust type. ``is_client``: the peer
@@ -431,7 +431,7 @@ class PermissionEvaluator:
 
     @property
     def permission_store(self) -> Any:
-        """The trust permission store, looked up on each use (3.16): the
+        """The trust permission store, looked up on each use (4.0): the
         store is a singleton rebuilt when another application's config asks
         for it (two apps in one process), and an evaluator that kept the one
         it was built with read that store's cache while writes went to the
@@ -840,7 +840,7 @@ class PermissionEvaluator:
         suppress_logging: bool = False,
     ) -> PermissionResult:
         """A stated rule (the category is in the grant, even empty) applied to
-        ``target`` (3.16).
+        ``target`` (4.0).
 
         For properties and resources an exclusion holds on the path and its
         descendants (:func:`path_excluded`) ahead of every allow, and a rule
@@ -874,7 +874,7 @@ class PermissionEvaluator:
         self, actor_id: str, peer_id: str, *, row: Any = None
     ) -> GrantSnapshot:
         """What ``peer_id`` is granted at ``actor_id``, from one trust-row
-        read and the (cached) override and registry lookups (3.16). ``row``:
+        read and the (cached) override and registry lookups (4.0). ``row``:
         the trust row when the caller read it already (no second read). A
         storage fault raises ``DbError``."""
         if row is None and self.config and hasattr(self.config, "DbTrust"):
@@ -950,7 +950,7 @@ class PermissionEvaluator:
         """``(unapproved, relationship)``: whether the peer has no trust row,
         or one this actor has not approved, and the row's type (None when no
         row was read), so the effective permissions need no second read
-        (3.16). Such a peer is granted nothing here: its secret authenticates
+        (4.0). Such a peer is granted nothing here: its secret authenticates
         it (``auth.py``), and anyone can file a trust request with a
         relationship of its choice, so a grant may only follow an approval.
         The access table refuses it the same way

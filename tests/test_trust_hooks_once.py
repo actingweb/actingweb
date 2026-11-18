@@ -1,4 +1,4 @@
-"""Trust hooks fire once, with the same arguments, on every route (3.16, plan
+"""Trust hooks fire once, with the same arguments, on every route (4.0, plan
 grant-enforcement-per-route, Phase 4, A14 to A16).
 
 Approval: ``trust_fully_approved_local`` once, on the transition to approved

@@ -33,10 +33,16 @@ Error Handling
 
 .. code-block:: python
 
+   from actingweb.db.exceptions import CreatorTaken
+
    try:
        actor = ActorInterface.create(creator="user@example.com", config=app.get_config())
+   except CreatorTaken:
+       # 4.0: creator uniqueness is on by default; another actor holds it
+       print("That creator already has an actor")
    except RuntimeError as e:
        print(f"Failed to create actor: {e}")
+   # A DbError (backend fault) is left to propagate: the integrations answer 503
 
    @app.property_hook("email")
    def safe_email(actor, operation, value, path):
@@ -118,7 +124,7 @@ Async Peer Communication
        result = await proxy.get_resource_async(path="properties/public")
 
        # The proxy's own last_response_code (unchanged); subscription
-       # callback sends no longer set the actor's (3.16).
+       # callback sends no longer set the actor's (4.0).
        if proxy.last_response_code != 200:
            raise HTTPException(status_code=502, detail="Failed to reach peer")
 

@@ -217,7 +217,7 @@ class TestClientManager:
     def test_create_client_raises_when_the_trust_row_cannot_be_created(
         self, env: Any
     ) -> None:
-        # 3.16: a client whose trust row cannot be created is not registered.
+        # 4.0: a client whose trust row cannot be created is not registered.
         from actingweb.oauth2_server.client_registry import ClientRegistrationError
 
         server, store = env

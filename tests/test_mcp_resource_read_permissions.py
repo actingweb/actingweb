@@ -197,7 +197,7 @@ def _allow_all(*_a, **_k):
 
 
 def _contents_hooks(seen: list[dict[str, Any]]) -> HookRegistry:
-    """Resources whose results cover every formatting branch (3.16)."""
+    """Resources whose results cover every formatting branch (4.0)."""
     hooks = HookRegistry()
 
     @mcp_resource(uri_template="typed://{id}", mime_type="application/x-test")
@@ -245,7 +245,7 @@ def _contents_hooks(seen: list[dict[str, Any]]) -> HookRegistry:
 class TestSyncAsyncResourceReadContents(unittest.TestCase):
     """Flask and FastAPI answer ``resources/read`` with the same body,
     ``mimeType`` and hook arguments, and match ``uri_pattern`` the same
-    (3.16: the async path used ``str()``, a key the decorator never writes,
+    (4.0: the async path used ``str()``, a key the decorator never writes,
     and no pattern fallback)."""
 
     def _read(

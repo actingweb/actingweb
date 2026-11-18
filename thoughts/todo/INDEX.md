@@ -4,9 +4,9 @@ Every file in this directory, ordered by what to do next. **Last full re-rank:
 2026-11-01.** Rows, files and the todos the 3.16 roll-up touched were
 re-checked on 2026-11-05, after it merged; the order still stands. Every row
 was checked against its file, and the todos `spec-1-5` touched against the
-code, on 2026-11-16 after #178 merged. Rows marked
-**Planned for 3.16** have an owner-chosen approach and a proposed plan
-(2026-11-06); the order they are taken in is the first section below.
+code, on 2026-11-16 after #178 merged. The plans that made up the release
+after 3.15.1 (4.0.0) and their order were listed here until the last of
+them, `3-16-release-validation`, merged; that history is in the plans.
 
 **This directory holds only what is *not* done.** When work lands, its file is
 deleted — the plan and the verification are the record, and they are where the
@@ -31,80 +31,6 @@ moderate problem outranks an expensive fix to a slightly worse one.
 
 ---
 
-## Planned for 3.16: order, dependencies and gates
-
-Ten plans: six from 2026-11-06, plus `grant-enforcement-per-route` (0b,
-2026-11-10), `3-16-release-validation` (6, 2026-11-15),
-`3-16-pre-validation-fixes` (5b, 2026-11-16) and `3-16-pre-rc1-fixes` (5c,
-2026-11-17). Nine have merged; `3-16-release-validation` is
-`status: proposed`. **This section is
-the one copy of the order, of what depends on what between the plans, and of
-the gates between them.** Each plan keeps a pointer here and its own "This
-plan" paragraph, which says what that plan uses from the others and wins on
-that detail. One PR per plan, one commit per phase. A plan starts when the one
-before it has merged and its gates are met, because the checks allow one test
-run at a time. The 3.16 tag stays held until all ten have merged. The history of the merged plans is in their plans and
-verifications, not here.
-
-| Order | Plan | Todo it closes | Needs first |
-| --- | --- | --- | --- |
-| Each plan | [Emm's suite](emm-suite-against-master.md) on the plan's branch before its PR (gate 2) | Itself, once the last plan has merged with its run | The worktrees and environment 9 exist |
-| 0 | [`peer-authorisation-fixes`](../plans/2026-11-06-peer-authorisation-fixes.md) | — | **Merged** (#171, 2026-11-11) |
-| 0b | [`grant-enforcement-per-route`](../plans/2026-11-10-grant-enforcement-per-route.md) | — | **Merged** (#172, 2026-11-11) |
-| 1 | [`subscription-wire-baseline`](../plans/2026-11-06-subscription-wire-baseline.md) | — | **Merged** (#173, 2026-11-12) |
-| 2 | [`subs-list-cache-lifetime`](../plans/2026-11-06-subs-list-cache-lifetime.md) | — | **Merged** (#175, 2026-11-13) |
-| 3 | [`attribute-list-v2-port`](../plans/2026-11-13-attribute-list-v2-port.md) | — | **Merged** (#176, 2026-11-15) |
-| 4 | [`email-as-creator-at-write-time`](../plans/2026-11-06-email-as-creator-at-write-time.md) | The vouched SDK rename | **Merged** (#177, 2026-11-15) |
-| 5 | [`spec-1-5`](../plans/2026-11-06-spec-1-5.md): specification 1.5 and a library that conforms to it, concurrent callback delivery, `FanOutManager` removed | Subscription docs: status codes and `FanOutManager` samples (closed in Phase 4); it files [`outbound-callback-backpressure.md`](outbound-callback-backpressure.md) | **Merged** (#178, 2026-11-16) |
-| 5b | [`3-16-pre-validation-fixes`](../plans/2026-11-16-3-16-pre-validation-fixes.md): the receiver keeps every callback, a resume always sends a resync, `notify_subscribers(resource=)` sends the whole value, polls tell the data hooks, `CallbackOauthHandler` removed, the trust pages show both sides | Low-granularity concurrent writes, the callback concurrency test, the full-state fallback, `CallbackOauthHandler` unrouted, the web UI's trust page gaps (all closed); trims the subscriber-hooks todo to one item | **Merged** (#179, 2026-11-17) |
-| 5c | [`3-16-pre-rc1-fixes`](../plans/2026-11-17-3-16-pre-rc1-fixes.md): the permission cache expires, a registration without its trust row fails, `listChanged: false` and the discovery flags, a granted text property on the replica, a Basic challenge for the web UI | The demo's QA basic-auth prompt (todo deleted); trims the MCP cache, connector-conformance and subscriber fault-hardening todos | **Merged** (#181, 2026-11-18) |
-| 6 | [`3-16-release-validation`](../plans/2026-11-15-3-16-release-validation.md): the release read as one before its tag: changelog and migration guide, Emm's questions and coverage of its uses, the demo and `actingwebdemo`, the wire between 3.15 and 3.16, agent discoverability | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md), as far as the owner's resources reach; [Emm's suite](emm-suite-against-master.md) with its last run | `spec-1-5` merged (met); `3-16-pre-rc1-fixes` merged (met); approved and started 2026-11-18. Phase 1 is done: the release is **4.0.0** (owner), [the key-prefix scheme](prop-list-key-prefix-scheme.md) and [the DynamoDB register](dynamodb-known-next.md) stay out, the live pair with 3.15.1 completed 18 of 18 cells and every difference found is accepted. Phases 2 to 4 follow; Phase 4 renames 3.16 to 4.0. **In progress.** |
-
-A todo these plans edit without closing:
-[subscriber fault hardening](subscription-subscriber-fault-hardening.md)
-(plan 5).
-
-### What the remaining plans must carry from the merged ones
-
-| Plan | From | What |
-| --- | --- | --- |
-| `spec-1-5` | `attribute-list-v2-port` | Hard: it documents the list diffs that plan creates and edits the same functions after it |
-| `email-as-creator-at-write-time` | `subs-list-cache-lifetime` | The MCP loads go through `_load_actor` (`handlers/mcp.py`), which passes `rewrite_email=False` to `Actor.get`; this plan removes that keyword and must remove the argument there too |
-| `email-as-creator-at-write-time` | `attribute-list-v2-port` | Its attribute writes carry the bucket condition every attribute write now has, and its check is the fourth in `check_ready()` (its plan, Update Log 2026-11-15) |
-| `spec-1-5` | `email-as-creator-at-write-time` | Its trustee text ("access ends only when the passphrase, creator or trustee root changes") rests on that plan's change that a handoff to a trustee persists under the email flag, and its handback rule (an unvouched holder of the recorded address is renamed to its `#dup-` value); its redraft cites them |
-| `spec-1-5` | `attribute-list-v2-port` | It edits the resync block of `callback_processor.py` (`_reset_state` and the handler's fault paths), which now keeps the owed rebuild |
-| `spec-1-5` | `subscription-wire-baseline` | Its phases name the recordings they re-record and the ones that must stay identical (gate 5) |
-| `3-16-release-validation` | `3-16-pre-rc1-fixes` | Its changelog and guide review reads six more entries (one `SECURITY`, two **Breaking:**), its recordings review meets `WG16` and `WG17` re-recorded, and its demo walk signs in through the browser's Basic prompt on Flask |
-| `3-16-release-validation` | `subscription-wire-baseline` | It normalises the library version out of the recordings and re-records the eight that carry it (`WT1`, `WT3`, `WT4`, `WG16`, `WG17`), so a version bump changes none; gate 5 for this plan is those eight and any a restored 3.15 behaviour changes |
-| `3-16-release-validation` | every plan | It judges the release whole: the final changelog and guide, specification 1.5 from `spec-1-5`, the recordings as the record of the 3.16 wire, and the Emm baseline and worktrees; findings are fixed in it, not filed |
-
-Plan 5 edits the same publisher and receiver code (`register_diffs`,
-`callback_subscription`, `apply_callback_data`, `handlers/subscription.py`)
-that plans 2 and 3 just changed; a fault one introduces and the next exposes
-is the case the gates below are for.
-
-### Gates
-
-Gates 1 (Emm's suite on `master`, met 2026-11-07) and 4 (the Emm-shaped
-recordings, met 2026-11-11) are met and done; the numbers of the others are
-kept because verifications cite them.
-
-2. **Before the PR opens, for each plan that changes library code:** Emm's
-   suite on that plan's branch shows no failure the baseline did not have
-   (the five tests in `research/2026-11-07-emm-suite-against-master.md` and
-   Emm's own date-dependent case; `3-16-release-validation` takes a new
-   baseline against Emm's `main` in its Phase 1 and compares with that);
-   the result is in the plan's verification document or Iterations.
-   `/iterate_plan` changes re-run it before the PR.
-3. **Before any plan re-records a wire recording:** that recording has been
-   shown byte-identical over repeated runs on both backends. One that is not
-   cannot tell a regression from noise and stays out of the regression set.
-5. **In every commit of plans 5 and 6:** the only changed recordings are the
-   ones `tests/integration/wire/rows.toml` assigns to that plan and phase
-   (the only copy of that list, owner 2026-11-07; `verify_groups.py` checks
-   it, in CI too since #173); any other is a regression to explain before
-   the next phase.
-
 ## 1. High leverage
 
 Bigger, designed, and each buys more than it costs. Each has an
@@ -118,14 +44,14 @@ owner-chosen approach and a proposed plan (2026-11-06).
 | Item | Impact of doing it | Why now |
 | --- | --- | --- |
 | [Deleting a client leaves other local actors' connections](client-deletion-leaves-other-actors-connections.md) | Ends the up-to-an-hour of access other actors keep after an SDK client's owner deletes it, and the inert rows it leaves | Found by the 2026-11-04 client-deletion audit (D2); server-local only. Needs a choice between a client check at token validation and a client-to-actors index |
-| [Dynamic client registrations and their trust rows never expire](dcr-registrations-and-client-trust-rows-never-expire.md) | Stops the `mcp_clients` bucket, the global client index and the system-actor trust rows growing by one per connect forever (the per-registration trust-list walk is gone in 3.16; the retention design is the whole item) | Found 2026-09-21 by the consumer's connector audit; verified in code 2026-09-25. Needs a retention decision (never-authorized registrations can expire early; ones with live tokens cannot) before the sweep is designed |
+| [Dynamic client registrations and their trust rows never expire](dcr-registrations-and-client-trust-rows-never-expire.md) | Stops the `mcp_clients` bucket, the global client index and the system-actor trust rows growing by one per connect forever (the per-registration trust-list walk is gone in 4.0; the retention design is the whole item) | Found 2026-09-21 by the consumer's connector audit; verified in code 2026-09-25. Needs a retention decision (never-authorized registrations can expire early; ones with live tokens cannot) before the sweep is designed |
 | [MCP OAuth connector conformance follow-ups](mcp-oauth-connector-conformance-followups.md) | Seven audit items with no live failure behind them: loopback redirect URIs, RFC 8707 audience, CIMD, `openid-configuration`, `resources/templates/list`, shared-registration name flips, a post-auth hook for app middleware (the `resources` flag and `listChanged` closed by `3-16-pre-rc1-fixes`) | Same audit, verified 2026-09-25. Each is small; none is blocking a client today. Pick the ones a connector-directory submission requires when that is next attempted. CIMD moved up: claude.ai's connector dialog now recommends it (DCR fallback works, seen on rc1 2026-09-28) |
 | [A conditional write retried by the SDK can report False for a write that landed](conditional-write-ambiguous-after-sdk-retry.md) | Closes the last documented way an unkeyed v2 list operation can silently duplicate (`append`, `extend`, `insert`) or double-remove (`pop`) under sustained backend trouble alone, no concurrent writer needed; keyed `append_once` and spanned heads already read their own write back | Traced, not reproduced, during the 2026-09-14 touch-fault triage; a strict `xfail` test pins the `append` duplicate. Needs a way to recognise an unkeyed plain write (its bytes are not unique to the call), plus whether PostgreSQL has an equivalent |
 | [`set_description()`/`set_explanation()` still create the meta row unconditionally](meta-row-create-unconditional-for-description-writers.md) | Makes every v2 meta-row creation conditional, one creation path — closes the narrower last-writer-wins race the 2026-09-14 first-mutation fix left on `count_hint` (never on the description itself, and self-repaired by the next rank-counting mutation) | Found while implementing that fix; explicitly out of scope for the 3.14.7 patch. Needs a decision on whether the shared `_save_metadata()` creation branch (also used by v1's `create_if_absent=False` writers and `clear()`'s replace) routes through `_v2_create_meta_row()` or grows its own conditional create |
-| [Old-layout attribute lists: remove the reader](attribute-list-old-layout-removal.md) | One list layout to read and test, not two | Filed 2026-11-13 by `attribute-list-v2-port`: 3.16 reads the pre-3.16 attribute list layout in place and converts on the first change; the reader and converter go once a release has been live long enough that no deployment holds old-layout lists (`actingweb-verify-property-lists --attributes` reports them) |
+| [Old-layout attribute lists: remove the reader](attribute-list-old-layout-removal.md) | One list layout to read and test, not two | Filed 2026-11-13 by `attribute-list-v2-port`: 4.0 reads the pre-4.0 attribute list layout in place and converts on the first change; the reader and converter go once a release has been live long enough that no deployment holds old-layout lists (`actingweb-verify-property-lists --attributes` reports them) |
 | [Subscribers after specification 1.5: the previous value is read apart from the write](subscriber-hooks-and-resource-diffs-after-1-5.md) | A resource subscriber is told its key went even when another writer changed the parent between the read and the write | Filed 2026-11-15 by the codex review of `spec-1-5` Phase 3; the same race exists for ordinary diffs. The file's other two items (hooks on polled rebuilds, the SDK's resource notification) closed with `3-16-pre-validation-fixes` Phase 2 |
 | [Outbound callbacks: back-off, a per-peer breaker, payload limits](outbound-callback-backpressure.md) | A publisher stops spending the timeouts on a subscriber that keeps failing, backs off on 429 and 503, and bounds sends per process | Filed 2026-11-15 by `spec-1-5` Phase 4 (concurrent delivery, `FanOutManager` removed); optional in specification 1.5 |
-| [Subscription subscriber: recover cleanly from a store fault](subscription-subscriber-fault-hardening.md) | A subscriber that faulted mid-callback re-applies only what it has not applied, records the callbacks that finished, and a quiet subscription recovers without waiting for its next change | Filed 2026-10-29 when 3.16 made the publisher side spec-conformant (plan entry 32). Beyond the spec's minimum; a re-applied `append` can use 3.16's `ListProperty.append_once()` once each diff carries a stable key |
+| [Subscription subscriber: recover cleanly from a store fault](subscription-subscriber-fault-hardening.md) | A subscriber that faulted mid-callback re-applies only what it has not applied, records the callbacks that finished, and a quiet subscription recovers without waiting for its next change | Filed 2026-10-29 when 4.0 made the publisher side spec-conformant (plan entry 32). Beyond the spec's minimum; a re-applied `append` can use 4.0's `ListProperty.append_once()` once each diff carries a stable key |
 | [Promote `chain_id` to a top-level attribute with a GSI on DynamoDB](dynamodb-chain-id-gsi.md) | Makes SPA logout and revoke a query by chain instead of a scan of the two shared token buckets, so their cost stops growing with the number of live sessions | Raised by the PR #153 review; 3.15.1 accepted the scan (42 rows, about 3 RCU per call) with a WARNING at 1,000 rows per bucket. Trigger: that WARNING firing, or a partition projected past about 2,000 rows |
 | [`output_schema` on `action_hook` never reaches MCP](action-hook-output-schema-not-visible-to-mcp.md) | Closes an ergonomic trap: an author who declares `output_schema=` or annotates a `TypedDict` return reasonably believes their MCP tool advertises `outputSchema`, and it does not | Merging the two metadata paths **by default** would newly advertise `outputSchema` for every TypedDict-annotated tool and break the ones that return no `structuredContent`, so it is not an independent decision. Decide it with the structuredContent research (`thoughts/research/2026-08-03-structuredcontent-promotion-drops-tool-text.md`, option C), not on its own |
 | [Whole-list rewrite atomicity](whole-list-rewrite-atomicity.md) | An interrupted `compact()` stops leaving a double of the list that `--repair` will not itself remove | Two designs died under adversarial review and the file carries the constraints they established — chiefly that `fetch_all_including_lists` is a paginated Query, not a snapshot. Do not propose a third without reading them. Reachability is low (`compact()` is an operator action) and the current failure is loud, which is what makes the wait defensible |
@@ -134,7 +60,7 @@ owner-chosen approach and a proposed plan (2026-11-06).
 | [Postgres parallel CI flakiness](ci-postgres-parallel-flakiness.md) | Removes the instability the hang watchdog only bounds — a fixed-`creator` test racing two process-global singletons, a full alembic chain per xdist worker, and an unexamined `--dist loadgroup` requirement | Test-infrastructure reliability only, not correctness. Nothing has been instrumented for it |
 | [NFC and NFD spellings of one name are distinct keys](unicode-normalisation-of-names.md) | Records that Unicode normalisation of names is a separate question from the (landed) glob escapes: a rule that visibly covers a namespace does not cover a byte-different spelling | A normalisation at the permission choke points and the name write path, plus a migration of stored names |
 | [MCP batches are declined; 2025-03-26 requires receiving them](mcp-batch-receive.md) | Full conformance with a protocol revision the server still advertises and assumes for header-less requests | No client we serve is known to batch. Choose between implementing receive (status semantics for mixed results are open) and dropping 2025-03-26 from the supported versions, which is a compatibility decision |
-| [`/sessions` has no library support](sessions-endpoint-and-advertised-options.md) | Gives applications a hook to implement `/sessions` like `/actions` and `/methods`; the advertised-tag audit landed in 3.16 | A session-model decision (callback URI vs mirrored URL, WebSocket, MCP mapping) |
+| [`/sessions` has no library support](sessions-endpoint-and-advertised-options.md) | Gives applications a hook to implement `/sessions` like `/actions` and `/methods`; the advertised-tag audit landed in 4.0 | A session-model decision (callback URI vs mirrored URL, WebSocket, MCP mapping) |
 | [`actingweb-verify-orphans` does not sweep subscriptions, diffs or suspensions](verify-orphans-subscription-tables.md) | An operator can find and remove subscription, diff and suspension rows left without an actor (the deletion race `subs-list-cache-lifetime` narrows but does not close); today nothing reports them | The three tables added to the sweep on both backends; a decision on whether a subscription without a trust counts |
 
 ## 3. Blocked or waiting on someone else
@@ -144,10 +70,11 @@ neglected work.
 
 | Item | Waiting on |
 | --- | --- |
-| [A `prop#`/`list#` key-prefix scheme](prop-list-key-prefix-scheme.md) | **A measured trigger, not a version** (owner, 2026-11-18: left out of 4.0.0; planned when an actor needs more than two Query pages for its plain properties and list heads, or a consumer needs a per-field out-of-band payload). Raises or removes the 1 MB per-partition DynamoDB Query ceiling — the consumer's largest list measured at 964 KB in one page, 94% of the limit — and is the only place the remaining out-of-band payload problem and the attribute composite-key collision can be fixed. The legacy GSI is gone (3.16), so the scheme is designed against the lookup-table-only shape |
+| [A `prop#`/`list#` key-prefix scheme](prop-list-key-prefix-scheme.md) | **A measured trigger, not a version** (owner, 2026-11-18: left out of 4.0.0; planned when an actor needs more than two Query pages for its plain properties and list heads, or a consumer needs a per-field out-of-band payload). Raises or removes the 1 MB per-partition DynamoDB Query ceiling — the consumer's largest list measured at 964 KB in one page, 94% of the limit — and is the only place the remaining out-of-band payload problem and the attribute composite-key collision can be fixed. The legacy GSI is gone (4.0), so the scheme is designed against the lookup-table-only shape |
 | [Dual-era MCP support](mcp-2026-07-28-dual-era-support.md) | A client we serve going **modern-only**. A dual-era client needs nothing from us, so "supports 2026-07-28" is not the signal — a *sustained* stream of 400/`-32600` from one origin is, and the library now fires that criterion itself. Also blocked-adjacent: `actingweb_mcp`'s `require_mcp_auth_for_init` middleware silently becomes a no-op under the modern revision |
 | [Drop Python 3.11 after its end of life](drop-python-3-11-after-eol.md) | **October 2027**, CPython 3.11's end of life (owner's policy, 2026-11-04: support what upstream maintains). Then the first minor raises the minimum to 3.12, renaming the required CI contexts in the same change |
-| [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md) | Resources this environment does not have: a Context7 account, a real OAuth2 provider and MCP client, a throwaway consumer repo. Taken up by `3-16-release-validation` (Phase 4), which asks the owner for each |
+| [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md) | **The stable 4.0.0 tag and its docs on Read the Docs**: only the Context7 submission is left (the MCP client and the Agent Skill checks were done by `3-16-release-validation`, 2026-11-18) |
+| [The 4.0.0 release candidate against real consumers](rc-pass-against-real-consumers.md) | **`v4.0.0rc1` on TestPyPI**: `actingwebdemo` to the rc and deployed, Emm's pin on the rc, the Agent Skill with the library from TestPyPI |
 
 ## 4. Registers — deferred items, not schedulable work
 
@@ -160,7 +87,7 @@ being re-litigated.
 | --- | --- |
 | [The Flask integration cannot hand a browser its SPA sign-in session](flask-spa-session-route.md) | `GET /oauth/spa/session/<id>` is registered by FastAPI only, while the callback redirects with `?session=` on both; as old as 3.15.1. A patch: one route and a test per integration. Found by the release validation, 2026-11-18. |
 | [DynamoDB known-next](dynamodb-known-next.md) | Judged for 4.0.0 and left out, every item (owner, 2026-11-18). Six items deferred from the v3.13 scalability plan — the remaining unbatched delete loops, the `consistent_read` audit's ~36 surviving sites, `SubscriptionDiff` seqnr ordering, import-time table-name freezing, GSI-based secret uniqueness, lookup-table write amplification |
-| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, and module-global cache keys assuming one app per interpreter (sections 1-3 and 6; 4 and 7 were closed by the 3.16 roll-up, 5 and 8 by `3-16-pre-rc1-fixes`, which bounds the override cache to 300 seconds) |
+| [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, and module-global cache keys assuming one app per interpreter (sections 1-3 and 6; 4 and 7 were closed by the 4.0 roll-up, 5 and 8 by `3-16-pre-rc1-fixes`, which bounds the override cache to 300 seconds) |
 
 ---
 

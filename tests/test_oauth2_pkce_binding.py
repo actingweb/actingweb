@@ -44,7 +44,7 @@ def env() -> tuple[ActingWebOAuth2Server, MemoryStore]:
 
 @pytest.fixture(autouse=True)
 def _client_list() -> Iterator[None]:
-    """No registry here: ``mcp_client`` is the one client type (3.16)."""
+    """No registry here: ``mcp_client`` is the one client type (4.0)."""
     with (
         mock.patch(
             "actingweb.permission_integration.client_trust_type_acceptable",

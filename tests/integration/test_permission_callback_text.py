@@ -1,4 +1,4 @@
-"""A granted text property reaches the subscriber's replica as text (3.16).
+"""A granted text property reaches the subscriber's replica as text (4.0).
 
 When A widens its grant to B by a property whose value is text that is not
 JSON, B's permission callback fetches the property; the proxy answers such a

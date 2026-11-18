@@ -1,4 +1,4 @@
-"""The DB-layer fault contract (3.16, Phase 1 of
+"""The DB-layer fault contract (4.0, Phase 1 of
 ``thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md``).
 
 Every decision read raises ``DbError`` on a backend fault, ``strict=False``
@@ -195,7 +195,7 @@ class TestPostgresStrictOnlyReads:
 
     def test_delete_expired_fault_raises_instead_of_answering_zero(self) -> None:
         """The only reaper of the token and chain-marker buckets must not
-        report a fault as "nothing expired" (3.16)."""
+        report a fault as "nothing expired" (4.0)."""
         module = _pg_module("attribute")
         with mock.patch.object(module, "get_connection", _pg_down):
             with pytest.raises(DbError) as raised:
@@ -512,7 +512,7 @@ class TestDynamoReadFaults:
         assert db.get(actor_id=f"absent-{uuid.uuid4().hex}", subid="s", seqnr=7) is None
 
     def test_get_bucket_fault_while_iterating_raises(self) -> None:
-        """Before 3.16 the ``try`` covered only the lazy ``query()`` call, so
+        """Before 4.0 the ``try`` covered only the lazy ``query()`` call, so
         a fault on a later page escaped it undocumented."""
         m = _ddb()["attribute"]
         row = type(
@@ -578,7 +578,7 @@ class TestDynamoReadFaults:
 
 class TestDynamoWriteFaults:
     def test_delete_attr_fault_raises_instead_of_true(self) -> None:
-        """Before 3.16 DynamoDB answered True for a delete that faulted."""
+        """Before 4.0 DynamoDB answered True for a delete that faulted."""
         m = _ddb()["attribute"]
         with mock.patch.object(m.Attribute, "get", _raises):
             with pytest.raises(DbError):

@@ -529,7 +529,7 @@ class TestNoTrustDenialSurvivesBrokenEvaluator(unittest.TestCase):
 class TestListFiltersFailClosedOnEvaluatorErrors(unittest.TestCase):
     """With a resolved peer, an evaluator that cannot be constructed yields
     an empty list, and one that raises on an item drops that item only.
-    Before 3.16 both cases listed everything (fail-open). A DbError still
+    Before 4.0 both cases listed everything (fail-open). A DbError still
     answers 503, so a client can tell an outage from a denial."""
 
     LISTS = (

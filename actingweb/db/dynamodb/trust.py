@@ -278,7 +278,7 @@ class DbTrust:
             given["verification_token"] = verification_token
         if peer_approved is not None:
             given["peer_approved"] = peer_approved
-        # The trust type (3.16: an OAuth2/MCP client's row follows the level
+        # The trust type (4.0: an OAuth2/MCP client's row follows the level
         # the user approved at its latest authorisation).
         if relationship:
             given["relationship"] = relationship
@@ -337,7 +337,7 @@ class DbTrust:
         actions = [getattr(Trust, name).set(value) for name, value in given.items()]
         condition = Trust.id.exists()
         if only_if_verified:
-            # Verified, or approved already (a row approved before 3.16
+            # Verified, or approved already (a row approved before 4.0
             # without a verification: approving it again changes nothing).
             condition = condition & (
                 (Trust.verified == True) | (Trust.approved == True)  # noqa: E712
@@ -492,7 +492,7 @@ class DbTrust:
 
         True when the row is gone after the call (an already-absent row
         counts); a fault raises ``DbError``. False without a handle, and
-        (3.16) when ``only_if_secret`` is given and a row with another secret
+        (4.0) when ``only_if_secret`` is given and a row with another secret
         is there (a re-pair replaced it): that row is left alone.
         """
         if not self.handle:

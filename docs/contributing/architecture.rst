@@ -469,7 +469,7 @@ Property lists, attribute lists and replica lists share one format, held in
   ``{actor_id}$aux``, plus the v1 dense-index format and its migration.
 - ``ListAttribute`` (``attribute_list.py``) is ``ListCore`` over
   ``AttributeListStorage``: rows in an attribute bucket, side rows in
-  ``{bucket}$aux``, reading the pre-3.16 attribute layout in place and
+  ``{bucket}$aux``, reading the pre-4.0 attribute layout in place and
   converting it on the first change. ``AttributeListStore``
   (``attribute_list_store.py``) is the per-bucket accessor behind
   ``actor.attribute_lists(bucket)``. The backend supplies the nine
@@ -554,7 +554,7 @@ Config-Aware DB Accessors
 .. code-block:: python
 
     # Avoid - bypasses configuration injection (and raises TypeError: since
-    # 3.16 the constructor requires the keyword-only indexed_properties)
+    # 4.0 the constructor requires the keyword-only indexed_properties)
     db_property = config.DbProperty.DbProperty(indexed_properties=["email"])
 
 **Why This Matters**:

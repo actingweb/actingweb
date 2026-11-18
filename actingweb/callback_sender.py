@@ -1,5 +1,5 @@
 """Outbound subscription callbacks: one sender for every subscriber of a write
-(3.16, ``thoughts/plans/2026-11-06-spec-1-5.md`` Phase 4).
+(4.0, ``thoughts/plans/2026-11-06-spec-1-5.md`` Phase 4).
 
 ``Actor.register_diffs`` and the resync path prepare each subscriber's
 callbacks (sequence, stored diff, permission filter, body) and hand them here
@@ -24,7 +24,7 @@ sender delivers them:
   and numbered before any send, so a skipped subscriber sees the gap at its
   next callback or polls.
 
-Callback sends do not write ``Actor.last_response_code`` (3.16).
+Callback sends do not write ``Actor.last_response_code`` (4.0).
 """
 
 from __future__ import annotations

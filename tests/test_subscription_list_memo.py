@@ -1,5 +1,5 @@
 """An actor reads its subscription list once per instance, an empty one too
-(3.16).
+(4.0).
 
 ``thoughts/plans/2026-11-06-subs-list-cache-lifetime.md``, Phase 2: the memo
 rule, the resets an instance makes itself (its creates and deletes, trust
@@ -1255,7 +1255,7 @@ class TestReverificationFixes:
         self, bare: World
     ) -> None:
         """Issue 5, kept as it is: clean-up treats a missing suspensions
-        table as empty, a suspension check does not (3.16: a suspend() that
+        table as empty, a suspension check does not (4.0: a suspend() that
         failed against it must not go unnoticed). Both backends."""
         model = _suspension_model(bare.config)
         store = get_subscription_suspension(bare.config, bare.id)

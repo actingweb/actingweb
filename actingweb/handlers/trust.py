@@ -236,7 +236,7 @@ _FLAG_FIELDS = ("approved", "peer_approved", "verified")
 
 
 def _approval(value: Any) -> bool | None:
-    """``approved`` in a trust PUT (3.16, specification 1.5): JSON ``true``
+    """``approved`` in a trust PUT (4.0, specification 1.5): JSON ``true``
     or the string ``"true"`` (the web UI's form sends text) approves; any
     other value, ``false`` and ``"false"`` included, is None and answers
     400 with nothing changed (``false`` was read as absent, a 204)."""
@@ -249,7 +249,7 @@ def _approval(value: Any) -> bool | None:
 
 def _with_boolean_flags(row: dict[str, Any]) -> dict[str, Any]:
     """A trust row with its flags as JSON booleans, as a GET of the row
-    answers them (3.16; ``Trust.create`` keeps them as the strings
+    answers them (4.0; ``Trust.create`` keeps them as the strings
     ``"true"``/``"false"``)."""
     out = dict(row)
     for flag in _FLAG_FIELDS:
@@ -261,7 +261,7 @@ def _with_boolean_flags(row: dict[str, Any]) -> dict[str, Any]:
 def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
     """The body of the answer to a trust request (a creation or a re-pair):
     the row, without its verification token and secret while this actor
-    has not approved it (3.16). Whoever filed a request under another
+    has not approved it (4.0). Whoever filed a request under another
     actor's id could otherwise answer that actor's verification with the
     token; the secret is the requester's own."""
     answer = _with_boolean_flags(row)
@@ -304,7 +304,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Not found")
             return
         # Access is the same as /trust, and then only the creator or the
-        # trustee (3.16): an admin peer could otherwise arm trustee access,
+        # trustee (4.0): an admin peer could otherwise arm trustee access,
         # or take the actor over, and keep it after its trust was deleted.
         if not auth_result.authorize("POST", "trust"):
             return
@@ -432,7 +432,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Not found")
             return
         # Access is the same as /trust, and then only the creator or the
-        # trustee (3.16).
+        # trustee (4.0).
         if not auth_result.authorize("DELETE", "trust"):
             return
         if not self._owner_or_trustee(auth_result.auth_obj):
@@ -500,7 +500,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             return
         if is_reserved_relationship(relationship):
             # ``creator``, ``trustee``, ``owner`` and ``any`` name roles and
-            # access-table keywords, never a peer (3.16).
+            # access-table keywords, never a peer (4.0).
             self.response.set_status(400, "Reserved relationship name")
             return
         from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
@@ -748,7 +748,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             permissions = permission_store.get_permissions(actor_id, peerid)
             if not override_applies(permissions, peerid, my_trust.get("relationship")):
                 # A client's override for another type is not applied
-                # (3.16): not shown as its grant either.
+                # (4.0): not shown as its grant either.
                 permissions = None
 
             if permissions:
@@ -778,17 +778,17 @@ class TrustPeerHandler(base_handler.BaseHandler):
             # The row's own peer reads its status while the owner has not
             # approved it ("approved, pending", the spec's trust GET); an
             # initiator whose re-pair answer was lost reads it with the new
-            # secret to learn that the swap happened (3.16).
+            # secret to learn that the swap happened (4.0).
 
         # Unlike the list route, this response keeps ``secret`` and
         # ``verification_token`` for the creator, the trustee and the peer the
         # row belongs to, the token to that peer only while the row is
         # approved: peer verification reads ``verification_token`` from this
         # route (Actor.create_verified_trust, actor.py), and only from an
-        # approved row (3.16, the mirrored request). Any other peer,
+        # approved row (4.0, the mirrored request). Any other peer,
         # an ``admin`` one included, never receives them: with another peer's
         # secret it could act as that peer, re-pair its trust and lock it
-        # out (3.16). Client-supplied text is sanitised as on the list route.
+        # out (4.0). Client-supplied text is sanitised as on the list route.
         if isinstance(my_trust, dict):
             my_trust = _sanitize_trust_text(dict(my_trust))
             if caller_peer and caller_peer != peerid:
@@ -798,7 +798,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 # A pending row's own peer reads its status, never its token:
                 # whoever filed the row chose its secret, and the token would
                 # let it answer another actor's verification of a request it
-                # filed there under our id (3.16). A verification reads an
+                # filed there under our id (4.0). A verification reads an
                 # initiator's own row, which is approved.
                 my_trust.pop("verification_token", None)
         out = json.dumps(my_trust)
@@ -954,7 +954,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 body = "{}"
             params = json.loads(body)
             if not isinstance(params, dict):
-                # 3.16: a scalar body raised in the lookups (a 500), and a list
+                # 4.0: a scalar body raised in the lookups (a 500), and a list
                 # body was taken for an empty edit.
                 if self.response:
                     self.response.set_status(400, "Body must be an object")
@@ -981,7 +981,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 permission_updates = params["permissions"]
                 problem = permission_updates_problem(permission_updates)
                 if problem:
-                    # 3.16: a list or scalar failed in the store, a 500, and a
+                    # 4.0: a list or scalar failed in the store, a 500, and a
                     # mistyped rule was stored.
                     if self.response:
                         self.response.set_status(400, problem)
@@ -992,7 +992,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     self.response.set_status(400, "No json content")
                 return
             if "approved" in [str(a).lower() for a in self.request.arguments()]:
-                # Present, even empty: true only (3.16).
+                # Present, even empty: true only (4.0).
                 approved = _approval(self.request.get("approved"))
                 if approved is None:
                     if self.response:
@@ -1066,7 +1066,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     )
                 return
             if not myself.reverify_pending_trust(peerid):
-                # Only a verified request is approved (3.16): an unverified
+                # Only a verified request is approved (4.0): an unverified
                 # row's secret is whatever its requester chose, and anyone can
                 # file a request under a peer's id. Pair by creating the
                 # trust toward the peer's URL instead.
@@ -1106,7 +1106,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                     self.response.set_status(500, "Internal error")
                 return
 
-        # The permissions first, then the trust (3.16): a peer told of an
+        # The permissions first, then the trust (4.0): a peer told of an
         # approval is never left on a grant that failed to store. The
         # override as it was is kept to restore it if the trust write fails.
         permission_store = None
@@ -1117,7 +1117,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             and get_trust_permission_store
         ):
             permission_store = get_trust_permission_store(self.config)
-            # From the store, not the cache (3.16): a failed trust write
+            # From the store, not the cache (4.0): a failed trust write
             # restores this, and a stale entry would write it back over a
             # live override (or delete one).
             previous_override = permission_store.get_permissions_uncached(
@@ -1128,7 +1128,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
                 # landed (below), never of a grant a failed write rolls back.
                 # A client's override for another type is not applied (and
                 # not shown): the edit replaces it with one holding only what
-                # the owner wrote, for the row's type (3.16: merged into it,
+                # the owner wrote, for the row's type (4.0: merged into it,
                 # its unseen fields would have applied too).
                 if previous_override and override_applies(
                     previous_override, peerid, relationship
@@ -1214,7 +1214,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             return
         if restore_failed:
             # The trust was not written, but the new grant could not be
-            # taken back: say so, not "nothing changed" (3.16).
+            # taken back: say so, not "nothing changed" (4.0).
             self.response.set_status(
                 500, "Trust not modified; the permissions change could not be undone"
             )
@@ -1365,7 +1365,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
             return
 
         # Delete the row this request was authorised against, and only that
-        # one (3.16): a re-pair that replaced it meanwhile keeps its row (the
+        # one (4.0): a re-pair that replaced it meanwhile keeps its row (the
         # request answers 404). A peer's bearer names its row's secret; the
         # creator acted on the row read above.
         bearer_row = (
@@ -1389,7 +1389,7 @@ class TrustPeerHandler(base_handler.BaseHandler):
 
         # trust_deleted fires through TrustManager.fire_deleted (the row as
         # trust_data) after the delete's last secret check and before
-        # anything local goes (3.16): a delete that loses to a re-pair fires
+        # anything local goes (4.0): a delete that loses to a re-pair fires
         # nothing for the row that stands.
         def before_local_delete(row: dict[str, Any]) -> None:
             # fire_deleted logs a hook's error and lets a DbError through.
@@ -1454,7 +1454,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             return
 
         try:
-            # The path's type must be the row's, as the PUT requires (3.16):
+            # The path's type must be the row's, as the PUT requires (4.0):
             # what applies is decided by the row's type.
             myself = auth_result.actor
             row = myself.get_trust_relationship(peerid=peerid) if myself else None
@@ -1465,7 +1465,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             permission_store = get_trust_permission_store(self.config)
             custom_permissions = permission_store.get_permissions(actor_id, peerid)
             if not override_applies(custom_permissions, peerid, relationship):
-                custom_permissions = None  # not applied (3.16): the defaults
+                custom_permissions = None  # not applied (4.0): the defaults
 
             if custom_permissions:
                 # Return custom permission overrides
@@ -1585,7 +1585,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
             params = json.loads(body)
             problem = permission_updates_problem(params)
             if problem:
-                # 3.16: a list or scalar failed in the store, a 500, and a
+                # 4.0: a list or scalar failed in the store, a 500, and a
                 # mistyped rule was stored.
                 if self.response:
                     self.response.set_status(400, problem)
@@ -1599,7 +1599,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
                 return
 
             permission_store = get_trust_permission_store(self.config)
-            # From the store, not the cache (3.16): replace-or-merge decides
+            # From the store, not the cache (4.0): replace-or-merge decides
             # what is written, and another process may have deleted it.
             existing_permissions = permission_store.get_permissions_uncached(
                 actor_id, peerid
@@ -1607,7 +1607,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
 
             # A client's override for another type is not applied (and not
             # shown): it is replaced by one holding only this edit, for the
-            # row's type (3.16: merged into it, its unseen fields would have
+            # row's type (4.0: merged into it, its unseen fields would have
             # applied too).
             if existing_permissions and not override_applies(
                 existing_permissions, peerid, relationship
@@ -1670,7 +1670,7 @@ class TrustPermissionHandler(base_handler.BaseHandler):
 
         try:
             permission_store = get_trust_permission_store(self.config)
-            # Read first, from the store (3.16): a delete of nothing is 404
+            # Read first, from the store (4.0): a delete of nothing is 404
             # and tells the peer nothing (the store answered True for an
             # absent row, so the 404 never came).
             existing = permission_store.get_permissions_uncached(actor_id, peerid)
@@ -1730,7 +1730,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 self.response.set_status(404, "Trust relationship not found")
             return
         # A peer this actor has not approved is granted nothing to list
-        # (3.16; it got the same answer as an approved one). Only an explicit
+        # (4.0; it got the same answer as an approved one). Only an explicit
         # False, as the grant snapshot reads it (a row from before the field
         # is approved there, and every other route admits it).
         if trust_rel.get("approved") is False:
@@ -1791,7 +1791,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
         # Remove duplicates
         property_names = list(set(property_names))
 
-        # The names the peer may read, decided as a read of each is (3.16:
+        # The names the peer may read, decided as a read of each is (4.0:
         # the operation was "subscribe", which no rule grants, so nothing was
         # ever listed); one grant read for all.
         from ..access_decision import decide
@@ -1842,7 +1842,7 @@ class TrustSharedPropertiesHandler(base_handler.BaseHandler):
                 )
 
         # The names the peer may not read are not listed: naming them told
-        # it what else the actor holds (3.16).
+        # it what else the actor holds (4.0).
         response_data = {
             "actor_id": actor_id,
             "peer_id": peerid,

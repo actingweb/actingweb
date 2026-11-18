@@ -1,4 +1,4 @@
-"""The access table (``config.access``) as pure functions (3.16).
+"""The access table (``config.access``) as pure functions (4.0).
 
 ``Auth._match_access_row`` and the shared access decision
 (:mod:`actingweb.access_decision`) both ask it; nothing here holds request
@@ -11,10 +11,10 @@ if TYPE_CHECKING:
     from actingweb.config import Config
 
 # The access-table relationships that name a role, not a trust: their rows
-# admit the creator and the trustee only, never a peer (3.16).
+# admit the creator and the trustee only, never a peer (4.0).
 ROLE_RELATIONSHIPS = frozenset({"creator", "trustee"})
 
-# Names a trust relationship may not take (3.16): the two roles, and the
+# Names a trust relationship may not take (4.0): the two roles, and the
 # access table's own keywords (``owner`` matches the peer a path names,
 # ``any`` every authenticated caller).
 RESERVED_RELATIONSHIPS = frozenset({"creator", "trustee", "owner", "any"})
@@ -38,12 +38,12 @@ def matching_access_row(
     caller_is_peer: bool = False,
 ) -> tuple[str, str, str, str] | None:
     """The first ``config.access`` row admitting ``relationship`` on
-    ``path/subpath`` with ``method``, or None (3.16: the access table as a
+    ``path/subpath`` with ``method``, or None (4.0: the access table as a
     pure function, with no ``Auth`` state; :meth:`Auth._match_access_row`
     and the shared access decision both use it). ``owner`` rows match when
     ``caller_peerid`` is the peer ``path_peerid`` names. The ``creator`` and
     ``trustee`` rows never match a peer (``caller_peerid`` or
-    ``caller_is_peer``), whatever its relationship is named (3.16: a peer
+    ``caller_is_peer``), whatever its relationship is named (4.0: a peer
     whose trust was named ``creator`` matched the creator's rows)."""
     relationship = (relationship or "").lower()
     is_peer = caller_is_peer or bool(caller_peerid)
@@ -89,7 +89,7 @@ def access_table_admits(
     method: str = "",
 ) -> bool:
     """Whether the access table admits an authenticated peer of
-    ``relationship`` on ``path/subpath`` with ``method`` (3.16). An
+    ``relationship`` on ``path/subpath`` with ``method`` (4.0). An
     unapproved peer is refused, as :meth:`Auth._match_access_row` refuses
     it (a trust DELETE excepted, which no grant decision asks about)."""
     if not approved:

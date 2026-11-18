@@ -1541,7 +1541,7 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
         """Complete an LLM-triggered (MCP) Apple flow via the MCP OAuth2 server."""
         if not code:
             return self.error_response(400, "Missing authorization code")
-        # The same completion as the GET callback (3.16): the browser's nonce
+        # The same completion as the GET callback (4.0): the browser's nonce
         # cookie, the decision hook, and the confirmation page when the
         # sign-in is not bound to the browser that showed the form.
         from .oauth2_endpoints import FORM_NONCE_COOKIE, OAuth2EndpointsHandler

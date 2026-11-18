@@ -310,7 +310,7 @@ with a specific permission level, include the ``trust_type`` parameter:
      with the specified permission level. The level must be one the client
      list offers (``configure_oauth2_trust_types``; with none, every
      registered type except ``admin``): another is 400 at this call, and no
-     trust is created for it at the callback (3.16).
+     trust is created for it at the callback (4.0).
 
 3. Handle Callback
 ~~~~~~~~~~~~~~~~~~
@@ -457,11 +457,11 @@ lifecycle hook — the same hook used for HTML template applications:
        )
 
 When the user clicks the verification link, the browser navigates to
-``GET /oauth/email?verify=<token>``, which since 3.16 shows a page with a
+``GET /oauth/email?verify=<token>``, which since 4.0 shows a page with a
 Confirm button (a JSON client gets ``status: "confirm_required"`` and the
 ``POST`` to make); the ``POST`` of ``verify=<token>`` validates the token and
 marks the email as verified, so a mail scanner fetching the link verifies
-nothing. The confirm issues no session. Since 3.16 the confirm also cleans the actor in place first (the
+nothing. The confirm issues no session. Since 4.0 the confirm also cleans the actor in place first (the
 link proves the address, and the free-text form's actor is unvouched): its
 passphrase is rotated and every SPA session and MCP token is revoked, so the SPA
 must sign the user in again after the confirm; an access token it still holds
@@ -1007,7 +1007,7 @@ access token the refresh token alone drives the revocation; with both SPA
 tokens, each is revoked. An MCP access token (an AI agent's login, not the user's) ends only that MCP chain: an SPA refresh token sent beside it is ignored and logged, ``cleared_cookies`` is ``[]`` and no ``Set-Cookie`` is sent; the browser session ends when the user logs out of the SPA.
 
 A logout that lands while a refresh of the same chain is in flight still ends
-the chain (3.16): the revocation writes a short-lived chain-revoked marker
+the chain (4.0): the revocation writes a short-lived chain-revoked marker
 before it deletes anything, and a refresh that consumed its token before the
 sweep reads the marker after minting, deletes the pair it minted and answers
 401 ``invalid_grant``. A marker that cannot be written answers 503 and

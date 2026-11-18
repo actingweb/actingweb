@@ -132,7 +132,7 @@ def test_two_simultaneous_low_granularity_writes_reach_every_replica(
 ) -> None:
     """A subscriber that receives the second write's callback while it is
     handling the first queues it, and takes it when the first is recorded
-    (3.16: it stayed queued until later traffic)."""
+    (4.0: it stayed queued until later traffic)."""
     a, subs, _results = _two_writes(wire_pair)
 
     def all_hold() -> bool:

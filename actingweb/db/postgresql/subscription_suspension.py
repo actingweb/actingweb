@@ -43,7 +43,7 @@ class DbSubscriptionSuspension:
                     )
                     return cur.fetchone() is not None
         except Exception as e:
-            # "Could not tell" is not "not suspended" (3.16).
+            # "Could not tell" is not "not suspended" (4.0).
             raise DbError("subscription suspension read", self._actor_id) from e
 
     def _is_suspended_exact(self, target: str, subtarget: str | None) -> bool:
@@ -163,7 +163,7 @@ class DbSubscriptionSuspension:
             return True
         except psycopg.errors.UndefinedTable:
             # A schema without the table holds no suspension (as DynamoDB
-            # answers for a missing table, 3.16).
+            # answers for a missing table, 4.0).
             return True
         except Exception as e:
             logger.error(f"Error deleting suspensions for {self._actor_id}: {e}")

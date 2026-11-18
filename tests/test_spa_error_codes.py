@@ -1,4 +1,4 @@
-"""Every SPA token-endpoint error carries a stable code (3.16).
+"""Every SPA token-endpoint error carries a stable code (4.0).
 
 The ``X-ActingWeb-Error`` response header and the body's ``code`` key name the
 reason, so a client can tell a 401 that is the library's and final (it carries

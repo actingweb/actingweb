@@ -1,5 +1,5 @@
 """A confirmation the server cannot complete answers as the other refusals
-do (3.16, verification re-run 1 of the grant-enforcement plan, Issue G): a
+do (4.0, verification re-run 1 of the grant-enforcement plan, Issue G): a
 page for a person, JSON for a client, with its status. An expired or spent
 pending record reached the browser as raw JSON."""
 

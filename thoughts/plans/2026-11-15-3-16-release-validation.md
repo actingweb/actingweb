@@ -459,7 +459,7 @@ research note or the verification document.
 | AC-21 | 4 | `tests/test_version_consistency.py` (both tests) | Not run |
 | AC-22 | 1, 4 | the wire suite in the Full tier, run after the bump commit | Phase 1: the eight recordings pass with the version set to `9.9.9`; run again after the bump |
 | AC-23 | 1 | manual: the rule read in `CONTRIBUTING.rst` and CLAUDE.md "Release" | Done 2026-11-18 |
-| AC-24 | 4 | manual: each entry checked against `v3.15.1` (the inventory's rows and `git show v3.15.1:`), the removed or folded entries listed in the note; the `SECURITY` leads stay as they are | Not run |
+| AC-24 | 4 | manual: each entry checked against `v3.15.1` (the inventory's rows and `git show v3.15.1:`), the removed or folded entries listed in the note; the `SECURITY` leads stay as they are | Done: 285 entries to 261 (9 removed, 15 folded, 36 reworded); one `SECURITY` entry merged into the one that introduces its feature, the others' leads unchanged (note, "The changelog, cut to what changed since 3.15.1") |
 
 ## Spec Delta
 
@@ -1270,6 +1270,55 @@ Not started while a decision of Phase 1 holds it.
   the owner's decision to keep it local). The branch was never pushed; the
   file is taken out of every commit that carries it and kept outside the
   repository until the stable tag.
+- **The rename to 4.0.** `actingweb/migration_guide.py` holds the guide's
+  path and its Read the Docs URL (`/en/latest/`, which serves `master`, so
+  the page exists once this merges and before the rc tag); every library
+  message names a section through `guide_section()`, so a `pip` user gets
+  a link, not a path. The guide moved to `docs/migration/v4.0.rst`; "3.16"
+  became "4.0" in `actingweb/`, `docs/` (not the earlier guides),
+  `tests/` (not the wire recordings or `rows.toml`'s history),
+  `examples/`, the changelog's release section, CLAUDE.md and
+  `thoughts/todo/` (1,119 replacements, 299 files; the closing grep finds
+  none outside history). `.claude/workflow/release.md` has its line for a
+  major. The tombstones' "next major" now means 5.0, which is the rule.
+- **`tests/test_migration_guide.py`** (AC-5, AC-6), seen failing first:
+  every command line in the guide (37) names a console script and passes
+  its parser; the seven titles the library quotes are headings; no
+  message spells the guide's path. It caught a table cell of mine
+  (``report | resolve | enable``).
+- **The guide, regrouped** by a script that moves whole sections (every
+  literal and heading of the guide before it is still there, except the
+  empty "What changed and why"): "Start here" is a checklist (before, the
+  upgrade, after) with "What stops a start"; "The operator commands" is a
+  table whose "while 3.15.1 serves" column says *not tested* wherever the
+  guide had not established it (only `actingweb-unique-creators` is
+  established safe); "Rolling back to 3.15.1" names the three writes after
+  which 3.15.1 cannot read the data; "Other versions beside this one"
+  rests on the live pair; six audience parts, each with a "skip this part
+  if" line and every section with an explicit label. The 28 must-act rows
+  without an instruction (of 137) got one, each checked against the code;
+  "the flag", the previous release, the email setting and "login" use one
+  term each. The four Python samples were checked against the library's
+  signatures (the plan's "eight" counted literal blocks).
+- **The changelog** (AC-24, and as it reads): see the note's section;
+  the opening note, **Breaking:** first in `CHANGED`, an entry pointing at
+  "Other versions". **Deviation:** the entries are not re-sorted by the
+  guide's audience groups (reason in the note).
+- **The pages the guide links to**, checked against the inventory: 14
+  pages under `docs/quickstart/`, `docs/reference/`, `docs/guides/` and
+  `docs/sdk/` still said what 3.15.1 did in places and are corrected (the
+  MCP 405 and default `inputSchema`, anonymous registration, the
+  factory's second `POST /`, `oauth_success` and stored tokens, the fault's
+  503, `create_verified_trust`, `delete_reciprocal_trust_async`'s
+  keywords, the callback 403 for an unknown subscription). Two were wrong
+  in 3.15.1 already and are fixed too: `sdk/attributes-buckets.rst` said
+  expired tokens are never removed in bulk (it points at
+  `guides/database-maintenance.rst` now), and `sdk/custom-framework.rst`
+  imported handler classes that `actingweb.handlers` does not export.
+- **The todos:** `emm-suite-against-master.md` deleted (its procedure is in
+  the note), the discoverability todo keeps Context7 only,
+  `rc-pass-against-real-consumers.md` added, `INDEX.md`'s section of the
+  release's plans removed.
 
 ### Implementation Status: In Progress
 

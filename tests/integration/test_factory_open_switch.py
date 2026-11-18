@@ -1,4 +1,4 @@
-"""``with_open_factory(False)`` over HTTP (3.16)."""
+"""``with_open_factory(False)`` over HTTP (4.0)."""
 
 import requests
 

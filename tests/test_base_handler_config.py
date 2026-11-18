@@ -1,4 +1,4 @@
-"""``BaseHandler`` has no import-time ``Config()`` default (3.16).
+"""``BaseHandler`` has no import-time ``Config()`` default (4.0).
 
 With creator uniqueness on by default, a handler built from a default
 ``Config()`` would be an enforced handler on a store that never ran

@@ -558,7 +558,7 @@ class TestSpanFlags:
 
 class TestMidSweepFault:
     """A scan fault part-way stops the sweep where it is: the checkpoint
-    keeps what was done and the exit code is 2 (3.16)."""
+    keeps what was done and the exit code is 2 (4.0)."""
 
     def test_a_fault_after_one_actor_keeps_the_checkpoint_and_exits_2(
         self, test_actor, monkeypatch, tmp_path
@@ -584,7 +584,7 @@ class TestMidSweepFault:
 
 
 def _plant_old_attribute_list(config, actor_id, bucket, name, items, length=None):
-    """A list in the pre-3.16 attribute layout, as that code wrote it."""
+    """A list in the pre-4.0 attribute layout, as that code wrote it."""
     from actingweb.db import get_attribute
 
     db = get_attribute(config)
@@ -607,7 +607,7 @@ def _bucket_rows(config, actor_id, bucket):
 
 
 class TestAttributesMode:
-    """``--attributes`` (3.16): the actor's attribute lists in its
+    """``--attributes`` (4.0): the actor's attribute lists in its
     ``remote:{peer}`` buckets and any ``--bucket``."""
 
     PEER = "c" * 32
@@ -663,7 +663,7 @@ class TestAttributesMode:
             for b in (remote, "app")
         }
         assert after == before
-        assert "pre-3.16 attribute layout" in caplog.text
+        assert "pre-4.0 attribute layout" in caplog.text
         assert "list='old'" in caplog.text
         assert "VALUE1" not in caplog.text and "VALUE2" not in caplog.text
 

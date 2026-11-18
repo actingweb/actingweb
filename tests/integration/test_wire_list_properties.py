@@ -358,7 +358,7 @@ def test_wl12_target(wire_pair, topology):
 def test_wl13_target(wire_pair, topology, caplog):
     """WL13.target: SDK ``append`` and update of an item over the wire apps'
     span threshold (390,000 bytes): a reference diff, which B cannot apply:
-    out of step, so B rebuilds its replica from a baseline (3.16)."""
+    out of step, so B rebuilds its replica from a baseline (4.0)."""
     s = _pair(wire_pair, topology, "target")
     _seed_list(s, [{"id": "small"}])
     a = s.publisher

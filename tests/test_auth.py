@@ -101,7 +101,7 @@ class TestAuthClassInitialization:
             assert auth.acl["approved"] is False
 
     def test_auth_init_without_config_raises(self):
-        """``config`` is required and keyword-only (3.16): no default Config."""
+        """``config`` is required and keyword-only (4.0): no default Config."""
         with pytest.raises(TypeError, match="config"):
             Auth("test_actor")  # type: ignore[call-arg]
         with pytest.raises(TypeError):

@@ -121,7 +121,7 @@ def canonical_connection_method(method: str | None) -> str | None:
 def as_flag(value: Any) -> bool | None:
     """A trust flag (``approved``, ``verified``, ``peer_approved``) from a
     bool or its text form, ``"true"`` or ``"false"`` in any case; None stays
-    None. Anything else raises ``ValueError`` (3.16): ``1`` or ``"yes"`` was
+    None. Anything else raises ``ValueError`` (4.0): ``1`` or ``"yes"`` was
     stored as True, and reading it as False would revoke an approval."""
     if value is None or isinstance(value, bool):
         return value
@@ -150,7 +150,7 @@ class Trust:
     def delete(self, *, only_if_secret: str | None = None) -> bool:
         """Delete the trust relationship.
 
-        ``only_if_secret`` (3.16): delete only the row that has this secret.
+        ``only_if_secret`` (4.0): delete only the row that has this secret.
         It is compared on a fresh read before anything is removed (the OAuth2
         client, its tokens, the sibling rows) and again by the row delete, so
         a row a re-pair replaced in the meantime is left alone and False is
@@ -176,7 +176,7 @@ class Trust:
             if not row:
                 # Already gone (an earlier delete, or one that faulted after
                 # the row): what follows the row still runs, as it does for
-                # an unconditional delete of an absent row (3.16). A handle
+                # an unconditional delete of an absent row (4.0). A handle
                 # built after the row went has nothing loaded to delete.
                 self.trust = {}
                 return self._after_row_delete(True, str(self.peerid or ""))
@@ -275,7 +275,7 @@ class Trust:
         return self._after_row_delete(result, peerid)
 
     def _after_row_delete(self, result: bool, peerid: str) -> bool:
-        """What follows the row (3.16, shared with the conditional delete of
+        """What follows the row (4.0, shared with the conditional delete of
         a row already gone): its custom permissions, and the MCP caches."""
         try:
             # The row's custom permissions go right after the row, never
@@ -393,7 +393,7 @@ class Trust:
     ) -> bool:
         """Write the attributes given, in one write conditioned on the row
         existing. ``approved=True`` is written only to a row stored verified
-        or approved already (3.16): a row whose secret an unproven requester
+        or approved already (4.0): a row whose secret an unproven requester
         chose is never approved, whatever route asks (``Actor.reverify_pending_trust`` first
         re-runs the verification). ``only_if_secret`` writes only while the
         row holds that secret (a re-pair's swap). False when nothing was
@@ -404,7 +404,7 @@ class Trust:
         assert self.trust is not None  # Always initialized in __init__
         # Flags given as text ("true"/"false", as this object caches them)
         # are flags: a string would skip the approval condition below and be
-        # stored as True whatever it says. Anything else raises (3.16).
+        # stored as True whatever it says. Anything else raises (4.0).
         approved = as_flag(approved)
         verified = as_flag(verified)
         peer_approved = as_flag(peer_approved)

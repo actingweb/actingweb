@@ -1,4 +1,4 @@
-"""One glob engine: escapes, linear time, and the three entry points (3.16).
+"""One glob engine: escapes, linear time, and the three entry points (4.0).
 
 ``\\*``, ``\\?`` and ``\\\\`` escape; there are no character classes; matching
 is case-sensitive and linear in the pattern and target, because permission

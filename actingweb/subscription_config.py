@@ -23,7 +23,7 @@ class SubscriptionProcessingConfig:
         max_pending: Maximum pending callbacks; a callback beyond it is refused with 400
         storage_prefix: Bucket prefix for RemotePeerStore
         max_concurrent_callbacks: Callbacks of one write sent at once to
-            subscribers on other hosts (3.16: read by the sender; default 4)
+            subscribers on other hosts (4.0: read by the sender; default 4)
         callback_delivery_budget_seconds: Total time one request may spend
             delivering its callbacks; None (the default) for no budget
         serialize_own_host_callbacks: Send subscribers on the publisher's own
@@ -40,7 +40,7 @@ class SubscriptionProcessingConfig:
     max_pending: int = 100
     storage_prefix: str = "remote:"
 
-    # Outbound delivery (3.16, actingweb.callback_sender)
+    # Outbound delivery (4.0, actingweb.callback_sender)
     max_concurrent_callbacks: int = 4
     callback_delivery_budget_seconds: float | None = None
     serialize_own_host_callbacks: bool = True

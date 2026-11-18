@@ -79,7 +79,7 @@ def test_a_depth_three_write_is_its_whole_resource_filtered(world: World) -> Non
     world.owner_put("settings/deep/private", "d2")
     world.owner_put("settings/deep/ok", 2)
     # Above the resource, a nested write is the parent's whole stored value,
-    # filtered (3.16): a receiver applies it whole.
+    # filtered (4.0): a receiver applies it whole.
     assert world.pull(whole) == [
         {"settings": {"theme": "x", "deep": {"ok": 1}}},
         {"settings": {"theme": "x", "deep": {"ok": 2}}},

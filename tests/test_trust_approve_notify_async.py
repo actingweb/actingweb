@@ -1,6 +1,6 @@
 """``Actor.modify_trust_and_notify_async`` notifies the peer like the sync path.
 
-Until 3.16 it built ``AwProxy(peer_target={"baseuri", "secret"})``; the proxy
+Until 4.0 it built ``AwProxy(peer_target={"baseuri", "secret"})``; the proxy
 reads ``peer_target["id"]``, so the ``KeyError`` was folded into "Not able to
 notify peer async" and the peer was never told. It now delegates to the sync
 method.
@@ -47,7 +47,7 @@ def wired() -> Any:
         mock.patch.object(actor_module.requests, "post") as post,
     ):
         trust_cls.return_value.modify.return_value = True
-        # The row read again after the write (3.16: the notification goes
+        # The row read again after the write (4.0: the notification goes
         # to the base URI as it stands then).
         trust_cls.return_value.get.return_value = dict(TRUST, verified=True)
         post.return_value = mock.Mock(status_code=204, content=b"")

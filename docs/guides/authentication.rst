@@ -359,7 +359,7 @@ Every actor records how it came to exist in ``auth_method`` (in the
        stored email keep the previous marker)
      - **no**
    * - absent
-     - an actor created before 3.16 other than by a provider sign-in
+     - an actor created before 4.0 other than by a provider sign-in
        (those carry ``<provider>_oauth2``)
      - **no**
 
@@ -367,7 +367,7 @@ Any marker counts as unvouched while ``email_verified`` is ``"false"``: the
 address is still waiting for its proof.
 
 ``PUT`` and ``DELETE /<id>/trust/trustee`` (the trustee root, and with
-``creator`` the creator) are the creator's and the trustee's only (3.16): a
+``creator`` the creator) are the creator's and the trustee's only (4.0): a
 peer of any relationship, ``admin`` included, gets 403. An ``admin`` peer
 keeps the rest of ``/trust``.
 
@@ -665,7 +665,7 @@ The function returns different response codes based on authentication results:
 - **404**: Actor not found
 
 A database fault while authenticating is not one of these outcomes: the call
-raises ``DbError`` (3.16). Let it reach the integration, which answers 503
+raises ``DbError`` (4.0). Let it reach the integration, which answers 503
 with ``Retry-After``; do not catch it and answer 401 or 403.
 
 Security Considerations
@@ -1052,27 +1052,27 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
     app = (
         ActingWebApp(...)
         .with_email_as_creator(enable=True)  # off on ActingWebApp until called; on in a bare Config()
-        .with_unique_creator(enable=True)  # the default since 3.16; False opts out
+        .with_unique_creator(enable=True)  # the default since 4.0; False opts out
     )
 
 .. note::
 
-   Since 3.16 ``with_unique_creator()`` is on by default and enforced by the database: a second
+   Since 4.0 ``with_unique_creator()`` is on by default and enforced by the database: a second
    actor for a creator raises ``CreatorTaken`` (409; the factory answers
    403), and the application refuses to start until
    ``actingweb-unique-creators enable --apply`` has run. Run ``report`` and
    ``resolve --apply`` first if actors already share a creator. See
-   :doc:`../migration/v3.16` ("Creator uniqueness").
+   :doc:`../migration/v4.0` ("Creator uniqueness").
 
 When enabled:
     - Actor ``creator`` field must be a valid email address
     - A vouched actor's creator follows its stored ``_internal`` email, renamed
-      in the same atomic operation where the email is written (since 3.16; a
+      in the same atomic operation where the email is written (since 4.0; a
       load no longer reads the email). A write of an address another actor
       holds raises ``CreatorTaken``. Existing actors are moved once by
       ``actingweb-unique-creators creator-to-email --apply``, and the
       application refuses to start until it has run (see
-      :doc:`../migration/v3.16`, "The creator follows the stored email")
+      :doc:`../migration/v4.0`, "The creator follows the stored email")
     - System validates email ownership via OAuth provider OR verification link
     - Suitable for applications requiring email for notifications, billing, etc.
 
@@ -1089,9 +1089,9 @@ Verification Flow
 3. **Email Sent**: Lifecycle hook ``email_verification_required`` triggered with ``verification_url``
 4. **User Clicks Link**: ``GET /oauth/email?verify=<token>`` shows a page
    with a Confirm button and changes nothing; the Confirm posts
-   ``verify=<token>`` to ``/oauth/email`` (3.16)
+   ``verify=<token>`` to ``/oauth/email`` (4.0)
 5. **Validation** (on the ``POST``): Token looked up via reverse index, checked against stored value and expiry
-6. **Adoption** (3.16): the link proves the address, so an unvouched actor (every
+6. **Adoption** (4.0): the link proves the address, so an unvouched actor (every
    actor the free-text email form created) is cleaned in place first: passphrase
    rotated, trusts, subscriptions, SPA sessions, MCP tokens and registered
    OAuth2 clients removed, stored provider tokens and ``trustee_root``
@@ -1368,7 +1368,7 @@ Enable provider ID mode by disabling email-as-creator:
     app = (
         ActingWebApp(...)
         .with_email_as_creator(enable=False)  # Use provider IDs
-        .with_unique_creator(enable=True)  # the default since 3.16
+        .with_unique_creator(enable=True)  # the default since 4.0
     )
 
 **Effect:**
@@ -1448,7 +1448,7 @@ Migration Between Modes
         actor.creator  # "google:105123456789012345678"
         actor.store.email  # "user@gmail.com" (if provided by OAuth)
         actor.store.email_verified  # absent when provider-verified; "false" pending
-                                     # a clicked link; "true" once the link is clicked
+                                     # the emailed link; "true" once it is confirmed
 
 Comparison: Email vs Provider ID Modes
 ---------------------------------------

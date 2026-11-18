@@ -1,7 +1,7 @@
-"""Find and remove peer state written before 3.16: ``actingweb-peer-state``.
+"""Find and remove peer state written before 4.0: ``actingweb-peer-state``.
 
-Before 3.16 a callback was accepted without authentication, and a peer could
-reach another peer's paths (``CHANGELOG.rst``, 3.16 ``SECURITY``). What such
+Before 4.0 a callback was accepted without authentication, and a peer could
+reach another peer's paths (``CHANGELOG.rst``, 4.0 ``SECURITY``). What such
 requests wrote survives the upgrade: a stored copy of permissions for a peer
 the actor has no trust with, permissions stamped in the future (which made
 every later update look older), callback state for subscriptions the actor
@@ -36,7 +36,7 @@ Kinds, per actor (names are compared whole: a peer id may contain ``:``):
     true).
 ``permissions-copy`` (only with ``--all-permissions``)
     Every other ``_peer_permissions`` row: a forged copy for a peer the actor
-    does trust (a pre-3.16 unauthenticated callback with a current timestamp)
+    does trust (a pre-4.0 unauthenticated callback with a current timestamp)
     looks like a real one. With ``--apply`` each removed copy is rebuilt
     right after its removal, before the next one, by a permission query to
     its peer (``rebuilt`` / ``not rebuilt``): without a copy, the peer's next
@@ -54,7 +54,7 @@ Kinds, per actor (names are compared whole: a peer id may contain ``:``):
     stale: the library removes it too when the last subscription goes.
 
 Run it with the same environment as the application (``DATABASE_BACKEND``,
-the database prefix, credentials), after every instance runs 3.16, and in a
+the database prefix, credentials), after every instance runs 4.0, and in a
 quiet period: a row created between this command's read and its delete (a
 trust or subscription made at that moment) is misread as stale, and the next
 callback writes it again. Application processes keep permissions they cached
@@ -227,7 +227,7 @@ def scan_actor(
                 Finding(actor_id, FUTURE_PERMISSIONS, PEER_PERMISSIONS_BUCKET, name)
             )
         elif all_permissions:
-            # A live peer's copy: a forged one (a pre-3.16 unauthenticated
+            # A live peer's copy: a forged one (a pre-4.0 unauthenticated
             # callback with a current timestamp) looks like any other.
             findings.append(
                 Finding(actor_id, PERMISSIONS_COPY, PEER_PERMISSIONS_BUCKET, name)

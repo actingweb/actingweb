@@ -468,7 +468,7 @@ class ActorInterface:
 
     def _rename_vouched(self, new_creator: str) -> bool:
         """Rename and move a vouched actor's recorded address with it, as one
-        atomic backend operation (``DbActor.rename_creator``, 3.16).
+        atomic backend operation (``DbActor.rename_creator``, 4.0).
 
         The ``_internal`` bucket and the actor row are read afresh, then one
         operation moves, together: the creator (only if it is still the one
@@ -486,7 +486,7 @@ class ActorInterface:
         Raises ``CreatorTaken`` (another actor holds the address) and
         ``DbError`` with nothing moved; after a fault whose outcome is
         unknown the row is read strictly, and a creator that landed answers
-        True. An actor that is unvouched, or vouched before 3.16 (no
+        True. An actor that is unvouched, or vouched before 4.0 (no
         recorded address), is renamed as it is.
         """
         from ..attribute import InternalStore

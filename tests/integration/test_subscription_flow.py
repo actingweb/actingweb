@@ -502,7 +502,7 @@ class TestSubscriptionActorFlow:
         Verify callback with invalid subscription ID returns 403.
 
         A callback URI that does not exist, with authentication data, answers
-        403 (docs/protocol/actingweb-spec.rst, "/callbacks"); 3.16 answers the
+        403 (docs/protocol/actingweb-spec.rst, "/callbacks"); 4.0 answers the
         same for an unknown id as for a subscription this actor does not hold
         as subscriber (before: 404).
 
@@ -776,7 +776,7 @@ class TestSubscriptionActorFlow:
         assert sub_data["data"][0]["sequence"] == 1
         assert sub_data["data"][0]["data"] == "initial"
         # change2 overwrote test with a value without resource: the
-        # resource went with its parent and its subscriber is told (3.16,
+        # resource went with its parent and its subscriber is told (4.0,
         # specification 1.5); change3 had no resource to lose.
         assert sub_data["data"][1]["sequence"] == 2
         assert sub_data["data"][1]["data"] == ""
@@ -968,7 +968,7 @@ class TestSubscriptionActorFlow:
             },
         )
         # The deleted peer's trust is gone, so its bearer matches nothing and
-        # is refused before the subscription is looked up (3.16: callbacks
+        # is refused before the subscription is looked up (4.0: callbacks
         # are authenticated; previously 404 from the lookup).
         assert response.status_code == 403
 

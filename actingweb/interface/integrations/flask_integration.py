@@ -692,7 +692,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                 del headers["Authorization"]
 
         # A callback hands its hook the body's bytes (an anonymous webhook
-        # verifies a signature over them, 3.16): read and cache them before
+        # verifies a signature over them, 4.0): read and cache them before
         # the form parse, which would otherwise consume a form-encoded body.
         raw_callback_body = (
             request.get_data(cache=True) if "/callbacks/" in request.path else b""
@@ -1193,7 +1193,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                     pass  # Fall back to default response
 
         if webobj.response.template_name:
-            # An MCP sign-in paused for the user's confirmation (3.16).
+            # An MCP sign-in paused for the user's confirmation (4.0).
             page = Response(
                 render_template(
                     webobj.response.template_name, **webobj.response.template_values
@@ -1453,17 +1453,17 @@ class FlaskIntegration(BaseActingWebIntegration):
             and webobj.response.template_values
         ):
             # This is an HTML template response: the handler names it (the
-            # confirmation page, 3.16), else the authorization form.
+            # confirmation page, 4.0), else the authorization form.
             template_name = (
                 webobj.response.template_name or "aw-oauth-authorization-form.html"
             )
             try:
                 page = Response(
                     render_template(template_name, **webobj.response.template_values),
-                    # A refusal page keeps its status (3.16).
+                    # A refusal page keeps its status (4.0).
                     status=webobj.response.status_code or 200,
                 )
-                # The handler's cookies and headers reach the page (3.16).
+                # The handler's cookies and headers reach the page (4.0).
                 for key, value in webobj.response.headers.items():
                     page.headers[key] = value
                 self._copy_cookies(page, webobj)
@@ -1480,7 +1480,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                     }
                 )
                 # A refusal keeps its status; a page that failed is not a
-                # 200 (3.16).
+                # 200 (4.0).
                 answer.status_code = template_fallback_status(
                     webobj.response.status_code
                 )
@@ -1736,7 +1736,7 @@ class FlaskIntegration(BaseActingWebIntegration):
         ``web_ui``: the request is for ``/<actor_id>/www``. With no OAuth
         provider configured it then reaches the handler, which answers 401
         with a ``Basic`` challenge in the application's realm, so a browser
-        prompts for the creator and passphrase (3.16, as on FastAPI). Other
+        prompts for the creator and passphrase (4.0, as on FastAPI). Other
         routes keep the ``Bearer`` 401: no credential dialog for a script's
         request."""
         # Check for Basic auth

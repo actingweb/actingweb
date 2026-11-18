@@ -1,4 +1,4 @@
-"""Reverse lookup: a stale owner and the stale-handle race (3.16,
+"""Reverse lookup: a stale owner and the stale-handle race (4.0,
 owner-decided plan D14 and D15).
 
 - D14: a lookup row whose owner no longer holds the value is taken over by

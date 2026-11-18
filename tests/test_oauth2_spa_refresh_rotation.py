@@ -136,7 +136,7 @@ def test_reuse_beyond_grace_window_revokes_only_the_chain():
     assert result.get("error") is True
     assert result.get("status_code") == 401
     assert handler.response is not None and handler.response.status_code == 401
-    # The stable code (3.16) names theft, not an expired token.
+    # The stable code (4.0) names theft, not an expired token.
     assert result.get("code") == "refresh_token_reused"
     assert handler.response.headers["X-ActingWeb-Error"] == "refresh_token_reused"
 

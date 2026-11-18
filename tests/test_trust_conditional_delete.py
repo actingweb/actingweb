@@ -1,4 +1,4 @@
-"""A trust delete removes only the row it was authorised against (3.16, plan
+"""A trust delete removes only the row it was authorised against (4.0, plan
 Phase 4, A13).
 
 ``Trust.delete(only_if_secret=)`` and ``delete_reciprocal_trust(

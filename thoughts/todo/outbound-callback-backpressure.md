@@ -24,6 +24,6 @@ polling are the recovery every implementation has. Nothing here is a defect.
 `FanOutManager` had a breaker per peer persisted between processes and a
 payload downgrade, but it was never on the publish path: it numbered one
 sequence for all subscribers, applied no permission filter, read the wrong
-option tag, and downgraded to a URL a 3.16 subscriber does not fetch. A design
+option tag, and downgraded to a URL a 4.0 subscriber does not fetch. A design
 here starts from the sender (units per subscriber, the per-write bound) and
 keeps the per-subscription sequence and the grant filter.

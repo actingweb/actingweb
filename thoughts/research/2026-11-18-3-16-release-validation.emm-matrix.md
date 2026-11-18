@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-18
 **Belongs to:** [`2026-11-18-3-16-release-validation.md`](2026-11-18-3-16-release-validation.md)
-**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `963ac34`.
+**Read at:** `../actingweb_mcp` `main` (`c1be751c`), through git, names only; this repository at `15b0e35`.
 
 
 Library tree: branch `release/3.16.0-release-validation` (working tree, including the uncommitted `tests/integration/test_wire_v315.py` and `WV1`-`WV4`). Input: `usage.md` beside this file. Read-only: no test was run; every cell was filled by reading the test and the library code it reaches.

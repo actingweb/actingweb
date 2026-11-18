@@ -154,7 +154,7 @@ try:
 except Exception as e:
     LOG.error(f"Failed to configure OAuth2/trust settings: {e}")
 
-# The levels an OAuth2/MCP client may be given (ActingWeb 3.16): an explicit
+# The levels an OAuth2/MCP client may be given (ActingWeb 4.0): an explicit
 # list, mcp_client by default. Trusts between actors are not restricted by it.
 from actingweb.permission_integration import AccessControlConfig  # noqa: E402
 

@@ -1,4 +1,4 @@
-"""``actingweb.maintenance.mark_actors_vouched``: the operator's opt-out of the 3.16
+"""``actingweb.maintenance.mark_actors_vouched``: the operator's opt-out of the 4.0
 clean-slate adoption for actors known to be legitimate."""
 
 from typing import Any
@@ -70,7 +70,7 @@ class TestMarkActors:
 
 
 class TestStreamedCollection:
-    """The actor list is streamed through ``iter_rows`` (3.16)."""
+    """The actor list is streamed through ``iter_rows`` (4.0)."""
 
     def _fake_list(self, rows: list[dict[str, str]]) -> tuple[Any, list[Any]]:
         calls: list[Any] = []
@@ -113,7 +113,7 @@ class TestStreamedCollection:
 
 
 class TestEmailAsCreator:
-    """``--email-as-creator`` (3.16): an actor whose stored email differs from
+    """``--email-as-creator`` (4.0): an actor whose stored email differs from
     its creator gets the creator as its email before it is marked, so the
     creator-to-email sweep has nothing to move it to."""
 

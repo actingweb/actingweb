@@ -35,7 +35,7 @@ async def _revoke(
 ) -> tuple[Any, MagicMock, Any]:
     """``sync_peer_async`` against a peer that answers 404 everywhere; the
     core delete calls its callback with the row it re-read, as the real one
-    does (3.16)."""
+    does (4.0)."""
     mock_actor = MagicMock()
     mock_actor.id = "actor123"
     mock_actor.config = MagicMock()
@@ -56,7 +56,7 @@ async def _revoke(
 
     async def delete_async(**kw: Any) -> bool:
         # As the real async twin: the sync delete on the default executor
-        # (how 3.16's first fix ran it, which the deadlock test needs).
+        # (how 4.0's first fix ran it, which the deadlock test needs).
         return await asyncio.to_thread(delete, **kw)
 
     mock_actor.delete_reciprocal_trust_async = AsyncMock(side_effect=delete_async)
@@ -321,7 +321,7 @@ def test_sync_peer_sync_detects_and_cleans_up_revoked_trust():
                 expected_secret="s1",
                 before_local_delete=ANY,
             )
-            # The hook fires through the delete's callback (3.16), with the
+            # The hook fires through the delete's callback (4.0), with the
             # row the delete read and initiated_by_peer.
             hooks = mock_actor.config._hooks  # what the manager's ActorInterface holds
             callback = mock_actor.delete_reciprocal_trust.call_args.kwargs[

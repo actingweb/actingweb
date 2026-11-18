@@ -158,7 +158,7 @@ SPA client signed out during a database throttle
 - **Fix**: From 3.15 the grant answers **503** with ``Retry-After`` and the
   body "Token store temporarily unavailable; retry", as the MCP grant does.
   The client keeps its token and retries after ``Retry-After`` seconds; since
-  3.16 the answer carries ``X-ActingWeb-Error: temporarily_unavailable``, and a
+  4.0 the answer carries ``X-ActingWeb-Error: temporarily_unavailable``, and a
   401 without that header is not the library's. See rule 7 in
   :ref:`spa-refresh-reliably`.
 
@@ -288,7 +288,7 @@ Peer Data Not Cleaned Up After Trust Deletion
   ``ListLayoutConflictError`` ("rows of both layouts"), or
   ``actingweb-verify-property-lists --attributes`` reports a list as UNHEALTHY with
   rows of both layouts.
-- **Cause**: the list was converted to the 3.16 layout, and a pre-3.16 process (a
+- **Cause**: the list was converted to the 4.0 layout, and a pre-4.0 process (a
   rolling deploy, or a rollback) then wrote it in the old layout beside the new one.
   Neither copy is known to be right, so nothing is merged.
 - **Fixes**:
@@ -302,8 +302,8 @@ Peer Data Not Cleaned Up After Trust Deletion
   2. **An application's own bucket**: nothing rebuilds it, and ``--repair`` leaves it
      unhealthy. Decide which copy is right, then ``clear()`` or ``delete()`` the list
      (both remove the rows of both layouts) and write it again.
-  3. Finish the rolling deploy before lists convert, so no pre-3.16 process writes
-     them; see :doc:`../migration/v3.16` ("Attribute lists and list diffs").
+  3. Finish the rolling deploy before lists convert, so no pre-4.0 process writes
+     them; see :doc:`../migration/v4.0` ("Attribute lists and list diffs").
 
 Repeated rebuild warnings for one subscription
 ----------------------------------------------
@@ -340,7 +340,7 @@ Repeated rebuild warnings for one subscription
      subscription) deliver every change twice: an ``append`` is then held twice, and
      a positional diff applied twice can leave the replica out of step. Keep one of
      them.
-  5. **A publisher older than 3.16** sends REST list edits as scalars; a scalar for
+  5. **A publisher older than 4.0** sends REST list edits as scalars; a scalar for
      a list's name is out of step. Upgrade the publisher.
 
 A Subscriber Refuses Callbacks (400 or 503)
@@ -378,7 +378,7 @@ A Replica Is Missing Names After a Resync
 
 - **Symptom**: after a publisher resumed (or a gap resync), names the
   subscriber's replica held are gone, and the data hook was not told which.
-- **Cause**: since 3.16 a resync removes from the replica what the
+- **Cause**: since 4.0 a resync removes from the replica what the
   publisher's baseline no longer has (it was deleted while suspended, or the
   peer's grant no longer covers it). The hook gets the baseline, not the
   removed names.
@@ -393,11 +393,11 @@ A Resync Answers 503
 - **Symptom**: a resync callback answers 503 with ``Retry-After``; the log
   says ``Failed to fetch resync baseline``.
 - **Cause**: the subscriber could not fetch the baseline (the publisher was
-  unreachable, answered an error, or redirected). Since 3.16 that is not
+  unreachable, answered an error, or redirected). Since 4.0 that is not
   applied as an empty baseline: the sequence stays and the rebuild is owed.
 - **Fix**: none needed when the publisher is reachable again: the next
   callback runs the owed rebuild once a minute has passed since the last
-  attempt, a poll runs it too, and a 3.16 publisher sends the resync again on
+  attempt, a poll runs it too, and a 4.0 publisher sends the resync again on
   its next resume.
 
 Sequence Gaps Not Resolving

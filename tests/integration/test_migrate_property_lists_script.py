@@ -592,7 +592,7 @@ class TestEnvelopeRefusals:
 
 class TestMidSweepFault:
     """A scan fault part-way stops the sweep where it is: the checkpoint
-    keeps what was done and the exit code is 2 (3.16)."""
+    keeps what was done and the exit code is 2 (4.0)."""
 
     def test_a_fault_after_one_actor_keeps_the_checkpoint_and_exits_2(
         self, test_actor, monkeypatch, tmp_path

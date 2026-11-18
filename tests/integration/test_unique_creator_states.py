@@ -1,4 +1,4 @@
-"""The creators record against the actor row, state by state (3.16, PR 2).
+"""The creators record against the actor row, state by state (4.0, PR 2).
 
 thoughts/research/2026-10-30-creator-record-invariant-audit.md lists the
 states in which a DynamoDB ``creators`` record and the actor row disagree:
@@ -752,7 +752,7 @@ class TestStaleHandleRename:
 
 class TestTheEmailWriteMeetsAHeldAddress:
     """Under ``with_email_as_creator`` a vouched actor's creator follows its
-    stored email where the email is written (3.16, email-as-creator Phase
+    stored email where the email is written (4.0, email-as-creator Phase
     2); an address another actor holds is refused at the write, and no load
     renames anything."""
 

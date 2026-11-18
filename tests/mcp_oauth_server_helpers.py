@@ -33,7 +33,7 @@ def _no_trust_row(
     _registry: MCPClientRegistry, _actor_id: str, client_id: str, _data: Any
 ) -> str:
     """Stands in for the client trust row's creation (it needs a real actor
-    store, and since 3.16 a registration without it fails)."""
+    store, and since 4.0 a registration without it fails)."""
     return f"oauth2_client:{client_id}:{client_id}"
 
 

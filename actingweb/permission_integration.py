@@ -506,11 +506,11 @@ class AccessControlConfig:
 
     def client_trust_type_acceptable(self, name: str | None) -> bool:
         """Whether an OAuth2/MCP client may be given trust type ``name``
-        (3.16): see :func:`client_trust_type_acceptable`."""
+        (4.0): see :func:`client_trust_type_acceptable`."""
         return client_trust_type_acceptable(self.config, name)
 
     def default_client_trust_type(self) -> str | None:
-        """The type an OAuth2/MCP client gets when none was chosen (3.16):
+        """The type an OAuth2/MCP client gets when none was chosen (4.0):
         see :func:`default_client_trust_type`."""
         return default_client_trust_type(self.config)
 
@@ -545,7 +545,7 @@ def _registered(config: Any, name: str) -> bool:
 
 
 def client_trust_type_acceptable(config: Any, name: str | None) -> bool:
-    """Whether an OAuth2/MCP client may be given trust type ``name`` (3.16).
+    """Whether an OAuth2/MCP client may be given trust type ``name`` (4.0).
 
     The application's list (``configure_oauth2_trust_types``) answers when it
     is set; with no list (or ``{"allowed": None}``) every registered type
@@ -563,7 +563,7 @@ def client_trust_type_acceptable(config: Any, name: str | None) -> bool:
 
 
 def default_client_trust_type(config: Any) -> str | None:
-    """The type an OAuth2/MCP client gets when the user chose none (3.16): the
+    """The type an OAuth2/MCP client gets when the user chose none (4.0): the
     configured default when it is acceptable, else ``mcp_client`` when it
     is, else the first acceptable type in the list (or the registry, in name
     order); None when nothing is acceptable."""

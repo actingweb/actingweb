@@ -31,10 +31,10 @@ finding is adjacent_duplicates -- compact() itself leaves duplicate
 residue intact (a duplicate always means a destroyed item, and silently
 collapsing one copy would bless the data loss as intentional).
 
---attributes adds each actor's attribute lists (3.16): the replica buckets
+--attributes adds each actor's attribute lists (4.0): the replica buckets
 ``remote:{peer}`` of its trusted peers, plus any --bucket named. Lists are
 found by a skip-scan, never a whole-bucket read. A dry run writes nothing
-and reports a list still in the pre-3.16 attribute layout as such; --repair
+and reports a list still in the pre-4.0 attribute layout as such; --repair
 converts a healthy one (as its first change would), and applies
 repair_keys()/compact() as for property lists. A list in both layouts, or
 an old-layout list that is damaged, stays unhealthy; with
@@ -99,7 +99,7 @@ class CheckpointModeMismatch(Exception):
 class Checkpoint:
     """Set of actor IDs already swept this run, persisted for resume, with
     the mode that swept them (``"properties"`` or ``"attributes"``; a bare
-    list, as written before 3.16, is ``"properties"``)."""
+    list, as written before 4.0, is ``"properties"``)."""
 
     def __init__(self, path: str | None, mode: str = "properties") -> None:
         self._path = path
@@ -537,18 +537,18 @@ def _settle_attribute_layout(
         old = list_attr.storage_format() == OLD_LAYOUT
         if old and not repair:
             logger.info(
-                f"{label}: in the pre-3.16 attribute layout -- converted on "
+                f"{label}: in the pre-4.0 attribute layout -- converted on "
                 f"its first change, or by --repair"
             )
             return "done"
         if repair:
             if list_attr.convert():
-                logger.info(f"{label}: converted from the pre-3.16 layout")
+                logger.info(f"{label}: converted from the pre-4.0 layout")
         return "v2"
     except ListLayoutConflictError:
-        why = "rows of both layouts (a pre-3.16 writer beside a converted list)"
+        why = "rows of both layouts (a pre-4.0 writer beside a converted list)"
     except ListCorruptionError:
-        why = "damaged in the pre-3.16 layout (a hole or a wrong length)"
+        why = "damaged in the pre-4.0 layout (a hole or a wrong length)"
     except Exception as e:  # folds DbError: counted as error, exit 1
         logger.error(f"{label}: layout check failed: {e}")
         return "error"
@@ -705,7 +705,7 @@ def main() -> int:
         help=(
             "also sweep each actor's attribute lists: the remote:{peer} "
             "buckets of its trusted peers, plus any --bucket. A list still in "
-            "the pre-3.16 attribute layout is reported (dry run) or converted "
+            "the pre-4.0 attribute layout is reported (dry run) or converted "
             "(--repair)"
         ),
     )

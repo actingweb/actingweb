@@ -58,7 +58,7 @@ or client cleanup:
 #. Run the ``actor_deleted`` lifecycle hook (HTTP path, and a sign-in that
    replaces an unvouched actor; see :doc:`hooks-reference`).
 #. Revoke the actor's MCP and SPA tokens and remove its OAuth2 clients'
-   index rows (3.16; the HTTP path, a sign-in and the operator command).
+   index rows (4.0; the HTTP path, a sign-in and the operator command).
 #. Delete peer-trustee relationships.
 #. Delete properties and property lists, then the actor's property-list
    side partition (``{actor_id}$aux``: spanned items' body rows and key
@@ -81,10 +81,10 @@ Two consequences follow from the row going last, and both are contract:
   ``DELETE`` can be issued again. Removing the row first would strand the
   remaining rows with nothing pointing at them.
 
-Resuming a stalled wipe (3.16)
+Resuming a stalled wipe (4.0)
 ------------------------------
 
-The tombstone written by 3.16 records why it was written (``deleted`` or
+The tombstone written by 4.0 records why it was written (``deleted`` or
 ``replaced_at_adoption``), whether peers are notified, the ``actor_deleted``
 keyword arguments, the actor's OAuth2 client ids and whether
 ``actor_deleted`` has run. It carries no retention TTL until the actor row is
@@ -97,7 +97,7 @@ Who finishes a stalled wipe:
 
 - a repeated ``DELETE /<id>``;
 - a sign-in completion on that actor, which then creates a new actor for the
-  creator (a tombstone without a recorded reason, written before 3.16, leaves
+  creator (a tombstone without a recorded reason, written before 4.0, leaves
   a vouched actor as it is);
 - ``actingweb-deletions resume`` (see :doc:`../guides/database-maintenance`),
   which runs no application hooks;
@@ -310,11 +310,11 @@ lambda-like runtime. It classifies orphans only; it does not replace
 A property row whose actor id ends in ``$aux`` belongs to that actor's
 property-list side partition. It is reported only when the actor itself is
 gone, and under the raw ``{actor_id}$aux`` key, which is the partition key
-to delete it by. Such rows are left by a pre-3.16 process deleting an actor
+to delete it by. Such rows are left by a pre-4.0 process deleting an actor
 during a rolling deploy, by a spanned write landing after an actor delete's
 last sweep pass, or by a crash between the two partitions' deletes; actor
 deletion assumes the actor is quiescent, as before. Remove them as any
-orphan property row. An attribute list's side rows (3.16) are not in a
+orphan property row. An attribute list's side rows (4.0) are not in a
 separate partition: they sit in the bucket ``<bucket>$aux`` under the
 actor's own id, are removed with the actor's attribute buckets, and are
 reported, when orphaned, under that actor id like any attribute row.

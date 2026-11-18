@@ -391,11 +391,11 @@ class TestV2ListsAreUntouched:
             "healthy": True,
             "duplicate_identities": None,
             "identity_checked_count": None,
-            # 3.16: spanned-item counts from the heads alone.
+            # 4.0: spanned-item counts from the heads alone.
             "spanned_items": 0,
             "span_bytes": 0,
             "malformed_heads": [],
-            # 3.16: key rows of append_once() items.
+            # 4.0: key rows of append_once() items.
             "key_rows": 0,
             "dangling_key_rows": [],
             "duplicate_keyed_items": [],

@@ -223,6 +223,10 @@ the trust details to you), use the synchronous ``create_verified_trust()``:
         relationship="friend",
     )
 
+``approved=True`` takes effect only when the request verifies against the
+peer; an unverified request is stored pending and is not approved (4.0). A
+peer that already has a verified or approved row is refused (``None``).
+
 Approving and Modifying Trust Relationships
 --------------------------------------------
 
@@ -302,7 +306,7 @@ Listing Subscriptions
     # Get inbound subscriptions (they subscribed to us)
     inbound = actor.subscriptions.get_subscriptions_from_peer("peer123")
 
-    # Every subscription grouped by peer, from one read (3.16)
+    # Every subscription grouped by peer, from one read (4.0)
     for peer_id, group in actor.subscriptions.get_subscriptions_by_peer().items():
         print(peer_id, len(group.outbound), len(group.inbound))
 
@@ -320,7 +324,7 @@ Creating Subscriptions
 
     # Subscribe to peer (synchronous - includes automatic baseline sync).
     # granularity is "high", "low" or "none"; anything else is refused
-    # before a request is sent (3.16), and a publisher answers it 400.
+    # before a request is sent (4.0), and a publisher answers it 400.
     subscription_url = actor.subscriptions.subscribe_to_peer(
         peer_id="peer123",
         target="properties",

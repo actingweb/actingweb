@@ -3,7 +3,7 @@ Backfill command tests (``actingweb-property-lookup backfill``, DynamoDB).
 
 The legacy-cohort fallbacks (v1 table, property-index GSI), the startup
 warning and the default-flip tests were removed with the legacy lookup in
-3.16; what remains is the backfill itself, now a packaged command.
+4.0; what remains is the backfill itself, now a packaged command.
 """
 
 import uuid

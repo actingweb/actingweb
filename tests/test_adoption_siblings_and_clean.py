@@ -1,4 +1,4 @@
-"""Adoption after the fourth verification (3.16).
+"""Adoption after the fourth verification (4.0).
 
 Sibling factory actors, the emailed link's confirmed flag, provider tokens and
 the stored email on a clean, ``Actor.create`` on a taken id, and the creator
@@ -223,7 +223,7 @@ class TestCreateOnATakenId:
         older = Attributes(actor_id=actor_id, bucket="system_state", config=config)
         assert older.set_attr("keep", data={"v": 1})
         try:
-            # 3.16: a marker-write fault rolls the row back and raises (503).
+            # 4.0: a marker-write fault rolls the row back and raises (503).
             with marker_write_fault(config, actor_id), pytest.raises(DbError):
                 Actor(config=config).create(
                     url="https://test.example.com/",

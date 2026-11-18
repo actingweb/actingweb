@@ -1,6 +1,6 @@
-"""Adoption under a backend read fault (3.16 iteration).
+"""Adoption under a backend read fault (4.0 iteration).
 
-Since 3.16 both backends raise ``DbError`` on a read fault. These tests
+Since 4.0 both backends raise ``DbError`` on a read fault. These tests
 inject one at the backend seam: the adoption must fail the sign-in closed,
 never read the fault as "nothing there".
 """
@@ -50,7 +50,7 @@ def auth() -> OAuth2Authenticator:
 @contextmanager
 def bucket_read_fault(config: Any, actor_id: str, bucket: str) -> Iterator[None]:
     """``get_bucket`` raises ``DbError`` (a backend fault, both backends
-    since 3.16) for one bucket of one actor; every other read is real."""
+    since 4.0) for one bucket of one actor; every other read is real."""
     unpatched = get_attribute(config)
     cls = type(unpatched)
     real = unpatched.get_bucket  # bound before patching; static on DynamoDB
@@ -117,7 +117,7 @@ class TestWipeConfirmationReadFault:
         plant_squat_state(config, legacy)
         factory = get_trust_list if which == "trusts" else get_subscription_list
 
-        # 3.16: the fault propagates (the integrations answer 503).
+        # 4.0: the fault propagates (the integrations answer 503).
         with list_read_fault(factory, config, aid(legacy)), pytest.raises(DbError):
             auth.lookup_or_create_actor_by_identifier(creator)
 

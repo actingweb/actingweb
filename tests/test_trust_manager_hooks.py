@@ -38,7 +38,7 @@ class TestTrustManagerHooks:
         manager = TrustManager(mock_actor, hooks=mock_hooks)
 
         # Pending before the approval, approved by both sides after it: the
-        # hook fires once, on the transition (3.16).
+        # hook fires once, on the transition (4.0).
         pending = {**approved_relationship, "approved": False}
         mock_actor.get_trust_relationship = Mock(
             side_effect=[pending, approved_relationship]
@@ -49,7 +49,7 @@ class TestTrustManagerHooks:
         assert result is True
         mock_hooks.execute_lifecycle_hooks.assert_called_once()
         call_args = mock_hooks.execute_lifecycle_hooks.call_args
-        # The canonical hook (3.16); trust_approved is its deprecated stand-in.
+        # The canonical hook (4.0); trust_approved is its deprecated stand-in.
         assert call_args[0][0] == "trust_fully_approved_local"
         assert call_args[1]["trust_data"] == approved_relationship
         assert call_args[1]["peer_id"] == "peer123"

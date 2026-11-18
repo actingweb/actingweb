@@ -225,7 +225,7 @@ Configuration methods:
 - ``.with_web_ui(enable=True)`` - Enable/disable web UI at /www
 - ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
-- ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database. **On by default**; ``False`` opts out. See the first-run note below and :doc:`../migration/v3.16`
+- ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database. **On by default**; ``False`` opts out. See the first-run note below and :doc:`../migration/v4.0`
 - ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``); close it for OAuth-only deployments
 - ``.with_email_as_creator(enable=True)`` - A vouched actor's creator follows its stored ``_internal`` email, renamed where the email is written (off on ``ActingWebApp`` until called). See the first-run note below
 - ``.add_actor_type(name, factory, relationship)`` - Add known actor type

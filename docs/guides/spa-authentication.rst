@@ -321,41 +321,46 @@ The OAuth callback flow works in two stages for SPAs:
 
 After the user authenticates with Google/GitHub, the OAuth provider redirects the browser
 to ``/oauth/callback``. When the server detects SPA mode (via ``spa_mode: true`` in state),
-it redirects the browser to your SPA's ``redirect_uri`` (e.g., ``/callback``) with the
-authorization code and state preserved:
+it completes the sign-in there (an authorization code can be used once), keeps the
+result as a pending session, sets the refresh cookie, and redirects the browser to your
+SPA's ``redirect_uri`` (e.g., ``/callback``) with the session's id:
 
 .. code-block:: text
 
    Google → /oauth/callback?code=xxx&state={"spa_mode":true,...}
-                  ↓ (server detects SPA mode, redirects)
-          /callback?code=xxx&state={"spa_mode":true,...}
+                  ↓ (server signs the user in, redirects)
+          /callback?session=<session_id>
 
-**Stage 2: SPA Exchanges Code for Tokens**
+**Stage 2: SPA Fetches the Session**
 
-Your SPA callback page then calls the server to exchange the code for tokens:
+Your SPA callback page then fetches the pending session (see
+``GET /oauth/spa/session/<session_id>`` in the API reference below; the route is
+registered by the FastAPI integration):
 
 .. code-block:: javascript
 
    // On /callback page
    const params = new URLSearchParams(window.location.search);
+   const sessionId = params.get('session');
 
-   // Call /oauth/callback with Accept: application/json to get tokens
-   const tokens = await fetch('/oauth/callback?' + params.toString(), {
-       headers: { 'Accept': 'application/json' }  // Required for JSON response
+   const session = await fetch('/oauth/spa/session/' + encodeURIComponent(sessionId), {
+       headers: { 'Accept': 'application/json' }
    }).then(r => r.json());
 
-   if (tokens.success) {
+   if (session.success) {
        // Store access token (in memory for security)
-       setAccessToken(tokens.access_token);
+       setAccessToken(session.access_token);
 
        // Navigate to app - redirect_url contains the return_path
-       window.location.href = tokens.redirect_url;  // e.g., /abc123/app
+       window.location.href = session.redirect_url;  // e.g., /abc123/app
    }
 
 .. note::
 
-   The ``Accept: application/json`` header is required in Stage 2. Without it,
-   the server will perform another redirect (Stage 1 behavior).
+   A fetch of ``/oauth/callback`` itself with ``Accept: application/json`` (and the
+   provider's ``code`` and ``state``) answers the tokens as JSON instead of
+   redirecting. That is for a client that receives the provider's redirect itself;
+   a browser that followed the redirect has already spent the code.
 
 Email Verification for SPA
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1050,9 +1055,10 @@ A store fault answers **503** with ``Retry-After: 5`` and
 revoked, no cookie was cleared, and the presented token is still the handle for
 the retry. Retry promptly: if the access token expires before the retry, send
 the refresh token as well, which anchors on a 14-day row. A cross-origin SPA
-can read ``Retry-After`` and ``X-ActingWeb-Error`` because the endpoint lists
-both in ``Access-Control-Expose-Headers``; a proxy that strips ``Retry-After``
-leaves the client to a fixed delay.
+can read ``Retry-After`` because the endpoint lists
+it in ``Access-Control-Expose-Headers``; a proxy that strips ``Retry-After``
+leaves the client to a fixed delay. This 503 carries no ``X-ActingWeb-Error``
+header (see :ref:`the endpoint's reference <spa-logout-reference>`).
 
 .. note::
 
@@ -1612,6 +1618,52 @@ Check session status.
        "message": "No active session"
    }
 
+GET /oauth/spa/session/<session_id>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Registered by the FastAPI integration only. It hands a browser the session a
+redirect-based sign-in left for it: when the provider sends the browser to
+``/oauth/callback`` in SPA mode without ``Accept: application/json``, the
+library completes the sign-in there and redirects to the SPA's
+``redirect_uri`` with ``?session=<session_id>``, and the SPA fetches the
+session with that id.
+
+**Response:**
+
+.. code-block:: json
+
+   {
+       "success": true,
+       "access_token": "...",
+       "actor_id": "abc123",
+       "email": "user@example.com",
+       "expires_at": 1699876543,
+       "redirect_url": "/abc123/app"
+   }
+
+The refresh token is not in the body (with ``token_delivery: "hybrid"`` the
+redirect set it as a cookie). A session can be read once; a repeat within 30
+seconds of the first read is answered again, and a later one deletes the
+session and answers 404. A session that is never read expires after 10
+minutes. An unknown, expired or used session answers **404**, with the code
+in ``X-ActingWeb-Error`` as well:
+
+.. code-block:: json
+
+   {
+       "error": true,
+       "message": "Session not found or expired",
+       "code": "not_found"
+   }
+
+POST /oauth/spa/revoke
+~~~~~~~~~~~~~~~~~~~~~~
+
+The same endpoint as ``POST /oauth/revoke`` under its older path, on both
+integrations. New code calls ``/oauth/revoke``.
+
+.. _spa-logout-reference:
+
 POST /oauth/logout
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1670,6 +1722,11 @@ A token store fault answers **503** with ``Retry-After: 5`` and no
        "message": "Token store temporarily unavailable; retry the logout",
        "method": "POST"
    }
+
+This answer, and the 500 the endpoint answers on an unexpected error, carry
+no ``X-ActingWeb-Error`` header and no ``code`` key; only a database fault
+answered by the fault handler carries them on this path. A logout error
+without the header can therefore still be the library's own answer.
 
 The stored provider token is cleared for the actor after a confirmed
 revocation of a ``POST``, for every device of that actor.

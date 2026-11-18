@@ -46,6 +46,16 @@ Every entry records the ``Config`` of the application that filled it, and an
 entry another application filled is a miss: the caches are module globals,
 and two applications in one process may hold the same actor id.
 
+The caches are internal to the MCP handler, not an extension point. An entry
+of the token cache is honoured only when its ``"config"`` is the handler's
+own ``Config`` object (an identity test) and it is younger than
+``_cache_ttl``, and no actor is cached (3.16). Code in front of ``/mcp`` that
+needs to know whether a token is valid calls the token manager,
+``get_actingweb_token_manager(config).validate_access_token(token)`` from
+``actingweb.oauth2_server.token_manager``, not the cache; it returns
+``(actor_id, client_id, token_data)`` or ``None``, and raises
+``TokenStoreUnavailable`` when the token store cannot be read.
+
 Cache Key Strategy
 -------------------
 

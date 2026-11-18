@@ -444,3 +444,94 @@ Asked with the evidence above; each answer is the recommended one.
   `control-old.json`, `control-new.json`), which a reboot clears. Phase 2
   re-runs `scripts/live_pair.py` if they are gone; a run takes a few
   minutes.
+
+## The release read from Emm's side (Phase 2, items 3 and 4)
+
+Three appendices, read from `../actingweb_mcp` at `main` (`c1be751c`)
+through git, names only:
+[`…emm-usage.md`](2026-11-18-3-16-release-validation.emm-usage.md) (how Emm
+uses the library),
+[`…emm-matrix.md`](2026-11-18-3-16-release-validation.emm-matrix.md) (each
+use against the test here that would fail if it broke) and
+[`…emm-questions.md`](2026-11-18-3-16-release-validation.emm-questions.md)
+(the upgrade walked with only the changelog, the guide and `docs/`).
+
+**How Emm uses it, in short.** 45 imported names; 12 builder calls and 5
+conditional ones; 10 lifecycle hooks, one property hook on `*`, three
+callback hooks, one subscription data hook, 8 method and 39 action hooks;
+three trust types of its own; the asynchronous variants of the trust and
+subscription SDK only; `memory_*` property lists written with `append`,
+`update_by_handle`, `delete_by_handle`, `clear` and `delete`; replicas read
+through `RemotePeerStore.get_list` and `AttributeListStore`. Lambda through
+Mangum, synchronous callbacks, DynamoDB in production with table
+auto-creation off.
+
+**Coverage against use (item 4, AC-9).** 152 rows; in trust, subscriptions
+and the diffs that share memories 51 rows, of which 24 were covered, 10
+partly and 17 not: no test called `subscribe_to_peer_async`,
+`unsubscribe_from_peer`, `revoke_peer_subscription` or `sync_peer_async`
+between two actors, read the cached peer capabilities or the peer's
+permission copy through their stores, published with the by-handle list
+writes, read a replica through `get_all_properties` or `AttributeListStore`,
+or delivered with synchronous callbacks. **Closed by
+`tests/integration/test_consumer_sdk_calls.py`**: ten tests between two real
+actors on two hosts, both backends, each the call as Emm makes it
+(`api/memory_types.py:476` for the permission override, and the sites the
+matrix names for the others). None needed a new kind of fixture: the
+synchronous-callback test switches the running configuration, as
+`test_callback_delivery_shapes.py` does for two other settings.
+
+**What the new tests found.**
+
+- `store_permissions_async` tells the peer through a background task
+  whatever `with_sync_callbacks()` says
+  (`actingweb/trust_permissions.py:340-357`). On a loop that ends with the
+  call the task is cancelled; on a function platform that freezes after the
+  response it may not run. Subscription callbacks have a synchronous mode
+  for exactly that; this notification has none. Emm calls it from five
+  sites on Lambda. The peer's copy is corrected by its next `sync_peer`.
+  **A design question for the owner; not changed here.**
+- `subscribe_to_peer_async` returns the subscription's URL, not its id (its
+  docstring says so); nothing wrong, the first draft of the test assumed
+  the id.
+
+**The maintainer's questions (item 3, AC-8).** 73 questions: 50 answered by
+the documents, 17 partly, 6 not at all. The unanswered and partly answered
+ones are written into `docs/` as the generic pattern in this phase (the
+start-up check on a function platform, where the operator commands run and
+what they must be told, the creators table when tables are declared in a
+template, what a missing `ConditionCheckItem` looks like, the PostgreSQL
+order, which hooks fail a request on a fault, a callback hook's `data`,
+when the `permissions` hook runs, `sync_peer`'s result, the two SPA routes).
+Four are Phase 4's, with the guide's restructure: the version, installing
+the candidate, rolling back, and peers that have not upgraded.
+
+**A defect the walk found, fixed here.** `complete_client_authorization()`,
+called as four documents and its own docstring show, never ran the
+application's `oauth2_trust_requested` hooks: only the library's own routes
+passed them, through a private callable. An application with its own
+sign-in route (Emm has one) got no decision hook. New in this release, so
+no released version had it. Fixed in
+`actingweb/oauth2_server/oauth2_server.py` (the helper now uses the
+application's hooks when no `decide_trust` is passed), with
+`tests/integration/test_oauth2_trust_binding.py::test_the_helper_asks_the_applications_decision_hook`
+seen failing first.
+
+**What Emm's maintainer still has to do** is section (d) of the questions
+appendix. The items the adoption worktree does not have yet: the IAM
+actions `BatchGetItem` and `ConditionCheckItem` and the `<prefix>_creators`
+table in its template (its IAM coverage test looks for `TransactWriteItems`,
+which is not an IAM action); the two access rows it added on
+`subscriptions/<id>/<subid>` are redundant and harmless
+(`actingweb/config.py:359` already admits a peer to its own subscription);
+`oauth2_server._store_mcp_client_info_in_trust` does not exist in the
+library (it did not at 3.15.1 either); three private names it reads
+(`handlers.mcp._token_cache`, `._cache_ttl`, `config._oauth2_trust_types`)
+still exist.
+
+**Requests in a 3.15.1 peer's form (AC-15).**
+`tests/integration/test_wire_v315.py`, rows `WV1` to `WV4`: the data
+callback with 3.15.1's space-separated timestamp, the resync callback with
+a `+00:00` offset, a nested write sent as the changed part, and the second
+trust request without a bearer (403, the release's row unchanged). Recorded
+once, identical over repeated runs on both backends.

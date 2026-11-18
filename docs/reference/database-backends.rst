@@ -435,8 +435,22 @@ All names take the ``AWS_DB_PREFIX`` prefix (default ``demo_actingweb``).
      - ``lookup_key``
      - —
      - Always (reverse lookup; also holds the readiness markers)
+   * - ``<prefix>_creators``
+     - ``creator``
+     - —
+     - With creator uniqueness (the default; not with
+       ``with_unique_creator(False)``)
 
 Notes:
+
+- ``<prefix>_creators`` is created by ``actingweb-unique-creators enable
+  --apply`` when it does not exist, whatever the auto-create setting, and
+  then filled; the role that runs the command needs ``DescribeTable`` and
+  ``CreateTable`` for that. A deployment that declares its tables in a template can declare
+  it there instead (hash key ``creator``, a string; no range key) before
+  running the command, which then only fills it. Either way the application
+  does not start until the command has written the backfill-complete item
+  (see "Creator uniqueness" below).
 
 - ``<prefix>_subscription_suspensions`` is easy to miss: before 3.13 its
   accessor had no auto-create guard, so long-lived deployments may never have

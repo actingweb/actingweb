@@ -664,6 +664,10 @@ The function returns different response codes based on authentication results:
 - **403**: Forbidden (authentication failed)
 - **404**: Actor not found
 
+A database fault while authenticating is not one of these outcomes: the call
+raises ``DbError`` (3.16). Let it reach the integration, which answers 503
+with ``Retry-After``; do not catch it and answer 401 or 403.
+
 Security Considerations
 -----------------------
 

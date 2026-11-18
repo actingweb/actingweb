@@ -18,7 +18,9 @@ to the SPA sign-in. It also conforms to specification 1.5, which changes
 what subscribers are told and several answers, sends a write's callbacks
 concurrently, and removes ``FanOutManager``. Most applications need to check
 only the first three items, item 11, item 18 and items 26 to 32; an
-application with ``with_email_as_creator`` also item 25.
+application with ``with_email_as_creator`` also item 25. The commands to run
+before and after the deploy are listed in one place, in order, in
+:doc:`../quickstart/deployment` ("Operator commands").
 
 .. warning::
 
@@ -27,14 +29,21 @@ application with ``with_email_as_creator`` also item 25.
    default (applications that already called ``with_unique_creator()`` are affected the same way). Run
    `Step 0`_ against the production database before the deploy; the
    application otherwise raises ``UniqueCreatorNotReady`` from
-   ``integrate_flask`` / ``integrate_fastapi``. A **fresh** deployment starts
+   ``integrate_flask`` / ``integrate_fastapi``. A **fresh** DynamoDB
+   deployment with table auto-creation on starts
    once (which creates the tables and stops), runs
    ``actingweb-unique-creators enable --apply``, and starts again; with no
    actors yet the refusal says so in one line. The same holds for a CI job
    or test script on a fresh local database: ``enable`` does not create the
    actor table itself (a wrong prefix must not read as an empty store), so
    import or start the application once first, then ``enable``, then start
-   the server the tests use. To keep the old behaviour, call
+   the server the tests use. With auto-creation off
+   (``AWS_DB_AUTO_CREATE_TABLES=false``) the first start creates nothing and
+   ``enable`` refuses while the actor table does not exist: create the
+   tables first (`Creator uniqueness`_ says how ``<prefix>_creators`` is
+   created), then ``enable --apply``, then start. On PostgreSQL ``alembic
+   upgrade head`` creates the tables, so a fresh database needs no first
+   start: Alembic, then ``enable --apply``, then start. To keep the old behaviour, call
    ``with_unique_creator(False)``. **On PostgreSQL it also does not start
    until ``alembic upgrade head`` has applied revision ``a7b8c9d0e1f2``**
    (``AttributeSchemaNotReady``; see `Attribute lists and list diffs`_).
@@ -623,6 +632,20 @@ fired after the work committed (``actor_created``, ``actor_adopted``,
 ``actor_deleted_complete``, ``trust_approved``) still log a fault and let the
 request succeed.
 
+Hook by hook: a ``DbError`` fails the request from a property hook, from a
+method or action hook called over ``/methods`` or ``/actions``, from an
+application's own callback hook, from ``oauth_success``,
+from ``actor_deleted`` (it fires before the wipe) and from ``trust_deleted``
+(it fires before the local delete: a trust ``DELETE`` fails, and
+``sync_peer()`` raises). It is logged, and the request goes on, from
+``actor_created``, ``actor_adopted``, ``actor_deleted_complete``,
+``trust_initiated``, ``trust_request_received``,
+``trust_fully_approved_local`` (and the deprecated ``trust_approved``),
+``trust_fully_approved_remote``, ``subscription_deleted``, ``email_verified``,
+``email_verification_required``, ``oauth_completed`` and every
+``subscription_data_hook`` (a data hook is not run again for the change it
+failed on).
+
 **Subscription callbacks.** A callback whose storage write faults answers
 503. The publisher does not retry a callback (the protocol's delivery is
 at-most-once); the diff stays on the publisher and comes back through a poll
@@ -1040,9 +1063,14 @@ body now sees 400 where it saw 401.
 SPA error codes
 ---------------
 
-Every error the SPA token endpoints answer (``/oauth/spa/*``, ``/oauth/revoke``
-and ``/oauth/logout``) now carries a stable code, in the response header
+Every error the SPA token endpoints answer (``/oauth/spa/*`` and
+``/oauth/revoke``) now carries a stable code, in the response header
 ``X-ActingWeb-Error`` and in the JSON body's ``code`` key beside ``error: true``.
+``/oauth/logout`` is the exception: its own 503 on a token store fault
+(``{"success": false, "error": "temporarily_unavailable", ...}`` with
+``Retry-After``) and its own 500 carry neither the header nor ``code``; only a
+database fault answered by the fault handler does (next paragraph). Do not
+apply the rule below to a logout answer.
 The codes are ``invalid_request``, ``unsupported_grant_type``, ``invalid_grant``,
 ``refresh_token_reused``, ``access_denied``, ``not_found``, ``server_error`` and
 ``temporarily_unavailable``; the table is in :doc:`../guides/spa-authentication`.
@@ -1105,9 +1133,22 @@ settings, ``AWS_DB_PREFIX``, credentials).
 ``<prefix>_creators`` to the application's role (``GetItem``, ``PutItem``,
 ``UpdateItem``, ``DeleteItem``, and ``DescribeTable`` unless table
 auto-creation is off) before step 4, plus ``ConditionCheckItem`` on the
-actor table, and give the role that runs the command ``CreateTable`` and
-``Scan`` on it as well. Without them the startup
-check cannot read the table and the application refuses to start.
+actor table, and give the role that runs the command ``DescribeTable``,
+``CreateTable`` and ``Scan`` on it as well, and ``DescribeTable`` on the
+actor table (the command checks that both tables exist, whatever the
+auto-create setting). Without ``GetItem`` on ``<prefix>_creators`` the startup
+check cannot read the table and the application refuses to start. A missing
+``ConditionCheckItem`` is not caught at startup (see below the table).
+
+**Tables managed as infrastructure.** ``actingweb-unique-creators enable
+--apply`` creates ``<prefix>_creators`` itself when it does not exist,
+whatever ``AWS_DB_AUTO_CREATE_TABLES`` says. A deployment that declares its
+tables in a template can declare this one there instead (hash key
+``creator``, a string; no range key; the library creates it with on-demand
+billing) and deploy the template before running the command: ``enable
+--apply`` then finds the table and only fills it. Either way the application
+starts only after ``enable --apply`` has written the backfill-complete item,
+so the table and its contents come before 3.16's code.
 
 What 3.16 adds to a role that lists actions, in one place (each is
 explained where its section is):
@@ -1145,6 +1186,29 @@ authorised through the item actions it performs plus ``ConditionCheckItem``
 for its condition checks. A policy audit that maps the library's
 ``TransactWrite`` calls to ``TransactWriteItems`` looks for an action that
 does not exist and misses ``ConditionCheckItem``.
+
+The startup check runs no transaction, so it does not catch a missing
+``ConditionCheckItem``. It catches a creators table it cannot read and,
+unless reverse lookup is off (``with_indexed_properties([])``), a missing
+``BatchGetItem``. A role without ``ConditionCheckItem`` starts, and the gap
+shows later, on paths whose transaction carries a condition check, among
+them:
+
+- a write of an unchanged indexed value whose lookup row is missing or
+  stale: the repair fails, is logged as ``LOOKUP_HEAL_FAILED``, and the
+  request succeeds;
+- an indexed write that takes over a lookup row whose owner no longer holds
+  the value (``DbError``);
+- a sign-in that finds a creator record whose actor is gone or holds another
+  creator, and removes it (``DbError``);
+- a creator rename conditioned on the actor's ``auth_method`` marker, as the
+  rename under ``with_email_as_creator`` is: its check is on the attributes
+  table (``DbError``).
+
+The record writes of ``actingweb-unique-creators`` carry one on the actor
+table too (the role that runs the command). None of these paths runs on
+every request, so test the policy before the deploy instead of waiting for
+one of them.
 
 1. ``actingweb-unique-creators report`` lists actors sharing a creator
    (including addresses that differ only by case) and exits 1 if there are
@@ -1282,7 +1346,9 @@ The creator follows the stored email
 ------------------------------------
 
 With ``with_email_as_creator`` (``force_email_prop_as_creator``) a vouched
-actor's creator equals its stored ``_internal`` email. Before 3.16 every load
+actor's creator equals its stored ``_internal`` email
+(``core_actor.store.email``); the rule does not act on a property named
+``email``. Before 3.16 every load
 of an actor read its whole ``_internal`` bucket to compare the two and renamed
 the creator when they differed: one strongly consistent read more on every
 request that loaded an actor, and a vouched rename that was several writes
@@ -1559,6 +1625,14 @@ minutes and hand that same object to every request, so a hook saw the actor
 row, ``_internal``, properties and the subscription list as an earlier
 request had left them. It now loads the actor for each request and keeps
 only the validated-token and trust caches (per process, five minutes).
+Those caches are internal, not an extension point: an entry of the token
+cache (``actingweb.handlers.mcp._token_cache``) is honoured only when its
+``"config"`` is the application's own ``Config`` object and it is younger
+than the TTL, so an entry written without that object is a miss. Code in front of
+``/mcp`` that needs to know whether a token is valid calls
+``get_actingweb_token_manager(config).validate_access_token(token)``
+(``actingweb.oauth2_server.token_manager``), which raises
+``TokenStoreUnavailable`` when the token store cannot be read.
 
 - **What a request costs.** A warm MCP request reads the actor row (one
   strongly consistent read); a hook's first read or first write of each
@@ -2142,7 +2216,12 @@ applied twice.
   deletion caused by an added exclusion or a dropped ``read`` is in
   ``deleted_names`` only, not in ``revoked_patterns``: code that derives what
   it lost (a cache, an index, its own copies) from ``revoked_patterns`` must
-  read ``deleted_names`` as well.
+  read ``deleted_names`` as well. A ``permissions`` callback hook runs only
+  for a callback the store accepted: not for one older than the sender's
+  last stored callback, and not for one refused (400, 403) or answered 503.
+  It still runs when the accepted callback changed nothing. Before 3.16 it
+  ran whether or not the copy was stored, and there was no test for an older
+  callback.
 - *Test doubles of the attribute store.* A fake ``Attributes`` or
   ``DbAttribute`` that a test routes attribute lists through needs the nine
   methods listed under `Custom database backends`_, or the test fails on
@@ -2156,7 +2235,9 @@ applied twice.
   buckets it does not recognise must leave it alone.
 - *Code that reads list rows directly.* The row names changed (see "The
   layout" above), and ``ListAttributeIterator`` is gone; go through
-  ``actor.attribute_lists(bucket)`` or ``RemotePeerStore``.
+  ``actor.attribute_lists(bucket)`` or ``RemotePeerStore``. That is about
+  attribute lists only: a property list's rows keep the names they had
+  (``list:<name>-meta`` and its item rows).
 - *Callers of the replica API.* ``RemotePeerStore.apply_callback_data`` and
   ``apply_resync_data`` take keyword-only ``subtarget`` and ``resource`` (the
   subscription's level) and return a ``ReplicaApplyResult``; read

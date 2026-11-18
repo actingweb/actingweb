@@ -415,7 +415,7 @@ research note or the verification document.
 | AC-12 | 3 | manual: the browser walk in local QA mode on a fresh database (a rendered UI) | Not run |
 | AC-13 | 3 | manual: `actingwebdemo`'s test line in a worktree of it (another repository's suite) | Not run |
 | AC-14 | 1, 2 | manual: the live pair's table, 18 cells (two versions cannot share the test process) | Done 2026-11-18: 18 of 18 complete; every difference has the owner's outcome (accept) |
-| AC-15 | 2 | `tests/integration/test_wire_v315.py`, one test per row of the table marked "kept" or "restored"; each is added to this row when written | No row is "kept" or "restored" (owner, 2026-11-18): Phase 2 writes the tests for the forms the release still accepts from a 3.15 peer, from the pair's captures |
+| AC-15 | 2 | `tests/integration/test_wire_v315.py`, one test per row of the table marked "kept" or "restored"; each is added to this row when written | Passing on both backends, twice each (2026-11-18): `test_wv1_data_callback`, `test_wv2_resync_callback`, `test_wv3_nested_write`, `test_wv4_second_trust_request` (rows `WV1` to `WV4`). No row is "kept" or "restored" (owner); these pin the forms a 3.15.1 peer sent in the live pair, and the one refusal |
 | AC-16 | 4 | manual: the section read against the table and the inventory's rolling-deploy rows; docs build | Not run |
 | AC-17 | 3 | manual: the owner's machine, real client and credentials (cannot run in CI) | Not run |
 | AC-18 | 3 | manual: one fresh agent session in the scratch repository, started by the owner | Not run |
@@ -455,7 +455,15 @@ iterations log.
 
 ### `thoughts/specs/oauth-client-registration.md`
 
-- None yet.
+- **ADDED** — When an application's own sign-in route calls
+  `complete_client_authorization()` without `decide_trust`, the
+  application's `oauth2_trust_requested` hooks decide: a hook that
+  declines, or names another level than the one the user approved, sends
+  the client back with `access_denied`; with no hook the requested level
+  is granted if the client list accepts it. [test]
+  `tests/integration/test_oauth2_trust_binding.py::test_the_helper_asks_the_applications_decision_hook`
+  (Phase 2: found by walking the upgrade as a consumer; the documents
+  already said so, the code did not.)
 
 ## Rules for every phase
 
@@ -806,17 +814,52 @@ phase.
 
 ### Verification
 
-- [ ] Item 3: the note lists the maintainer's questions, each with the
-  location that answers it; none is open
-- [ ] Item 4: every matrix row in trust, subscriptions and diffs names a
+- [x] Item 3: the note lists the maintainer's questions, each with the
+  location that answers it; four are Phase 4's sections (the version, the
+  candidate's install line, rolling back, peers that have not upgraded)
+- [x] Item 4: every matrix row in trust, subscriptions and diffs names a
   test on both backends, or is a decision of the owner's
-- [ ] Item 6: every "kept" or "restored" row has its test
-- [ ] The Full tier; the wire step's CI time noted
-- [ ] Emm's suite on this branch against the baseline
-- [ ] No Emm production code touched; `docs/` and the changelog name no
+- [x] Item 6: nothing was "kept" or "restored"; the four 3.15.1 forms have
+  their tests
+- [x] The Full tier; the wire step's CI time is read off the PR's run
+- [x] Emm's suite on this branch against the baseline (the five names)
+- [x] No Emm production code touched; `docs/` and the changelog name no
   consumer
 
-### Implementation Status: Not Started
+### Notes from implementing (2026-11-18)
+
+- **The record** is the note's section "The release read from Emm's side"
+  and its three appendices (`.emm-usage.md`, `.emm-matrix.md`,
+  `.emm-questions.md`).
+- **Ten new tests, no new recording for them**:
+  `tests/integration/test_consumer_sdk_calls.py`. Four new wire rows
+  (`WV1` to `WV4`), well under the fifteen allowed.
+- **A defect found and fixed**: `complete_client_authorization()` did not
+  run the application's `oauth2_trust_requested` hooks unless a private
+  callable was passed. Spec Delta has the statement. The only behaviour
+  change of the plan so far; the helper is new in this release, so there
+  is no changelog entry for a fix (its `ADDED` entry and the guide already
+  said what it now does).
+- **With the owner**: `store_permissions_async` tells the peer through a
+  background task whatever `with_sync_callbacks()` says; on a function
+  platform the task may not run. Put to the owner on 2026-11-18; not
+  changed.
+- **Docs written here** (nine files, each sentence read against the code):
+  the creators table when tables are declared in a template, the after-deploy
+  list, the start-up check on a function platform, where the operator
+  commands run and what they must be told, a missing `ConditionCheckItem`,
+  the PostgreSQL order, which hooks fail a request on a fault, a callback
+  hook's `data`, when the `permissions` hook runs, `sync_peer()` results,
+  the MCP caches, two SPA routes, and the SPA guide's callback stages
+  (which described a flow the code does not have).
+- **Filed, not fixed** (as old as 3.15.1, no release change behind it):
+  `thoughts/todo/flask-spa-session-route.md`.
+- **For Phase 4**: one row of the guide's IAM table ("the creator claim is
+  one transaction with the actor row") was questioned by the docs pass and
+  not re-read; the four sections above; the 93 inventory rows without a
+  guide section.
+
+### Implementation Status: Complete
 
 ---
 

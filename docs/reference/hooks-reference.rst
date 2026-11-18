@@ -69,9 +69,21 @@ Signature: ``func(actor, name: str, data: dict) -> bool | dict``
   ``"*"`` hook) answers 403 (3.16; it answered 200 with ``false``). A hook
   that ran and returned ``False`` or ``None`` keeps its answer (200 with
   ``false``): only "nothing registered" changed
-- ``data`` holds the JSON object the body carried (an empty dict for any
-  other body; a JSON array raised before 3.16), ``method``, and
-  ``anonymous`` (``False`` for an authenticated request)
+- For an application's own name, ``data`` on ``POST`` and ``PUT`` holds the
+  JSON object the body carried (an empty dict for any other body; a JSON
+  array raised before 3.16), then what the library sets from the request,
+  which a body cannot override: ``method`` (``"POST"`` or ``"PUT"``),
+  ``anonymous`` (``False`` for an authenticated request), ``headers`` (the
+  request's headers without ``Authorization`` and ``Cookie``) and
+  ``raw_body`` (the body as ``bytes``: remove it before serialising ``data``
+  as JSON). On ``GET`` and ``DELETE``, ``data`` is ``{"method": "GET"}`` or
+  ``{"method": "DELETE"}`` and nothing else
+- A hook registered for ``permissions`` is run by the library's permission
+  callback, with the callback's body plus ``granting_actor_id``, ``method``
+  and ``permission_changes``. It runs only for a callback the store accepted
+  (3.16): not for one older than the sender's last stored callback, and not
+  for one refused (400, 403) or answered 503. It still runs when the accepted
+  callback changed nothing
 
 Anonymous webhooks (``allow_anonymous``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

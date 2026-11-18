@@ -1022,6 +1022,20 @@ class ActingWebOAuth2Server:
         sep = "&" if "?" in redirect_uri else "?"
         return {"action": "redirect", "url": f"{redirect_uri}{sep}{urlencode(params)}"}
 
+    def _application_decision(self) -> Any:
+        """The application's ``oauth2_trust_requested`` hooks as the callable
+        ``_decided_type`` takes, or None when the application registered no
+        hook registry on this config (``ActingWebApp`` sets ``config._hooks``)."""
+        hooks = getattr(self.config, "_hooks", None)
+        if hooks is None:
+            return None
+        config = self.config
+
+        def decide(actor: Any, trust_type: str, **info: Any) -> str | None:
+            return hooks.decide_oauth2_trust(actor, trust_type, config, **info)
+
+        return decide
+
     def _decided_type(
         self, actor_obj: Any, record: dict[str, Any], decide_trust: Any, confirmed: bool
     ) -> str | None:
@@ -1190,7 +1204,9 @@ class ActingWebOAuth2Server:
         ``allowed_trust_types``), the decision hook, the trust, then the
         code, in one call. Returns ``{"action": "redirect", "url": ...}`` (a
         code, or ``access_denied``) or an error dict. ``actor`` is the core
-        actor or an ``ActorInterface``."""
+        actor or an ``ActorInterface``. The decision hook is the
+        application's ``oauth2_trust_requested`` hooks; ``decide_trust``
+        replaces them with a callable of the caller's."""
         from .. import session_generation
         from ..permission_integration import (
             client_trust_type_acceptable,
@@ -1225,6 +1241,10 @@ class ActingWebOAuth2Server:
         }
         # The route's user approved ``requested``: the hook may decline it,
         # and a different answer declines too (no level the user did not see).
+        # A caller that passes no ``decide_trust`` gets the application's
+        # ``oauth2_trust_requested`` hooks, as the library's own routes do.
+        if decide_trust is None:
+            decide_trust = self._application_decision()
         effective = self._decided_type(core, record, decide_trust, True)
         if effective != record["trust_type"]:
             return self._denied(redirect_uri, state)

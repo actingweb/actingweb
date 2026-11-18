@@ -158,6 +158,7 @@ being re-litigated.
 
 | Item | What it holds |
 | --- | --- |
+| [The Flask integration cannot hand a browser its SPA sign-in session](flask-spa-session-route.md) | `GET /oauth/spa/session/<id>` is registered by FastAPI only, while the callback redirects with `?session=` on both; as old as 3.15.1. A patch: one route and a test per integration. Found by the release validation, 2026-11-18. |
 | [DynamoDB known-next](dynamodb-known-next.md) | Judged for 4.0.0 and left out, every item (owner, 2026-11-18). Six items deferred from the v3.13 scalability plan — the remaining unbatched delete loops, the `consistent_read` audit's ~36 surviving sites, `SubscriptionDiff` seqnr ordering, import-time table-name freezing, GSI-based secret uniqueness, lookup-table write amplification |
 | [MCP cache lifecycle and revocation](mcp-cache-lifecycle-and-revocation.md) | Cross-process invalidation (the large one), trust-freshness policy, `_mcp_client_info_cache`'s client-supplied key, and module-global cache keys assuming one app per interpreter (sections 1-3 and 6; 4 and 7 were closed by the 3.16 roll-up, 5 and 8 by `3-16-pre-rc1-fixes`, which bounds the override cache to 300 seconds) |
 

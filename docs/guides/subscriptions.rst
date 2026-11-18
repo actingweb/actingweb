@@ -943,6 +943,20 @@ then at most 20, and none once 5 seconds have passed; the next delivery
 takes the rest). A
 ``REBUILD`` result can therefore come from a queued callback.
 
+sync_peer() Results
+~~~~~~~~~~~~~~~~~~~
+
+``sync_peer()`` and ``sync_peer_async()`` return a ``PeerSyncResult``. Its
+``error`` is set in one case only: the sync found that the peer no longer
+holds the trust and removed the local trust (``"Trust relationship has been
+revoked by peer"``). The status and text of a failed poll are per
+subscription, in ``subscription_results[i].error_code`` and ``.error``: the
+publisher's status when it answered with one (502 when it could not be
+reached), 404 when the subscription or the trust is not there locally, and
+429 when a rebuild of the replica that failed is attempted again inside its
+one-minute interval (sync again later). Code that branches on why a sync
+failed reads the per-subscription fields, not ``PeerSyncResult.error``.
+
 Performance Tuning
 ------------------
 

@@ -135,7 +135,9 @@ def test_readme_first_run_sequence() -> None:
                 try:
                     if requests.get(f"{url}/health", timeout=2).status_code == 200:
                         break
-                except requests.exceptions.ConnectionError:
+                except requests.exceptions.RequestException:
+                    # Not answering yet: refused, or accepted but too slow
+                    # to answer (a busy CI runner).
                     pass
                 assert time.monotonic() < deadline, "the second start did not serve"
                 time.sleep(0.5)

@@ -732,44 +732,46 @@ class OAuth2CallbackHandler(BaseHandler):
                 provider=state_extras.get("provider")
                 or getattr(self.config, "oauth2_provider", None),
             )
-        if trust_type:
-            logger.info(
-                f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'"
-            )
-            try:
-                # Prepare OAuth tokens for secure storage
-                oauth_tokens = {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "expires_at": int(time.time()) + expires_in if expires_in else 0,
-                    "token_type": token_data.get("token_type", "Bearer"),
-                }
-
-                # Create trust relationship with automatic approval and client metadata
-                trust_created = create_oauth2_trust_relationship(
-                    actor_interface,
-                    identifier,
-                    trust_type,
-                    oauth_tokens,
-                    client_name=client_name,
-                    client_version=client_version,
-                    client_platform=client_platform,
+            if trust_type:
+                logger.info(
+                    f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'"
                 )
+                try:
+                    # Prepare OAuth tokens for secure storage
+                    oauth_tokens = {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "expires_at": int(time.time()) + expires_in
+                        if expires_in
+                        else 0,
+                        "token_type": token_data.get("token_type", "Bearer"),
+                    }
 
-                if trust_created:
-                    logger.info(
-                        f"Successfully created trust relationship: {identifier} -> {trust_type}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to create trust relationship for {identifier} with type {trust_type}"
+                    # Create trust relationship with automatic approval and client metadata
+                    trust_created = create_oauth2_trust_relationship(
+                        actor_interface,
+                        identifier,
+                        trust_type,
+                        oauth_tokens,
+                        client_name=client_name,
+                        client_version=client_version,
+                        client_platform=client_platform,
                     )
 
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error creating OAuth2 trust relationship: {e}")
-                # Don't fail the OAuth flow - just log the error
+                    if trust_created:
+                        logger.info(
+                            f"Successfully created trust relationship: {identifier} -> {trust_type}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to create trust relationship for {identifier} with type {trust_type}"
+                        )
+
+                except DbError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error creating OAuth2 trust relationship: {e}")
+                    # Don't fail the OAuth flow - just log the error
 
         # Set up successful response
         # Use return_path from state for SPA mode (defaults to /app), /www or /app for traditional mode

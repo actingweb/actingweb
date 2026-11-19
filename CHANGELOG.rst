@@ -2488,11 +2488,15 @@ ADDED
   ``actingweb.permission_integration``); the ``oauth2_trust_requested``
   lifecycle hook (fails closed; may decline or lower the level);
   ``ActingWebOAuth2Server.complete_client_authorization()`` for a route that
-  signs the user in itself. The hook is also asked on a ``/oauth/callback``
-  sign-in whose state names a ``trust_type`` (with ``confirmed=False``:
-  there is no confirmation page); a decline, an exception, or another type
-  than the one requested means no trust is created, and the user is still
-  signed in.
+  signs the user in itself. ``complete_client_authorization()``,
+  ``handle_confirmation()`` and ``handle_oauth_callback()`` called without
+  ``decide_trust`` ask the application's hooks themselves: a route that has
+  already asked them passes an identity ``decide_trust``, or they run twice.
+  The hook is also asked on a ``/oauth/callback`` sign-in whose state names
+  a ``trust_type`` (with ``confirmed=False``: there is no confirmation
+  page); a decline, an exception, or another type than the one requested
+  means no trust is created, and the user is still signed in. A storage
+  fault in a hook is the exception: it fails the sign-in (503).
 - **``Actor.deferred_callbacks()``**, a context manager: inside it
   ``register_diffs`` stores and numbers each diff as always and holds the
   callbacks, which are delivered together when the block ends (also when it

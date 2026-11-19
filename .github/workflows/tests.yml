@@ -159,6 +159,14 @@ jobs:
 
     name: Tests (Python ${{ matrix.python-version }}, ${{ matrix.backend }})
 
+    env:
+      # Coverage is collected on the newest Python only. Coverage on 3.12+
+      # traces through sys.monitoring; on 3.11 it uses the older per-line
+      # trace, which made the 3.11 jobs markedly slower. Both backends still
+      # report (Codecov flags dynamodb and postgresql); 3.11 still runs every
+      # test.
+      COVERAGE: ${{ matrix.python-version == '3.14' }}
+
     services:
       dynamodb:
         image: amazon/dynamodb-local:latest
@@ -272,6 +280,12 @@ jobs:
           #     Restarting trips a known pytest-xdist loadgroup bug
           #     (KeyError: <WorkerController gwN> in _assign_work_unit) that itself
           #     hangs the controller; failing fast is strictly better here.
+          COV_ARGS=()
+          if [ "$COVERAGE" = "true" ]; then
+            COV_ARGS=(--cov=actingweb \
+              --cov-report=xml:coverage-${{ matrix.backend }}.xml \
+              --cov-report=html:htmlcov-${{ matrix.backend }})
+          fi
           poetry run pytest tests/ \
             -m "not benchmark and not wire" \
             -n 4 \
@@ -284,9 +298,7 @@ jobs:
             -v \
             --tb=short \
             --junitxml=test-results/tests-${{ matrix.backend }}.xml \
-            --cov=actingweb \
-            --cov-report=xml:coverage-${{ matrix.backend }}.xml \
-            --cov-report=html:htmlcov-${{ matrix.backend }}
+            "${COV_ARGS[@]}"
         env:
           DATABASE_BACKEND: ${{ matrix.backend }}
           # Hard hang-watchdog ceiling (seconds) — see tests/conftest.py. Above the
@@ -327,6 +339,13 @@ jobs:
         # root over tests/, so the root conftest (and its hang watchdog) loads.
         timeout-minutes: 10
         run: |
+          COV_ARGS=()
+          if [ "$COVERAGE" = "true" ]; then
+            COV_ARGS=(--cov=actingweb \
+              --cov-append \
+              --cov-report=xml:coverage-${{ matrix.backend }}.xml \
+              --cov-report=html:htmlcov-${{ matrix.backend }})
+          fi
           poetry run pytest tests/ \
             -m wire \
             -p no:rerunfailures \
@@ -335,10 +354,7 @@ jobs:
             -v \
             --tb=short \
             --junitxml=test-results/wire-${{ matrix.backend }}.xml \
-            --cov=actingweb \
-            --cov-append \
-            --cov-report=xml:coverage-${{ matrix.backend }}.xml \
-            --cov-report=html:htmlcov-${{ matrix.backend }}
+            "${COV_ARGS[@]}"
         env:
           DATABASE_BACKEND: ${{ matrix.backend }}
           PYTEST_WATCHDOG_SECONDS: 540
@@ -373,14 +389,14 @@ jobs:
           path: test-results/
 
       - name: Upload coverage
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && needs.changes.outputs.code == 'true' && env.COVERAGE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ matrix.backend }}
           path: htmlcov-${{ matrix.backend }}/
 
       - name: Upload coverage to Codecov
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true' && env.COVERAGE == 'true'
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -510,7 +526,7 @@ jobs:
             comment += '- Each backend is tested independently with 4 parallel workers\n';
             comment += '- Flaky tests are automatically retried up to 2 times (5 second delay)\n';
             comment += '- Full test results and logs are available in workflow check runs\n';
-            comment += '- Coverage reports are uploaded to Codecov with backend-specific flags\n';
+            comment += '- Coverage reports (from the Python 3.14 jobs) are uploaded to Codecov with backend-specific flags\n';
 
             // Post comment
             github.rest.issues.createComment({

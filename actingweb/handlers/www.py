@@ -712,6 +712,11 @@ class WwwHandler(base_handler.BaseHandler):
                     # For display, show summary
                     display_value = f"List with {_items(list_length)}"
 
+                except ListItemNewerFormatError as e:
+                    logger.warning(f"List '{prop_name}': {e}")
+                    display_value = "[List property stored by a later library version]"
+                    list_error = "This list holds data a later library version stored"
+                    list_items = []
                 except ListCorruptionError as e:
                     logger.error(f"List '{prop_name}' is corrupted: {e}")
                     display_value = (

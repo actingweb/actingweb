@@ -48,7 +48,14 @@ from .list_core import (
     ListLayoutConflictError,
     _v2_is_rank,
 )
-from .property_list_span import AUX_SUFFIX, encode_item, parse, value_digest, wrap
+from .property_list_span import (
+    AUX_SUFFIX,
+    NewerFormatError,
+    encode_item,
+    parse,
+    value_digest,
+    wrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +589,7 @@ class ListAttribute(ListCore):
                 return True
         try:
             env = parse(raw)
-        except ValueError:
+        except (ValueError, NewerFormatError):
             return False
         if env is None or env.span is None or env.span.sha256 is None:
             return False
@@ -596,7 +603,7 @@ class ListAttribute(ListCore):
             return False
         try:
             env = parse(stored)
-        except ValueError:
+        except (ValueError, NewerFormatError):
             return False
         theirs = env.span if env is not None else None
         return theirs is not None and theirs.sha256 == span.sha256

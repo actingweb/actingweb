@@ -148,3 +148,14 @@ def test_a_store_fault_is_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     with _gates(unique=DbError("throttled")):
         assert command.main(["--properties", ""]) == 2
     assert "could not be read" in capsys.readouterr().out
+
+
+def test_a_missing_lookup_table_is_not_a_fault() -> None:
+    """A fresh store has no lookup table: no name is marked yet."""
+    from actingweb.db.exceptions import DbError
+
+    with mock.patch(
+        "actingweb.maintenance.property_lookup.read_readiness",
+        side_effect=DbError("lookup table missing: x_property_lookup_v2"),
+    ):
+        assert command._lookup_attention("dynamodb", ["email"]) == ["email"]  # pyright: ignore[reportPrivateUsage]

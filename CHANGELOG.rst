@@ -2615,7 +2615,8 @@ ADDED
   ListItemNewerFormatError``; not a ``ListCorruptionError``), and no read,
   write, compaction, sweep, migration or repair of this version removes or
   rewrites any row of it; deleting the whole list is the escape for a newer
-  item. Over HTTP it answers 409 with the code ``list_item_newer_format``
+  item (a list whose layout is newer is refused by ``delete()`` and
+  ``clear()`` too). Over HTTP it answers 409 with the code ``list_item_newer_format``
   and no stored text. ``actingweb-verify-property-lists`` reports such
   lists on lines of their own (exit 3 when nothing else is wrong) and,
   with ``--spans``, side-partition rows named for a list with no meta row;
@@ -3162,8 +3163,10 @@ FIXED
 
 - **A peer factory's 403 was not reported.** ``get_peer_trustee`` read the
   peer's response with ``if response:``, which is false for any 4xx, so a
-  refused trustee creation kept an earlier call's status. The status is
-  recorded, and a 401 or 403 is logged at WARNING naming the factory.
+  refused trustee creation kept an earlier call's status, and so did a
+  refused trust approval after it. Both statuses are recorded
+  (``last_response_code``), and a 401 or 403 from the factory is logged at
+  WARNING naming it.
 
 - **``/oauth/logout``'s 503 carried no error code.** A logout whose token
   revocation hit a store fault answered 503 with no ``X-ActingWeb-Error``

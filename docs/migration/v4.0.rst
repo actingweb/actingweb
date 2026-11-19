@@ -442,7 +442,10 @@ Two rules keep a later 4.x readable by 4.0.0, or refused without damage.
 A later version that changes how an item is stored names the change in
 the envelope's ``need``; one that changes a list's layout raises the meta
 row's ``format``. 4.0.0 then raises ``ListItemNewerFormatError`` (409 over
-HTTP) and removes or rewrites no row of that item or list. Neither rule
+HTTP) and removes or rewrites no row of that item or list. A list holding
+a newer item can still be deleted whole; a list whose layout is newer is
+refused by ``delete()`` and ``clear()`` too, since their sweep of the other
+layout's rows would read it wrongly. Neither rule
 reuses a field 4.0.0 ignores for something a writer must maintain. A later
 kind of side-partition row is named ``list:{name}-$<kind>-...``, so it is
 reaped with the actor and reported (never removed) when its list is gone.

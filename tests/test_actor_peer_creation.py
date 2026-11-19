@@ -37,3 +37,40 @@ def test_a_closed_factory_is_warned(caplog: pytest.LogCaptureFixture) -> None:
     assert len(lines) == 1
     assert lines[0].levelno == logging.WARNING
     assert "403" in lines[0].getMessage()
+
+
+def test_a_refused_trust_approval_is_recorded() -> None:
+    """The approving PUT after a trustee creation: a 403 is recorded, not
+    hidden behind the earlier 201 (a 4xx ``Response`` is falsy)."""
+    config = make_config()
+    config.actors = {
+        "peerapp": {
+            "type": "urn:test:peer",
+            "factory": FACTORY,
+            "relationship": "friend",
+        }
+    }
+    actor = create_core_actor(config, uuid_email())
+    created = requests.Response()
+    created.status_code = 201
+    created._content = b'{"id": "peer-ok", "passphrase": "pp"}'  # noqa: SLF001
+    created.headers["Location"] = "https://peer.example.test/peer-ok"
+    peer_id = f"peer-{uuid_email().split('@')[0]}"
+    with (
+        mock.patch("actingweb.actor.requests.post", return_value=created),
+        mock.patch("actingweb.actor.requests.put", return_value=_response(403)),
+        mock.patch.object(
+            type(actor),
+            "get_peer_info",
+            return_value={
+                "last_response_code": 200,
+                "data": {"id": peer_id, "type": "urn:test:peer"},
+            },
+        ),
+        mock.patch.object(
+            type(actor), "create_reciprocal_trust", return_value={"peerid": peer_id}
+        ),
+    ):
+        peer = actor.get_peer_trustee(shorttype="peerapp")
+    assert peer is not None
+    assert actor.last_response_code == 403

@@ -365,22 +365,22 @@ Phase 3
 | AC-8 | 1 | `tests/test_db_fault_callers.py::TestListStoreLookups::test_exists_raises_on_a_fault` | Passing |
 | AC-9 | 1 | `tests/test_operator_command_store.py::test_every_command_prints_the_store_first` (parametrised from `pyproject.toml`'s scripts, both backends, `capsys`) | Passing |
 | AC-10 | 1 | `tests/test_operator_command_store.py::test_writing_without_a_prefix_is_refused` (parametrised over every writing mode, `delenv`), `::test_an_empty_prefix_is_unset`, `::test_dry_runs_are_not_refused`, `::test_postgresql_is_not_refused` | Passing |
-| AC-11 | 2 | `tests/test_check_ready_command.py::test_each_gate_is_reported_with_its_fix`, `::test_assumed_configuration_is_printed`, `::test_email_gate_needs_its_flag`, `::test_an_empty_store_is_ready_at_first_start`, `::test_it_writes_nothing_and_creates_no_table`, `::test_a_store_fault_is_exit_2`; `tests/integration/test_check_ready_command.py::test_fresh_and_populated_store` (both backends) | Passing |
+| AC-11 | 2 | `tests/test_check_ready_command.py` (eight tests, probes patched, including `::test_a_missing_lookup_table_is_not_a_fault` and `::test_it_writes_nothing_and_creates_no_table`); `tests/integration/test_check_ready_command.py::test_fresh_and_populated_store` (both backends); manual, 2026-11-19: the real command with `--properties` and `--email-as-creator` on a table-less DynamoDB prefix (every gate ready at first start, exit 0, no table created), on the populated shared store (three gates refused with their fix lines, table count unchanged), on a PostgreSQL schema without migrations (attribute gate refused with `alembic upgrade head`, exit 1) and on the populated PostgreSQL schema (table count unchanged) | Passing |
 | AC-12 | 1 | `tests/test_adoption_log_line.py::test_one_line_per_adoption` (parametrised: cleaned, replaced, announced later), `::test_the_line_carries_no_address` | Passing |
 | AC-13 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_dynamodb_empty_store_starts` (real probes, `unique_creator` xdist group) | Passing |
 | AC-14 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_postgresql_empty_store_starts`, `::test_postgresql_without_ddl_refuses_with_the_command`, `::test_two_first_starts_at_once_both_start`; `tests/test_unique_creator_default.py::test_a_failed_index_build_refuses` | Passing |
 | AC-15 | 2 | `tests/test_unique_creator_default.py::test_a_store_with_a_user_actor_still_refuses` | Passing |
 | AC-16 | 2 | `tests/test_startup_check_retry.py::test_a_faulting_check_is_tried_three_times`, `::test_a_check_that_recovers_lets_the_app_start`, `::test_a_not_ready_answer_is_not_retried` (sleep patched) | Passing |
 | AC-17 | 2 | `tests/test_startup_check_retry.py::test_unavailable_is_true_only_for_a_fault`, `::test_a_missing_table_is_not_unavailable`, `::test_a_fault_while_counting_actors_is_unavailable`, `::test_the_combined_refusal` | Passing |
-| AC-18 | 2 | `tests/test_factory_open_switch.py::test_closed_by_default_with_a_provider`, `::test_with_oauth_after_get_config_still_closes`, `::test_an_empty_client_id_still_closes`, `::test_apple_only_closes`, `::test_the_closed_default_is_warned_once`; `tests/integration/test_factory_default.py::test_post_root_is_403_with_oauth_and_no_switch` | Passing |
+| AC-18 | 2 | `tests/test_factory_open_switch.py::TestClosedByDefaultWithAProvider` (`test_closed_by_default_with_a_provider` posts through `RootFactoryHandler`, `test_with_oauth_after_get_config_still_closes`, `test_an_empty_client_id_still_closes`, `test_apple_only_closes`, `test_github_and_google_native_close`, `test_the_closed_default_is_warned_once`); the planned `tests/integration/test_factory_default.py` was not written (the handler test covers the 403) | Passing |
 | AC-19 | 2 | `tests/test_factory_open_switch.py::test_open_without_a_provider`, `::test_explicit_open_wins`, `::test_a_bare_config_is_open` | Passing |
 | AC-20 | 2 | `tests/test_is_vouched_public.py::test_vouched_and_unvouched_markers`, `::test_a_renamed_creator_is_unvouched`, `::test_a_marker_without_a_bound_address`, `::test_an_unread_marker_raises` (through `backend_fault`) | Passing |
 | AC-21 | 2 | `tests/test_list_prefix_with_rows.py::test_list_all_with_rows_raises_on_a_fault` (replaces `:256`; both stores) | Passing |
-| AC-22 | 2 | `tests/test_db_error_after_write.py::test_a_diff_fault_after_a_property_write`, `::test_a_diff_fault_after_a_list_write`, `::test_clear_faults_before_its_write_is_plain`, `::test_handler_paths_that_fold_keep_folding`, `::test_the_wire_answer_has_its_own_code_and_no_retry_after`, `::test_append_once_repeat_does_not_duplicate` | Passing |
-| AC-25 | 2 | `tests/test_property_list_span_codec.py::test_need_is_checked_before_the_shape`, `::test_a_malformed_need_is_malformed`; `tests/test_property_list_newer_format.py::test_reading_raises_and_is_not_corruption`, `::test_http_answers_409_with_a_fixed_code` (both list kinds) | Passing |
+| AC-22 | 2 | `tests/test_db_error_after_write.py::test_a_diff_fault_after_a_property_write`, `::test_a_diff_fault_after_a_list_write`, `::test_clear_faults_before_its_write_is_plain`, `::test_a_rest_put_whose_diff_faults_answers_the_after_write_code` (renamed from the planned fold test: the folds at `properties.py` `:499`/`:886` go through `request_resync`, untouched, and have no new test), `::test_the_wire_answer_has_its_own_code_and_no_retry_after`, `::test_append_once_repeat_does_not_duplicate` | Passing |
+| AC-25 | 2 | `tests/test_property_list_span_codec.py::TestNeed` (six tests); `tests/test_property_list_newer_format.py::TestNewerItem::test_reading_raises_and_is_not_corruption`, `::test_http_answers_409_with_a_fixed_code` (the mapping and a consumer route, both list kinds); `tests/test_list_newer_format_http.py` (a REST list read through the handler: 409, red as a 500 before the handler clauses) | Passing |
 | AC-26 | 2 | `tests/test_property_list_newer_format.py::test_writes_by_handle_and_position_change_nothing`, `::test_compact_stops_before_its_first_write` | Passing |
 | AC-27 | 2 | `tests/test_property_list_newer_format.py::test_sweep_and_repair_keep_the_head_and_every_side_row` | Passing |
-| AC-28 | 2 | `tests/test_property_list_spans.py::test_unrecognised_side_row_names_survive_sweep_clear_and_delete`, `tests/test_property_list_newer_format.py::test_the_whole_list_can_be_deleted` | Passing |
+| AC-28 | 2 | `tests/test_property_list_newer_format.py::test_unrecognised_side_row_names_survive_sweep_clear_and_delete`, `::TestNewerItem::test_the_whole_list_can_be_deleted`, `::TestNewerItem::test_clear_leaves_unrecognised_side_rows` (both list kinds) | Passing |
 | AC-29 | 2 | `tests/test_list_item_limits.py::test_default_ceiling_is_2_mib_with_a_row_cap` (replaces `:95`); `tests/test_actingweb_app.py` `:755`, `:784` updated | Passing |
 | AC-30 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_challenged_when_required`, `::test_an_authenticated_initialize_passes`, `::test_a_token_store_fault_is_503` (each over `post` and `post_async`) | Passing |
 | AC-31 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_open_by_default` (both handlers) | Passing |
@@ -398,7 +398,7 @@ Phase 3
 | AC-43 | 2 | `tests/test_property_list_newer_format.py::test_an_unknown_list_format_is_refused_everywhere` (read, append, clear, lazy migration, sweep), `tests/test_migrate_property_lists.py::test_the_command_skips_and_reports_an_unknown_format` | Passing |
 | AC-44 | 2 | `tests/test_attribute_list_store.py::test_list_all_raises_on_a_fault` | Passing |
 | AC-45 | 2 | `tests/test_verify_property_lists.py::test_side_rows_of_a_list_without_meta_are_reported_not_removed` | Passing |
-| AC-46 | 2 | `tests/test_actor_peer_creation.py::test_a_closed_factory_is_warned` | Passing |
+| AC-46 | 2 | `tests/test_actor_peer_creation.py::test_a_closed_factory_is_warned`, `::test_a_refused_trust_approval_is_recorded` (the trust `PUT`, added in Phase 3) | Passing |
 | AC-47 | 2 | `tests/test_factory_open_switch.py::test_the_default_page_hides_the_form_when_closed` (both integrations) | Passing |
 | AC-48 | 2 | `tests/test_unique_creator_default.py::test_the_default_prefix_does_not_self_enable` | Passing |
 | AC-49 | 1 | `tests/test_oauth2_pkce_binding.py::test_the_callback_refuses_a_state_without_a_challenge`, `::test_the_exchange_refuses_a_code_without_a_challenge`, `::test_a_directly_created_code_follows_the_rule` | Passing |
@@ -418,7 +418,11 @@ Phase 3
 - **ADDED** (Vouching) — When the marking runs, system actors are never marked; a dry run shows the marker and, on request, the addresses; `--ids-file` limits it. (AC-2, AC-3, AC-4)
 - **ADDED** (Email as creator) — When the sweep passes an unvouched actor, it counts it and says the marking comes first. (AC-5)
 - **ADDED** (Readiness) — When `actingweb-check-ready` runs, it reports each gate in one of three states with its fix line, writes nothing, and exits 0, 1 or 2. (AC-11)
-- **ADDED** (List verification) — When side rows are named for a list with no meta row, they are reported and kept. (AC-45)
+- ~~**ADDED** (List verification) — When side rows are named for a list with no meta row, they are reported and kept. (AC-45)~~
+- **ADDED** (List verification) — When `actingweb-verify-property-lists` runs with `--spans` or `--sweep-spans`, side rows named for a list with no meta row are reported and kept; a list holding newer-format data is reported on a line of its own (`NEWER FORMAT`), neither repaired nor swept, and the exit status is 3 when nothing else is wrong. (AC-27, AC-45)
+- **ADDED** (Reverse lookup) — When `backfill` runs on PostgreSQL, its summary counts the rows of the names it covered and those of live actors. (AC-53)
+- **ADDED** (Reverse lookup) — When a backfill collision leaves a name unmarked, the output names each colliding actor, the holder of the lookup row, and the two ways out. (AC-54)
+- **DECISION** — A backfill collision leaves the name unmarked; the start stays refused until an operator removes the duplicates or accepts them with `mark-complete --force`.
 - **DECISION** — An operator command never treats a missing table or the default prefix as an empty store.
 - **DECISION** — A command cannot see what an application sets in its builder; each such setting has a flag, and the command prints what it assumed.
 
@@ -442,7 +446,8 @@ Phase 3
 
 - **ADDED** (Faults) — When the store faults under `exists()`, `list_all()` or `list_all_with_rows()`, on either store, `DbError` is raised. (AC-8, AC-21, AC-44)
 - **ADDED** (Faults) — When a write is stored and a later step faults, the exception is `DbErrorAfterWrite`: the value is stored, its diff is not registered. (AC-22)
-- **ADDED** (Stored format) — When an envelope's `need`, or a list's `format`, names something the process does not implement, the item or list cannot be read, written or repaired by it, and nothing of it is removed except by deleting the whole list. (AC-25, AC-26, AC-27, AC-43)
+- ~~**ADDED** (Stored format) — When an envelope's `need`, or a list's `format`, names something the process does not implement, the item or list cannot be read, written or repaired by it, and nothing of it is removed except by deleting the whole list. (AC-25, AC-26, AC-27, AC-43)~~
+- **ADDED** (Stored format) — When an envelope's `need` names something the process does not implement, the item cannot be read, written, moved or repaired by it (`ListItemNewerFormatError`, 409 over HTTP), and nothing of it is removed except by deleting the whole list. When a list's meta `format` is not 1 or 2, the list is refused by every operation, `delete()` and `clear()` included. (AC-25, AC-26, AC-27, AC-43)
 - **ADDED** (Stored format) — When a list is swept, cleared or deleted, side rows with an unrecognised name are left. (AC-28)
 - **ADDED** (Limits) — When no ceiling is configured on a backend with a row cap, the ceiling is 2 MiB. (AC-29)
 - **DECISION** — Every stored shape 4.0.0rc1 writes is read by 4.0.0 final without an operator step.
@@ -463,7 +468,8 @@ Phase 3
 - **ADDED** (Authorising) — When an authorisation request, a callback state or a code has no `code_challenge`, it is refused for every client unless `require_pkce=False`, which restores rc1's behaviour: a public client is refused at authorise only, and the callback and exchange accept a code without a challenge. (AC-37, AC-38, AC-49)
 - **DECISION** — `require_pkce=False` means the rc1 behaviour exactly, so an application can upgrade with it and change no sign-in, then enforce in a later change.
 - **ADDED** (Authorising) — When the authorise form is posted without the challenge it was shown with, the refusal is logged with what a custom form must carry. (AC-52)
-- **DECISION** — The challenge travels through the authorise form's hidden fields; an application's own form, and any code it creates itself with `create_authorization_code`, must pass it on.
+- ~~**DECISION** — The challenge travels through the authorise form's hidden fields; an application's own form, and any code it creates itself with `create_authorization_code`, must pass it on.~~
+- **DECISION** — The challenge travels through the authorise form's hidden fields; an application's own form, its own sign-in route calling `complete_client_authorization` (refused without a challenge before any hook or write), and any code it creates itself with `create_authorization_code`, must pass it on.
 - **ADDED** (Discovery) — When the server document is read, `client_credentials` is not offered; an owner-created client can still use it. (AC-36)
 
 ### `thoughts/specs/web-ui.md`
@@ -812,9 +818,12 @@ None: the phase is prose.
   is not filed: it was conditional on the enable command not serving, and
   the empty-store self-enable plus `enable --apply` cover it so far.
   `flask-spa-session-route.md` deleted (done in Phase 1).
-- Phase 3 checks: fast tier and docs `-W`; its code delta (the trust
-  `PUT` status in `get_peer_trustee`, one refusal message) is covered by
-  unit tests, so the full tier was not repeated for it.
+- Phase 3 checks: its code delta grew after the closing review (the trust
+  `PUT` status with its own test; the newer-format clause in front of
+  every `ListCorruptionError` catch in the handlers, found as a 500 by a
+  new handler-level test; `NewerFormatError` caught by the attribute list
+  conversion; check-ready's missing-table answers, found by running it for
+  real), so the Full tier was run again on both backends.
 
 ### Implementation Status: Complete
 
@@ -889,8 +898,9 @@ None: the phase is prose.
 
 **Completed:** 2026-11-19
 **All phases:** Complete
-**Test status:** All passing (Full tier on both backends at the Phase 2
-commit; fast tier and docs `-W` at Phase 3)
+**Test status:** All passing (Full tier on both backends after the
+closing review, 2026-11-19: DynamoDB 8367 passed, PostgreSQL 8140 passed,
+docs `-W` clean)
 
 ### Deviations from Plan
 - The PKCE client-evidence gate before AC-37 was dropped (owner): the spec

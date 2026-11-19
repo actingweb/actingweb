@@ -44,9 +44,19 @@ FIRST_START = "ready at first start"
 
 
 def _lookup_attention(database: str, names: list[str]) -> list[str]:
+    """The names that are not ready. A missing lookup (or marker) table is
+    an answer, not a fault: no name is marked yet (the first start, or the
+    backfill, creates it)."""
+    from actingweb.db.exceptions import DbError
+    from actingweb.interface.app import _store_answered
     from actingweb.maintenance.property_lookup import read_readiness
 
-    return list(read_readiness(database, names).attention)
+    try:
+        return list(read_readiness(database, names).attention)
+    except DbError as e:
+        if "lookup table missing" in str(e) or _store_answered(e):
+            return list(names)
+        raise
 
 
 def _uniqueness_missing(config: Any) -> str | None:
@@ -80,26 +90,26 @@ def _email_marker(config: Any) -> dict[str, Any] | None:
     """The email-as-creator marker, read without constructing the backend
     (on DynamoDB its constructor creates a missing table)."""
     from actingweb.constants import READINESS_BUCKET, READINESS_STORE
+    from actingweb.interface.app import _store_answered
     from actingweb.maintenance.email_as_creator import MARKER_NAME
 
-    if config.database == "postgresql":
-        from actingweb.db import get_attribute
+    try:
+        if config.database == "postgresql":
+            from actingweb.db import get_attribute
 
-        row = get_attribute(config).get_attr_strict(
-            READINESS_STORE, READINESS_BUCKET, MARKER_NAME
-        )
-    else:
-        from actingweb.db.dynamodb.attribute import DbAttribute
-        from actingweb.interface.app import _store_answered
+            row = get_attribute(config).get_attr_strict(
+                READINESS_STORE, READINESS_BUCKET, MARKER_NAME
+            )
+        else:
+            from actingweb.db.dynamodb.attribute import DbAttribute
 
-        try:
             row = DbAttribute.get_attr_strict(
                 READINESS_STORE, READINESS_BUCKET, MARKER_NAME
             )
-        except Exception as e:  # folds DbError: a missing table is no marker
-            if _store_answered(e):
-                return None
-            raise
+    except Exception as e:  # folds DbError: a missing table is no marker
+        if _store_answered(e):
+            return None
+        raise
     data = row.get("data") if isinstance(row, dict) else None
     return data if isinstance(data, dict) else None
 

@@ -834,6 +834,9 @@ class PropertiesHandler(_PropertyHandlerBase):
         except ListMetadataContentionError as e:
             self._respond_list_metadata_contended(e)
             return
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
             return
@@ -889,6 +892,9 @@ class PropertiesHandler(_PropertyHandlerBase):
             return
         except ListItemTooLargeError as e:
             self._respond_list_item_too_large(name, e)
+            return
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
             return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
@@ -1106,6 +1112,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.write(out)
                 return
 
+            except ListItemNewerFormatError as e:
+                _write_list_newer_format_response(self.response, name, e)
+                return
             except ListCorruptionError as e:
                 self._respond_list_corrupted(name, e)
                 return
@@ -1479,6 +1488,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                         "_list": True,
                         "count": len(list_prop),
                     }
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, e.list_name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(e.list_name, e)
             return
@@ -2606,6 +2618,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                         ):
                             return
 
+                    except ListItemNewerFormatError as e:
+                        _write_list_newer_format_response(self.response, key, e)
+                        return
                     except ListCorruptionError as e:
                         self._respond_list_corrupted(key, e)
                         return
@@ -2761,6 +2776,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(204)
                     return
 
+                except ListItemNewerFormatError as e:
+                    _write_list_newer_format_response(self.response, name, e)
+                    return
                 except ListCorruptionError as e:
                     self._respond_list_corrupted(name, e)
                     return
@@ -3035,6 +3053,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
         list_prop = getattr(myself.property_lists, name)
         try:
             indexed = list_prop.to_indexed_list()
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
             return
@@ -3267,6 +3288,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                     self.response.set_status(400, f"Unknown action: {action}")
                 return
 
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             # Parity with /items GET and every other list-serving path: a
             # corrupted list is a structured 409 with a repair hint, never a

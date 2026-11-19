@@ -23,7 +23,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from ..constants import LEGACY_REFRESH_COOKIE_PATH
+from ..constants import ERROR_CODE_HEADER, LEGACY_REFRESH_COOKIE_PATH
 from ..db.exceptions import DbError
 
 # MCP protocol version constants (single source of truth)
@@ -188,7 +188,12 @@ class OAuth2EndpointsHandler(BaseHandler):
             return self._handle_oauth_callback()
         elif path == "logout":
             return self._handle_logout_request("GET")
-        elif path == ".well-known/oauth-authorization-server":
+        elif path in (
+            ".well-known/oauth-authorization-server",
+            # Some clients look only at the OpenID location; the same
+            # document answers there (it is not an OpenID Provider's).
+            ".well-known/openid-configuration",
+        ):
             return self._handle_authorization_server_discovery()
         elif path == ".well-known/oauth-protected-resource":
             return self._handle_protected_resource_discovery()
@@ -1250,10 +1255,15 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # it is done, so answer 503 with Retry-After and clear no
                 # cookies (the client needs its token for the retry).
                 self.response.headers["Retry-After"] = "5"
+                # The code in the header and the body, as every other
+                # library error answer, so a client can tell this 503 from a
+                # gateway's.
+                self.response.headers[ERROR_CODE_HEADER] = "temporarily_unavailable"
                 self.response.set_status(503, "Service Unavailable")
                 return {
                     "success": False,
                     "error": "temporarily_unavailable",
+                    "code": "temporarily_unavailable",
                     "message": response["message"],
                     "method": method,
                 }

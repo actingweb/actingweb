@@ -123,6 +123,8 @@ class ActingWebApp:
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
         self._mcp_instructions: str | None = None
+        self._mcp_require_auth_for_initialize = False
+        self._mcp_require_pkce = True
         self._sync_subscription_callbacks = False  # Async by default
         # None means "not set via the builder": Config's default, or a value
         # assigned on the Config, stays authoritative.
@@ -233,6 +235,10 @@ class ActingWebApp:
         self._config.mcp = self._enable_mcp
         self._config.mcp_server_name = self._mcp_server_name
         self._config.mcp_instructions = self._mcp_instructions
+        self._config.mcp_require_auth_for_initialize = (
+            self._mcp_require_auth_for_initialize
+        )
+        self._config.mcp_require_pkce = self._mcp_require_pkce
         # OAuth configuration — multi-provider support
         if self._oauth_configs:
             # Build named providers (skip the empty-string default key)
@@ -602,10 +608,17 @@ class ActingWebApp:
     def with_mcp(
         self,
         enable: bool = True,
-        server_name: str = "actingweb",
-        instructions: str | None = None,
+        server_name: str = _UNSET,
+        instructions: str | None = _UNSET,
+        *,
+        require_auth_for_initialize: bool = _UNSET,
+        require_pkce: bool = _UNSET,
     ) -> "ActingWebApp":
         """Enable or disable MCP (Model Context Protocol) functionality.
+
+        A later call changes only the options it names: ``with_mcp()``
+        again keeps the server name, instructions and the two security
+        options an earlier call set.
 
         Args:
             enable: If True, enable MCP support.
@@ -622,10 +635,31 @@ class ActingWebApp:
                 initial connection. Use it to point new LLMs at an
                 entry-point tool (e.g. ``how_to_use()``). Like
                 ``server_name``, the first call wins for the singleton.
+            require_auth_for_initialize: If True, an unauthenticated
+                ``initialize`` answers 401 with the ``WWW-Authenticate``
+                challenge (503 when the token store is down), so a client
+                starts its OAuth flow at the handshake. Default False: the
+                handshake is answered and the first authenticated method
+                is challenged.
+            require_pkce: Default True: the built-in authorisation server
+                requires a PKCE ``code_challenge`` from every client, at
+                authorise, at the callback and at the token exchange (MCP's
+                authorisation rules, OAuth 2.1). False restores the 4.0.0rc1
+                behaviour exactly: only a public client is refused at
+                authorise without a challenge, and a code without one is
+                accepted at callback and exchange. An application whose
+                clients have not been checked upgrades with False and
+                enforces in a later change.
         """
         self._enable_mcp = enable
-        self._mcp_server_name = server_name
-        self._mcp_instructions = instructions
+        if server_name is not _UNSET:
+            self._mcp_server_name = server_name
+        if instructions is not _UNSET:
+            self._mcp_instructions = instructions
+        if require_auth_for_initialize is not _UNSET:
+            self._mcp_require_auth_for_initialize = bool(require_auth_for_initialize)
+        if require_pkce is not _UNSET:
+            self._mcp_require_pkce = bool(require_pkce)
         # Config.aw_supported is computed on every read, so the ``mcp`` tag
         # follows the flag as soon as it is applied to the config.
         self._apply_runtime_changes_to_config()
@@ -1570,6 +1604,8 @@ class ActingWebApp:
                 mcp=self._enable_mcp,
                 mcp_server_name=self._mcp_server_name,
                 mcp_instructions=self._mcp_instructions,
+                mcp_require_auth_for_initialize=self._mcp_require_auth_for_initialize,
+                mcp_require_pkce=self._mcp_require_pkce,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 peer_profile_attributes=self._peer_profile_attributes,
                 peer_capabilities_caching=self._peer_capabilities_caching,

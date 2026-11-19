@@ -13,7 +13,6 @@ from typing import Any
 from actingweb.handlers.mcp import (
     MCPHandler,
     format_call_tool_result,
-    mcp_www_authenticate,
 )
 from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
 
@@ -110,17 +109,7 @@ class AsyncMCPHandler(MCPHandler):
             except TokenStoreUnavailable:
                 return self._token_store_unavailable_response(request_id)
             if not actor:
-                # Set proper HTTP 401 response headers for framework-agnostic handling
-                base_url = f"{self.config.proto}{self.config.fqdn}"
-                www_auth = mcp_www_authenticate(base_url)
-
-                # Set response headers for authentication challenge
-                self.response.headers["WWW-Authenticate"] = www_auth
-                self.response.set_status(401, "Unauthorized")
-
-                return self._create_jsonrpc_error(
-                    request_id, -32002, "Authentication required for MCP access"
-                )
+                return self._authentication_required_response(request_id)
 
             # Extract and update client info if provided in the request
             # MCP clients send clientInfo with many requests, not just initialize
@@ -133,6 +122,8 @@ class AsyncMCPHandler(MCPHandler):
                 return self._handle_tools_list(request_id, actor)
             elif method == "resources/list":
                 return self._handle_resources_list(request_id, actor)
+            elif method == "resources/templates/list":
+                return self._handle_resource_templates_list(request_id, actor)
             elif method == "prompts/list":
                 return self._handle_prompts_list(request_id, actor)
             elif method == "tools/call":

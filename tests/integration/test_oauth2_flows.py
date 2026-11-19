@@ -302,12 +302,30 @@ class TestActingWebOAuth2Server:
                 "response_type": "code",
                 "scope": "mcp",
                 "state": "random_state_123",
+                # PKCE is required from every client (4.0).
+                "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                "code_challenge_method": "S256",
             },
             allow_redirects=False,
         )
 
         # Should redirect to Google OAuth (302) or show auth form (200)
         assert auth_response.status_code in [200, 302]
+
+        # Without a challenge the same request is refused, whatever the
+        # client's authentication method (AC-37).
+        refused = requests.get(
+            f"{test_app}/oauth/authorize",
+            params={
+                "client_id": client["client_id"],
+                "redirect_uri": "http://localhost:3000/callback",
+                "response_type": "code",
+                "scope": "mcp",
+                "state": "random_state_123",
+            },
+            allow_redirects=False,
+        )
+        assert refused.status_code == 400
 
         # Note: Full authorization flow testing requires:
         # - Simulating user login via Google
@@ -731,6 +749,13 @@ class TestOAuth2Discovery:
         assert "mcp" in data["scopes_supported"]
         # The scope is only honest because a refresh token is always issued.
         assert "refresh_token" in data["grant_types_supported"]
+
+    def test_openid_configuration_serves_the_server_document(self, test_app):
+        """AC-32: some clients read only the OpenID location."""
+        server = requests.get(f"{test_app}/.well-known/oauth-authorization-server")
+        openid = requests.get(f"{test_app}/.well-known/openid-configuration")
+        assert openid.status_code == 200
+        assert openid.json() == server.json()
 
     def test_protected_resource_variants_served_with_offline_access(self, test_app):
         """Both protected-resource documents advertise the same scopes."""

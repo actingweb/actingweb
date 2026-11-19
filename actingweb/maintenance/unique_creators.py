@@ -118,6 +118,7 @@ from actingweb.db.creator_rules import (
     normalise_creator,
 )
 from actingweb.db.exceptions import DbError
+from actingweb.maintenance._common import preflight
 
 logger = logging.getLogger("unique_creators")
 
@@ -1276,6 +1277,11 @@ def main(argv: list[str] | None = None) -> int:
         # item for every creator, disable deletes every record.
         parser.error(f"--creator is not supported by {args.command}")
 
+    refused = preflight(
+        "actingweb-unique-creators", writing=bool(getattr(args, "apply", False))
+    )
+    if refused is not None:
+        return refused
     config = make_config()
     if config.database not in ("dynamodb", "postgresql"):
         parser.error(f"unsupported DATABASE_BACKEND={config.database}")
@@ -1378,6 +1384,13 @@ def _run_creator_to_email(args: argparse.Namespace, config: Any) -> int:
         f"command=creator-to-email apply={args.apply} "
         + " ".join(f"{k}={v}" for k, v in counts.items())
     )
+    if counts.get("unvouched"):
+        logger.warning(
+            f"{counts['unvouched']} actor(s) were passed because they are not "
+            "vouched for their creator: only a vouched actor follows its email. "
+            "If they are legitimate, run actingweb-mark-actors-vouched first, "
+            "then this sweep again"
+        )
     blocking = counts["held"] or counts["changed"] or counts["errors"]
     if not args.apply and counts["moved"]:
         return 1

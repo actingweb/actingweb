@@ -225,7 +225,8 @@ def sweep(
     vouched actor: blocks the marker unless ``clear_held_email`` cleared
     it), ``squatted`` (held by an unvouched ``factory`` actor: reported, does
     not block), ``cleared``, ``changed`` (changed during the run twice:
-    blocks), ``errors`` (blocks).
+    blocks), ``unvouched`` (not vouched for its current creator, so passed:
+    ``actingweb-mark-actors-vouched`` comes first), ``errors`` (blocks).
 
     Raises:
         StoreUnavailable: the actor list could not be read
@@ -241,6 +242,7 @@ def sweep(
         StoreUnavailable,
         _uniqueness_enforced,  # pyright: ignore[reportPrivateUsage]
     )
+    from actingweb.oauth2 import is_vouched_store
 
     def shown(value: str) -> str:
         return f" {value}" if show_addresses else ""
@@ -275,7 +277,17 @@ def sweep(
         else config
     )
     counts: dict[str, int] = dict.fromkeys(
-        ("scanned", "moved", "held", "squatted", "cleared", "changed", "errors"), 0
+        (
+            "scanned",
+            "moved",
+            "held",
+            "squatted",
+            "cleared",
+            "changed",
+            "unvouched",
+            "errors",
+        ),
+        0,
     )
     # About four reads per actor (its row, its bucket, a holder's row and
     # bucket), under the same budget as the scan.
@@ -296,6 +308,11 @@ def sweep(
                 store = InternalStore(actor_id=actor_id, config=config)
                 if not store.loaded:
                     raise DbError("bucket read", actor_id)
+                if not is_vouched_store(store, current):
+                    # Passed: only a vouched actor follows its email. The
+                    # marking (actingweb-mark-actors-vouched) comes first.
+                    counts["unvouched"] += 1
+                    break
                 target = _in_scope(store, current)
                 if target is None:
                     break

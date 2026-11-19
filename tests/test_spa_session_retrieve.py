@@ -34,24 +34,59 @@ SUCCESS_TOKEN_DATA = {
 }
 
 
-@pytest.fixture
-def env() -> Iterator[
-    tuple[TestClient, OAuth2SessionManager, MemoryStore, ActingWebApp]
-]:
+class _FlaskResponse:
+    def __init__(self, resp: Any) -> None:
+        self.status_code = resp.status_code
+        self.headers = resp.headers
+        self.text = resp.get_data(as_text=True)
+        self._resp = resp
+
+    def json(self) -> Any:
+        return self._resp.get_json()
+
+
+class _FlaskClient:
+    """The FastAPI TestClient's surface over a Flask test client."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def get(self, url: str, headers: dict[str, str] | None = None) -> Any:
+        return _FlaskResponse(self._client.get(url, headers=headers or {}))
+
+
+@pytest.fixture(params=["fastapi", "flask"])
+def env(
+    request: pytest.FixtureRequest,
+) -> Iterator[tuple[Any, OAuth2SessionManager, MemoryStore, ActingWebApp]]:
+    """AC-35: both integrations serve the route."""
     aw_app = ActingWebApp(
         aw_type="urn:actingweb:test:session-retrieve",
         database="dynamodb",
         fqdn="test.example.com",
         proto="https://",
     )
-    app = FastAPI()
-    FastAPIIntegration(aw_app, app).setup_routes()
+    client: Any
+    if request.param == "fastapi":
+        app = FastAPI()
+        FastAPIIntegration(aw_app, app).setup_routes()
+        client = TestClient(app)
+    else:
+        from flask import Flask
+
+        from actingweb.interface.integrations.flask_integration import (
+            FlaskIntegration,
+        )
+
+        flask_app = Flask(__name__)
+        FlaskIntegration(aw_app, flask_app).setup_routes()
+        client = _FlaskClient(flask_app.test_client())
     config, store = make_config()
     mgr = OAuth2SessionManager(config)
     with mock.patch(
         "actingweb.oauth_session.get_oauth2_session_manager", return_value=mgr
     ):
-        yield TestClient(app), mgr, store, aw_app
+        yield client, mgr, store, aw_app
 
 
 def _store(mgr: OAuth2SessionManager, token_data: dict[str, Any]) -> str:

@@ -1407,6 +1407,24 @@ MCP Capability
   on the MCP ``InitializeResult.instructions`` field and shown to the LLM on
   initial connection — useful for pointing a new client at an entry-point tool.
   Like ``server_name``, the first call wins for the process-wide singleton.
+- A later ``with_mcp()`` call changes only the options it names; the others
+  keep what an earlier call set.
+- ``with_mcp(require_auth_for_initialize=True)`` challenges an
+  unauthenticated ``initialize`` with 401 and the ``WWW-Authenticate``
+  header (503 when the token store is down), so a client starts its OAuth
+  flow at the handshake. Off by default: the handshake is answered and the
+  first authenticated method is challenged.
+- ``with_mcp(require_pkce=False)`` restores the 4.0.0rc1 PKCE rule of the
+  built-in authorisation server (a challenge from public clients only, at
+  the authorise step). The default requires one from every client; see
+  :doc:`../guides/oauth2-setup`.
+- Resources declared with a URI template (``@mcp_resource(uri_template=
+  "notes://{id}")``) are listed by ``resources/templates/list`` as
+  ``uriTemplate``, under the same permissions, and stay in
+  ``resources/list`` as well.
+- ``/.well-known/openid-configuration`` serves the same document as
+  ``/.well-known/oauth-authorization-server``, for clients that look only
+  there.
 
 Notes
 -----

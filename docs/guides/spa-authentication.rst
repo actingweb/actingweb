@@ -338,9 +338,8 @@ again when it expires:
 **Stage 2: SPA Fetches the Session**
 
 Your SPA callback page then fetches the pending session (see
-``GET /oauth/spa/session/<session_id>`` in the API reference below). The route is
-registered by the FastAPI integration only: a Flask application uses the fetch-based
-flow of the note below, or registers the route itself.
+``GET /oauth/spa/session/<session_id>`` in the API reference below). Both
+the Flask and the FastAPI integration register the route.
 
 .. code-block:: javascript
 
@@ -1626,7 +1625,7 @@ Check session status.
 GET /oauth/spa/session/<session_id>
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Registered by the FastAPI integration only. It hands a browser the session a
+Registered by both integrations (Flask since 4.0). It hands a browser the session a
 redirect-based sign-in left for it: when the provider sends the browser to
 ``/oauth/callback`` in SPA mode without ``Accept: application/json``, the
 library completes the sign-in there and redirects to the SPA's

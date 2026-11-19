@@ -319,3 +319,160 @@ def test_authorize_debug_log_holds_no_values(
     assert "code_challenge" in caplog.text  # the key name is logged
     assert "secret.person@example.com" not in caplog.text
     assert CHALLENGE not in caplog.text
+
+
+# --- PKCE from every client (AC-37, AC-38, AC-49, AC-52) --------------------
+
+
+def _no_challenge(cid: str) -> dict[str, Any]:
+    params: dict[str, Any] = _authorize_params(cid)
+    params["code_challenge"] = None
+    params["code_challenge_method"] = None
+    return params
+
+
+def _callback_without_challenge(server: ActingWebOAuth2Server, cid: str) -> Any:
+    state = server.state_manager.create_mcp_state(
+        client_id=cid,
+        original_state="s",
+        redirect_uri=REDIRECT,
+        provider="google",
+        form_nonce="nonce-1",
+    )
+    auth = mock.Mock()
+    auth.exchange_code_for_token.return_value = {"access_token": "g"}
+    auth.provider.extract_user_info_from_token_response.return_value = {
+        "email": "u@example.com"
+    }
+    auth.get_email_from_user_info.return_value = "u@example.com"
+    server._authenticator_cache["google"] = auth
+    try:
+        with (
+            _patched(server),
+            mock.patch.object(
+                server,
+                "_get_or_create_actor_for_email",
+                return_value=mock.Mock(id="actor-nopkce"),
+            ),
+            mock.patch("actingweb.oauth2.create_oauth2_trust_relationship"),
+        ):
+            return server.handle_oauth_callback(
+                {"code": "upstream", "state": state}, form_nonce_cookie="nonce-1"
+            )
+    finally:
+        del server._authenticator_cache["google"]
+
+
+class TestPkceForEveryClient:
+    def test_a_confidential_client_without_a_challenge_gets_400(self, env: Any) -> None:
+        server, _ = env
+        cid = register(server)["client_id"]
+        resp = server.handle_authorization_request(_no_challenge(cid), "GET")
+        assert resp["error"] == "invalid_request"
+        assert "public" not in resp.get("error_description", "")
+
+    def test_the_opt_out_restores_the_confidential_exception(self, env: Any) -> None:
+        server, _ = env
+        server.config.mcp_require_pkce = False
+        confidential = register(server)["client_id"]
+        public = register(server, token_endpoint_auth_method="none")["client_id"]
+        with _patched(server):
+            ok = server.handle_authorization_request(_no_challenge(confidential), "GET")
+        assert "error" not in ok, ok
+        refused = server.handle_authorization_request(_no_challenge(public), "GET")
+        assert refused["error"] == "invalid_request"
+
+    def test_the_opt_out_keeps_binding_a_challenge_that_is_sent(self, env: Any) -> None:
+        server, _ = env
+        server.config.mcp_require_pkce = False
+        tm = server.token_manager
+        code = tm.create_authorization_code(
+            "actor-1",
+            "mcp_c",
+            {"access_token": "g"},
+            code_challenge=CHALLENGE,
+            code_challenge_method="S256",
+        )
+        assert (
+            tm.exchange_authorization_code(code, "mcp_c", code_verifier="z" * 50)
+            is None
+        )
+
+    def test_the_opt_out_accepts_a_public_clients_code_without_a_challenge(
+        self, env: Any
+    ) -> None:
+        server, _ = env
+        server.config.mcp_require_pkce = False
+        cid = register(server, token_endpoint_auth_method="none")["client_id"]
+        result = _callback_without_challenge(server, cid)
+        assert result["action"] == "redirect", result
+        tm = server.token_manager
+        code = tm.create_authorization_code("actor-1", cid, {"access_token": "g"})
+        assert tm.exchange_authorization_code(code, cid, code_verifier=VERIFIER)
+
+    def test_the_callback_refuses_a_state_without_a_challenge(self, env: Any) -> None:
+        server, _ = env
+        cid = register(server)["client_id"]
+        result = _callback_without_challenge(server, cid)
+        assert result.get("error") == "invalid_request", result
+
+    def test_the_exchange_refuses_a_code_without_a_challenge(self, env: Any) -> None:
+        server, _ = env
+        reg = register(server)
+        tm = server.token_manager
+        code = tm.create_authorization_code(
+            "actor-1", reg["client_id"], {"access_token": "g"}, redirect_uri=REDIRECT
+        )
+        resp = server.handle_token_request(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": reg["client_id"],
+                "client_secret": reg["client_secret"],
+                "redirect_uri": REDIRECT,
+                "code_verifier": VERIFIER,
+            }
+        )
+        assert resp.get("error") in ("invalid_request", "invalid_grant"), resp
+
+    def test_a_directly_created_code_follows_the_rule(self, env: Any) -> None:
+        server, _ = env
+        tm = server.token_manager
+        code = tm.create_authorization_code("actor-1", "mcp_c", {"access_token": "g"})
+        assert (
+            tm.exchange_authorization_code(code, "mcp_c", code_verifier=VERIFIER)
+            is None
+        )
+
+    def test_a_form_post_without_a_challenge_warns_about_the_form(
+        self, env: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        server, _ = env
+        cid = register(server)["client_id"]
+        params = {
+            k: v for k, v in _authorize_params(cid).items() if "code_challenge" not in k
+        }
+        body = urlencode({**params, "email": "u@example.com", "form_nonce": "n"})
+        with _patched(server), caplog.at_level("WARNING"):
+            handler = make_handler(server, body=body)
+            handler._handle_authorization_request("POST")
+        assert handler.response.status_code == 400
+        warning = " ".join(
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        )
+        assert "aw-oauth-authorization-form.html" in warning
+        assert "code_challenge" in warning and "code_challenge_method" in warning
+        assert cid in warning
+
+    def test_the_default_form_carries_the_challenge_back(self) -> None:
+        from pathlib import Path
+
+        import actingweb
+
+        form = (
+            Path(actingweb.__file__).parent
+            / "templates"
+            / "aw-oauth-authorization-form.html"
+        ).read_text()
+        assert 'name="code_challenge"' in form
+        assert 'name="code_challenge_method"' in form

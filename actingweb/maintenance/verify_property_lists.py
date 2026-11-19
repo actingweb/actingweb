@@ -60,11 +60,13 @@ import time
 from typing import Any
 
 from actingweb.db.exceptions import DbError
+from actingweb.maintenance._common import preflight
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
+
 logger = logging.getLogger("verify_property_lists")
 
 
@@ -138,42 +140,6 @@ class Checkpoint:
             with open(tmp, "w") as f:
                 json.dump({"mode": self._mode, "done": sorted(self._done)}, f)
             os.replace(tmp, self._path)
-
-
-def _log_target(config: Any, mode: str, rps: float) -> None:
-    """Say out loud which deployment is about to be swept.
-
-    The library defaults AWS_DB_PREFIX to "demo_actingweb", and a real
-    populated demo deployment exists -- so running this without the
-    environment the application uses silently sweeps the WRONG data and
-    reports it clean. A clean report from the wrong table is worse than an
-    error, because nothing about it looks wrong. Print the target, and warn
-    when the prefix is the default that nobody sets deliberately.
-    """
-    backend = getattr(config, "database", "unknown")
-    if backend == "postgresql":
-        target = (
-            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
-            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
-            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
-            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
-        )
-    else:
-        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
-        target = (
-            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
-            f"prefix={prefix} "
-            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
-        )
-        if not os.getenv("AWS_DB_PREFIX"):
-            logger.warning(
-                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
-                "If your deployment uses a different prefix you are about to "
-                "sweep the wrong tables and get a clean report from them. Set "
-                "the same environment the application runs with."
-            )
-    logger.info(f"Target: backend={backend} {target}")
-    logger.info(f"Mode: {mode}; rps={rps}")
 
 
 def sweep_actor(
@@ -637,7 +603,7 @@ def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
         return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Sweep all actors' property lists (and, with --attributes, "
@@ -729,7 +695,7 @@ def main() -> int:
         default=".verify_property_lists.checkpoint.json",
         help="resume state file (default .verify_property_lists.checkpoint.json)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.delete_damaged_replicas and not (args.repair and args.attributes):
         parser.error("--delete-damaged-replicas needs --repair and --attributes")
     if args.bucket and not args.attributes:
@@ -740,8 +706,11 @@ def main() -> int:
     from actingweb.config import Config
     from actingweb.db import get_actor_list
 
+    refused = preflight("actingweb-verify-property-lists", writing=args.repair)
+    if refused is not None:
+        return refused
     config = Config()
-    _log_target(config, "REPAIR" if args.repair else "dry-run", args.rps)
+    logger.info(f"Mode: {'REPAIR' if args.repair else 'dry-run'}; rps={args.rps}")
 
     # Streamed: memory does not grow with the fleet. Eventually consistent
     # (only ids are used; each actor's lists are read afterwards), resumed

@@ -32,11 +32,18 @@ Rules:
 - ``--marker`` must be a vouching value; ``factory``, ``email_unverified``,
   ``creator_changed`` and the empty string are refused.
 - ``--creator <address>`` restricts the run to actors with that creator.
+- ``--ids-file <path>`` restricts it to the actor ids in the file, one per
+  line (not with ``--creator``); a listed id the store does not hold is
+  counted as ``missing``. An unreadable file is refused before any read.
+- System actors (ids starting ``_actingweb_``) are never marked; they are
+  counted as ``system``.
 - ``--start-after <actor id>`` resumes an interrupted run: ids are processed
   in sorted order, and a progress line every 100 actors (and the closing
   line) gives the value. After errors, re-run without it: the errored actors
   sort before that id.
-- ``--dry-run`` reports what would be written without writing.
+- ``--dry-run`` reports what would be written without writing: one line
+  per actor on stdout with its current marker; ``--show-addresses`` adds
+  its creator and stored email.
 - ``--email-as-creator``, for an application running
   ``with_email_as_creator``: an actor whose creator is an address and whose
   stored email is another address first gets the creator as its stored
@@ -59,8 +66,11 @@ an eventual scan; ``--rate-limit`` caps it in read capacity units per second
 
 Output: one summary line, ``scanned`` (actors considered), ``marked``
 (written, or would be with ``--dry-run``), ``skipped`` (already carry a
-marker), ``pending`` (marked, but still waiting for email verification) and
-``errors`` (could not be read or written).
+marker), ``pending`` (marked, but still waiting for email verification),
+``email_reset`` and ``email_differs`` (see ``--email-as-creator``),
+``system`` (library actors, never marked), ``missing`` (listed in
+``--ids-file`` but not in the store) and ``errors`` (could not be read or
+written).
 
 Exit codes: 0 = every actor considered was handled; 1 = at least one actor
 could not be marked (re-run; marked actors are skipped); 2 = the actor list
@@ -75,8 +85,13 @@ import os
 import sys
 from typing import Any
 
+from actingweb.maintenance._common import preflight
+
 logger = logging.getLogger("mark_actors_vouched")
 
+
+#: Ids of the library's own actors; never marked.
+SYSTEM_ACTOR_PREFIX = "_actingweb_"
 
 #: A progress line, with the resume value, every this many actors scanned.
 PROGRESS_EVERY = 100
@@ -96,6 +111,7 @@ def _mark_one(
     counts: dict[str, int],
     creator: str = "",
     email_as_creator: bool = False,
+    show_addresses: bool = False,
 ) -> None:
     """Mark one actor if it qualifies, counting the outcome. The address
     the marker vouches for (``creator``, from the listing) is recorded
@@ -142,7 +158,12 @@ def _mark_one(
                 )
             )
         if dry_run:
-            logger.info(f"[dry-run] would mark {actor_id} ({current!r} -> {marker!r})")
+            # On stdout: a production LOG_LEVEL=WARNING must not hide what a
+            # dry run is for. Addresses only when asked for.
+            detail = f"would mark {actor_id} marker={current or '-'} -> {marker}"
+            if show_addresses:
+                detail += f" creator={creator or '-'} email={email or '-'}"
+            print(detail)
             if resettable and email_as_creator:
                 counts["email_reset"] += 1
         else:
@@ -183,6 +204,8 @@ def mark_actors(
     dry_run: bool = False,
     rate_limit: float | None = None,
     email_as_creator: bool = False,
+    ids: list[str] | None = None,
+    show_addresses: bool = False,
 ) -> dict[str, int]:
     """Write ``marker`` on the actors that qualify; return the counts.
 
@@ -191,6 +214,13 @@ def mark_actors(
     email, so a later ``creator-to-email`` sweep has nothing to move it to.
     Any other differing actor (and every one without the option) is counted
     in ``email_differs`` with a warning, its email left.
+
+    ``ids`` limits the run to those actor ids; a listed id the store does
+    not hold is counted in ``missing``. System actors (``_actingweb_*``) are
+    never marked, listed or not; they are counted in ``system``.
+
+    ``show_addresses``: a dry run's line per actor also shows its creator
+    and stored email.
 
     Raises:
         ValueError: ``marker`` does not vouch.
@@ -203,6 +233,9 @@ def mark_actors(
     if not marker or marker in UNVOUCHED_AUTH_METHODS:
         raise ValueError(f"{marker!r} does not vouch for an actor")
     wanted = creator.lower() if creator and "@" in creator else creator
+    listed = set(ids) if ids is not None else None
+    found: set[str] = set()
+    system = 0
     selected: list[tuple[str, str]] = []
     try:
         # Filters at collection time, so memory holds only what is processed;
@@ -213,6 +246,15 @@ def mark_actors(
         ):
             actor_id = row.get("id")
             if not actor_id:
+                continue
+            if listed is not None:
+                if actor_id not in listed:
+                    continue
+                found.add(actor_id)
+            if actor_id.startswith(SYSTEM_ACTOR_PREFIX):
+                # The library's own actors: no sign-in adopts them, and a
+                # marker on one means nothing.
+                system += 1
                 continue
             if start_after and actor_id <= start_after:
                 continue
@@ -233,6 +275,8 @@ def mark_actors(
         "pending": 0,
         "email_reset": 0,
         "email_differs": 0,
+        "system": system,
+        "missing": len(listed - found) if listed is not None else 0,
         "errors": 0,
     }
     last: str | None = None
@@ -248,6 +292,7 @@ def mark_actors(
             counts=counts,
             creator=row_creator,
             email_as_creator=email_as_creator,
+            show_addresses=show_addresses,
         )
         # Only once the actor is handled (an interrupt skips this), so
         # resuming after it skips nothing; an interrupted run never reaches
@@ -282,10 +327,22 @@ def main(argv: list[str] | None = None) -> int:
         "--marker", default="operator", help="auth_method value to write"
     )
     parser.add_argument("--include-factory", action="store_true")
-    parser.add_argument(
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
         "--creator",
         default=None,
         help="only actors with this creator (also bounds the run's memory)",
+    )
+    scope.add_argument(
+        "--ids-file",
+        default=None,
+        help="only the actor ids in this file, one per line; a listed id "
+        "the store does not hold is counted as missing",
+    )
+    parser.add_argument(
+        "--show-addresses",
+        action="store_true",
+        help="with --dry-run, also print each actor's creator and stored email",
     )
     parser.add_argument("--start-after", default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -308,6 +365,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    ids: list[str] | None = None
+    if args.ids_file:
+        try:
+            with open(args.ids_file, encoding="utf-8") as f:
+                ids = [line.strip() for line in f if line.strip()]
+        except OSError as e:
+            parser.error(f"--ids-file could not be read: {e}")
+    refused = preflight("actingweb-mark-actors-vouched", writing=not args.dry_run)
+    if refused is not None:
+        return refused
 
     from actingweb.config import Config
 
@@ -322,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             rate_limit=args.rate_limit,
             email_as_creator=args.email_as_creator,
+            ids=ids,
+            show_addresses=args.show_addresses,
         )
     except ValueError as e:
         parser.error(str(e))
@@ -332,7 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         f"scanned={counts['scanned']} marked={counts['marked']} "
         f"skipped={counts['skipped']} pending={counts['pending']} "
         f"email_reset={counts['email_reset']} "
-        f"email_differs={counts['email_differs']} errors={counts['errors']}"
+        f"email_differs={counts['email_differs']} system={counts['system']} "
+        f"missing={counts['missing']} errors={counts['errors']}"
     )
     return 1 if counts["errors"] else 0
 

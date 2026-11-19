@@ -1000,6 +1000,54 @@ REMOVED
 CHANGED
 ~~~~~~~
 
+- **The built-in authorisation server requires PKCE from every client.**
+  A public client was refused without a ``code_challenge`` at the
+  authorise step only; a confidential client could sign in without one,
+  and a code without a challenge (a state minted earlier, or a code created
+  with ``create_authorization_code``) was exchanged without a verifier.
+  MCP's authorisation rules and OAuth 2.1 require PKCE of every client: an
+  authorisation request, a callback state and a code without a challenge
+  are now refused (400 ``invalid_request``), and the token request needs a
+  ``code_verifier``. A server-side WARNING names the client id and the
+  opt-out; for a form posted without the challenge it says that a custom
+  ``aw-oauth-authorization-form.html`` must carry the hidden fields
+  ``code_challenge`` and ``code_challenge_method``. **Behavior change:** a
+  client that sends no challenge cannot sign in. ``with_mcp(require_pkce=False)``
+  restores the 4.0.0rc1 rule exactly (a public client refused at authorise,
+  no check at callback or exchange), so an application whose clients have
+  not been checked upgrades with it and enforces in a later change.
+  **Check:** an application with its own authorise form, one that signs
+  users in on its own route and calls ``complete_client_authorization``, or
+  one that creates codes itself, passes the client's challenge through (the
+  migration guide says how).
+
+- **Discovery no longer offers ``client_credentials``.** The authorisation
+  server document listed it in ``grant_types_supported``, but an anonymous
+  registration may not use it. **Behavior change:** the grant is no longer
+  advertised; a client an actor's owner created with
+  ``OAuth2ClientManager.create_client`` still obtains a token with it.
+
+- **Operator commands refuse to write on DynamoDB when ``AWS_DB_PREFIX`` is
+  not set.** The library defaults the prefix to ``demo_actingweb``, so a
+  command run from a shell without the application's environment wrote to
+  whatever store that name resolved to. Every command (``--apply``,
+  ``--migrate``, ``--repair``, ``--downgrade``, and
+  ``actingweb-mark-actors-vouched`` without ``--dry-run``) now refuses with
+  exit status 2 when the prefix is unset or empty, naming the resolved
+  prefix and the fix; dry runs and PostgreSQL are not refused. Every command
+  also prints the store it will read (backend; on DynamoDB the prefix,
+  endpoint and region; on PostgreSQL the host, database, schema and
+  prefix) on stdout before its first read. **Behavior change:** a script
+  that writes on the default prefix sets ``AWS_DB_PREFIX`` explicitly, even
+  to ``demo_actingweb``.
+
+- **``actingweb-mark-actors-vouched`` never marks the library's own
+  actors.** **Behavior change:** ``_actingweb_*`` actors are skipped and
+  counted as ``system``; a marker on one meant nothing to any sign-in.
+
+- **``with_mcp()`` changes only the options it names.** A second call
+  without ``server_name`` or ``instructions`` reset them to their defaults.
+
 - **Breaking: a custom actor backend implements ``rename_creator``.**
   ``DbActor.rename_creator(actor_id, *, expected, creator, internal=(),
   marker=None) -> RenameOutcome`` moves a creator together with writes to
@@ -2471,6 +2519,42 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``with_mcp(require_auth_for_initialize=True)``**: an unauthenticated
+  ``initialize`` answers 401 with the ``WWW-Authenticate`` challenge (503
+  when the token store is down), so a client starts its OAuth flow at the
+  handshake. Off by default: the handshake is answered and the first
+  authenticated method is challenged.
+
+- **``resources/templates/list``**: the resources declared with a URI
+  template (a ``{...}`` expression), as ``uriTemplate``, under the
+  permissions ``resources/list`` applies. ``resources/list`` keeps listing
+  them, so a client that never calls the templates method loses nothing; a
+  resource declared only by a regex is not a template.
+
+- **``/.well-known/openid-configuration``** serves the authorisation
+  server document, on Flask and FastAPI, for clients that look only there.
+
+- **``GET /oauth/spa/session/<id>`` on Flask.** FastAPI served the pending
+  SPA session after an OAuth callback; a Flask application's browser got a
+  404 there. Both integrations now share one implementation.
+
+- **One ``ACTOR_ADOPTED:`` log line per adoption**, at WARNING:
+  ``ACTOR_ADOPTED: actor=<id> mode=<cleaned|replaced>
+  previous_auth_method=<marker> previous_actor=<id|-> provider=<name>``,
+  then the counts. It carries ids and markers only, never the creator or an
+  email address, and an adoption announced by a later sign-in logs it too
+  (``announced_later=true``). It replaces the free-text line, so an operator
+  can grep for why a user's connections are gone.
+
+- **``actingweb-property-lookup report`` says where its name set came
+  from** (``--properties``, ``INDEXED_PROPERTIES`` or the library default),
+  hints to pass the application's names when it used the default, and
+  notes when the flag differs from ``INDEXED_PROPERTIES``.
+
+- **``actingweb-unique-creators creator-to-email`` counts the actors it
+  passed as unvouched** (``unvouched``), and a non-zero count says that
+  ``actingweb-mark-actors-vouched`` comes first.
+
 - **``ActingWebApp.with_callback_delivery()``, with
   ``callback_delivery_budget_seconds`` and ``serialize_own_host_callbacks``**
   (also accepted by ``with_subscription_processing()``; it takes
@@ -2762,7 +2846,13 @@ ADDED
   vouching an actor whose creator is an address and whose stored email is
   another one, so the email-as-creator sweep does not then hand the actor
   to an address nobody proved; without it such actors are counted
-  (``email_differs``).
+  (``email_differs``). ``--ids-file PATH`` limits the run to the actor ids
+  in the file, one per line (not with ``--creator``; a listed id the store
+  does not hold is counted as ``missing``; an unreadable file is refused
+  before any read). The library's own actors (ids starting ``_actingweb_``)
+  are never marked and are counted as ``system``. A dry run prints one line
+  per actor it would mark, on stdout, with its current marker;
+  ``--show-addresses`` adds its creator and stored email.
 
 - **``ListItemTooLargeError``** (``from actingweb import
   ListItemTooLargeError``), raised before any write when a property-list
@@ -2946,6 +3036,45 @@ ADDED
 
 FIXED
 ~~~~~
+
+- **``actingweb-property-lookup report --properties a,b`` judged the wrong
+  names.** Its verdict and exit status were about the whole configured set
+  (``INDEXED_PROPERTIES``, or the library default), which an application
+  that sets its names with ``with_indexed_properties()`` does not use, so
+  the report refused names the application never indexes. The verdict, exit
+  status and fix line (which now echoes ``--properties``) are about the
+  names passed.
+
+- **``actingweb-property-lookup backfill`` on PostgreSQL printed
+  ``scanned=0 matches=0``** whatever it processed: the set-based pass never
+  counted. It now reports the rows of the names it covered and those of
+  live actors.
+
+- **A backfill collision did not say how to resolve it.** The collision
+  lines went to the logger and named only the second actor on DynamoDB.
+  They are now printed, name the actor holding the lookup row too, and the
+  summary names the two ways out: remove or change the property on all but
+  one actor, or accept the collisions with ``mark-complete --force`` after
+  review. A collision still leaves the name unmarked, so the start is
+  refused until one of them is done.
+
+- **``/oauth/logout``'s 503 carried no error code.** A logout whose token
+  revocation hit a store fault answered 503 with no ``X-ActingWeb-Error``
+  header or ``code`` key, unlike every other library error, so a client
+  could not tell it from a gateway's 503. Both are now
+  ``temporarily_unavailable``, on Flask and FastAPI.
+
+- **An MCP client sharing a trust row renamed it on every request.** Two
+  clients using one registration's trust row (a connector and its CLI)
+  each replaced the row's client name, and wrote the trust row, on every
+  request that carried ``clientInfo``. The first name an authenticated
+  request set is now kept (the ``MCP Client`` placeholder and an empty name
+  are not a first name); version and platform still update.
+
+- **``ActorInterface.get_by_id()`` and ``get_by_creator()`` documented
+  ``None`` for a failed read.** Both raise ``DbError`` on a store fault (as
+  ``PropertyListStore.exists()`` does); the docstrings, and
+  ``get_deletion_status``'s comparison with them, now say so.
 
 - **A permission change made with ``store_permissions_async`` could fail to
   reach the peer on a function platform.** The peer was told by a background

@@ -1822,6 +1822,15 @@ one of those actors (or a sibling of it) deletes it whichever is first. A value 
 actor the **MCP OAuth server** created before 4.0 is unmarked too, and the
 same tool covers them.
 
+``--ids-file <path>`` limits the run to the actor ids in a file, one per line
+(not with ``--creator``), for an operator who has reviewed which actors to
+vouch for. The library's own actors (ids starting ``_actingweb_``) are never
+marked. A dry run prints one line per actor it would mark, on stdout, with
+its current marker (``-`` for none); ``--show-addresses`` adds its creator
+and stored email, so the review can be done from the dry run. Run it in a
+writing mode only with ``AWS_DB_PREFIX`` set (on DynamoDB it refuses
+otherwise; see the deployment page, "Operator commands").
+
 Reading the output. The last line reports:
 
 ``scanned``
@@ -1834,6 +1843,17 @@ Reading the output. The last line reports:
    Marked, but their email verification is still pending
    (``email_verified == "false"``). They stay unvouched and are cleaned at
    the sign-in that proves the address.
+``email_reset``
+   With ``--email-as-creator``: actors whose stored email was set to their
+   creator before they were marked (or would be, with ``--dry-run``).
+``email_differs``
+   Actors whose stored email is an address other than their creator, left
+   as they are (without ``--email-as-creator``, or because the creator is
+   not an address); each has a warning line.
+``system``
+   The library's own actors (``_actingweb_*``); never marked.
+``missing``
+   Ids listed in ``--ids-file`` that the store does not hold.
 ``errors``
    The marker could not be read or the write did not read back. Re-run;
    actors already marked are skipped.

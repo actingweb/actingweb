@@ -455,6 +455,13 @@ class Config:
         self.mcp: bool = kwargs.get("mcp", False)
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
         self.mcp_instructions: str | None = kwargs.get("mcp_instructions", None)
+        # An unauthenticated MCP initialize answers 401 (with_mcp option).
+        self.mcp_require_auth_for_initialize: bool = bool(
+            kwargs.get("mcp_require_auth_for_initialize", False)
+        )
+        # PKCE from every client of the built-in authorisation server; False
+        # restores the 4.0.0rc1 rule (public clients at authorise only).
+        self.mcp_require_pkce: bool = bool(kwargs.get("mcp_require_pkce", True))
 
         # These are the supported formats
         self.aw_formats = "json"

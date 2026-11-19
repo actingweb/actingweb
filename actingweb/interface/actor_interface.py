@@ -182,7 +182,12 @@ class ActorInterface:
             service_registry: Optional service registry for third-party service access
 
         Returns:
-            ActorInterface instance or None if not found
+            ActorInterface instance or None if no actor has this id
+
+        Raises:
+            DbError: the store could not be read. A fault is never reported
+                as ``None``: ``None`` means the actor does not exist (or its
+                row is already gone at the end of a delete).
         """
         core_actor = CoreActor(actor_id=actor_id, config=config)
         if service_registry is None:
@@ -203,10 +208,10 @@ class ActorInterface:
         - ``get_by_id()`` keeps returning an actor for the whole of
           :meth:`delete`, because the actor row is removed last. The absence
           check fails **open** exactly in the window it exists for.
-        - ``get_by_id()`` returns ``None`` for a deleted actor *and* for a
-          failed read. A guard that skips on ``None`` also skips on a DynamoDB
-          throttle — silently. For a paid-subscription webhook that means the
-          customer paid and never got access.
+        - ``get_by_id()`` raises :class:`~actingweb.db.exceptions.DbError`
+          on a failed read, so a guard built on it must catch that and decide
+          what a fault means. Skipping on a fault is the wrong default for a
+          paid-subscription webhook: the customer paid and never got access.
 
         This call answers with three values instead of two, from a tombstone
         written before the wipe begins. Treat ``UNKNOWN`` as "proceed": the
@@ -229,7 +234,9 @@ class ActorInterface:
             config: ActingWeb Config object
 
         Returns:
-            :class:`~actingweb.deletion.DeletionStatus`
+            :class:`~actingweb.deletion.DeletionStatus`. A store fault is
+            ``UNKNOWN``, never raised: unlike :meth:`get_by_id` and
+            :meth:`get_by_creator`, which raise ``DbError``.
 
         See Also:
             :mod:`actingweb.deletion` for the full rationale, and the
@@ -251,7 +258,11 @@ class ActorInterface:
             service_registry: Optional service registry for third-party service access
 
         Returns:
-            ActorInterface instance or None if not found
+            ActorInterface instance or None if no actor has this creator
+
+        Raises:
+            DbError: the store could not be read; a fault is never reported
+                as ``None``.
         """
         core_actor = CoreActor(config=config)
         if service_registry is None:

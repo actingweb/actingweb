@@ -34,6 +34,22 @@ Usage (DynamoDB Local on :8001; each side its own table prefix)::
     python scripts/live_pair.py drive --old http://127.0.0.1:5701 \\
         --new http://127.0.0.1:5702 --out /tmp/pair/result.json
 
+A third command, ``same-store``, is the mixed-version check of an operator
+command (4.0 adoption findings, AC-40 and AC-41): the previous release
+serves on one prefix under a small request loop (create an actor, an
+authenticated read, a write of an indexed property) while a command of
+this tree runs against the same prefix. Afterwards every actor the loop
+created must be readable by both versions, and each indexed value it wrote
+must be found by this tree's reverse lookup::
+
+    AWS_DB_PREFIX=pair_same_ INDEXED_PROPERTIES=email \
+        python scripts/live_pair.py serve --label v3.15.1 --port 5701 \
+        --capture /tmp/pair/same.jsonl            # previous release
+    AWS_DB_PREFIX=pair_same_ INDEXED_PROPERTIES=email \
+        python scripts/live_pair.py same-store --old http://127.0.0.1:5701 \
+        --out /tmp/pair/same-mark.json -- actingweb-mark-actors-vouched
+    # likewise with: -- actingweb-property-lookup backfill --apply
+
 Nothing here is for production: the control route has no authentication
 beyond the loopback check, and the captures hold request bodies.
 """
@@ -780,6 +796,110 @@ def drive(args: argparse.Namespace) -> int:
     return 0 if all(c["outcome"] == "completes" for c in results) else 1
 
 
+# ---------------------------------------------------------------------------
+# same-store
+# ---------------------------------------------------------------------------
+
+
+def same_store(args: argparse.Namespace) -> int:
+    """Run ``args.cmd`` (this tree) against the old side's store while the
+    old side serves a request loop; then check what the loop wrote."""
+    import subprocess
+
+    import requests
+
+    command = [c for c in args.cmd if c != "--"]
+    if not command:
+        raise SystemExit("same-store needs a command after --")
+    old = Side(args.old)
+    name = args.property
+    created: list[dict[str, Any]] = []
+    failures: list[str] = []
+    stop = threading.Event()
+
+    def loop() -> None:
+        while not stop.is_set():
+            try:
+                side = Side(args.old)
+                side.create("same")
+                read = side.call("GET", "/properties")
+                if read.status_code not in (200, 404):
+                    failures.append(f"read {side.id}: {read.status_code}")
+                value = f"{uuid.uuid4().hex[:12]}@example.test"
+                write = side.call(
+                    "PUT",
+                    f"/properties/{name}",
+                    data=value,
+                    headers={"Content-Type": "text/plain"},
+                )
+                if write.status_code not in (200, 201, 204):
+                    failures.append(f"write {side.id}: {write.status_code}")
+                created.append({"id": side.id, "auth": side.auth})
+            except Exception as exc:  # noqa: BLE001 - the outcome is the result
+                failures.append(f"{type(exc).__name__}: {exc}")
+            time.sleep(args.pause)
+
+    worker = threading.Thread(target=loop, daemon=True)
+    worker.start()
+    time.sleep(args.warmup)
+    started = time.time()
+    run = subprocess.run(command, capture_output=True, text=True, check=False)
+    took = time.time() - started
+    time.sleep(args.warmup)
+    stop.set()
+    worker.join(timeout=60)
+
+    # Read back: the old side over HTTP, this tree in-process (same prefix).
+    from actingweb.config import Config
+    from actingweb.interface.actor_interface import ActorInterface
+
+    config = Config(database="dynamodb", fqdn="127.0.0.1", proto="http://")
+    unreadable_old: list[str] = []
+    unreadable_new: list[str] = []
+    lookups_missed: list[str] = []
+    for entry in created:
+        answer = requests.get(
+            f"{old.url}/{entry['id']}/properties/{name}",
+            auth=tuple(entry["auth"]),
+            timeout=30,
+        )
+        if answer.status_code != 200:
+            unreadable_old.append(f"{entry['id']}: {answer.status_code}")
+        actor = ActorInterface.get_by_id(entry["id"], config)
+        if actor is None:
+            unreadable_new.append(entry["id"])
+            continue
+        stored = actor.properties.get(name)
+        found = ActorInterface.get_by_property(name, str(stored), config)
+        if stored is None or found is None or found.id != entry["id"]:
+            lookups_missed.append(entry["id"])
+    report = {
+        "old": old.info,
+        "command": command,
+        "command_exit": run.returncode,
+        "command_seconds": round(took, 1),
+        "command_stdout_tail": run.stdout.splitlines()[-15:],
+        "command_stderr_tail": run.stderr.splitlines()[-15:],
+        "loop_actors": len(created),
+        "loop_failures": failures,
+        "unreadable_by_old": unreadable_old,
+        "unreadable_by_new": unreadable_new,
+        "lookups_missed": lookups_missed,
+    }
+    with open(args.out, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=1)
+        handle.write("\n")
+    ok = not (failures or unreadable_old or unreadable_new or lookups_missed)
+    print(
+        f"{'completes' if ok else 'FAILS':9} {' '.join(command)}: exit "
+        f"{run.returncode}, {len(created)} actors by the old side, "
+        f"{len(failures)} loop failures, {len(unreadable_old)} unreadable by "
+        f"the old side, {len(unreadable_new)} by this tree, "
+        f"{len(lookups_missed)} lookups missed"
+    )
+    return 0 if ok else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -796,6 +916,22 @@ def main() -> int:
         "--probes", action="store_true", help="also run the probes"
     )
     drive_parser.set_defaults(run=drive)
+    same_parser = commands.add_parser(
+        "same-store", help="run a command of this tree on the old side's store"
+    )
+    same_parser.add_argument("--old", required=True, help="URL of the old side")
+    same_parser.add_argument("--out", required=True)
+    same_parser.add_argument(
+        "--property", default="email", help="indexed property the loop writes"
+    )
+    same_parser.add_argument(
+        "--warmup", type=float, default=3.0, help="loop seconds before and after"
+    )
+    same_parser.add_argument(
+        "--pause", type=float, default=0.2, help="seconds between loop rounds"
+    )
+    same_parser.add_argument("cmd", nargs=argparse.REMAINDER)
+    same_parser.set_defaults(run=same_store)
     args = parser.parse_args()
     return int(args.run(args))
 

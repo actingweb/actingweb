@@ -234,6 +234,63 @@ def spa_cors_headers(
     }
 
 
+def spa_session_retrieve(
+    config: Any, session_id: str, origin: str | None
+) -> tuple[int, dict[str, Any], dict[str, str]]:
+    """``GET /oauth/spa/session/<id>``: the pending SPA session a callback
+    stored, as ``(status, body, headers)`` for either integration to send.
+
+    Only a success session (its ``token_data`` carries ``actor_id``) is
+    retrievable: a pending email-entry session (the raw provider token
+    response) is a 404 like a missing one, so it is never echoed. A success
+    session is readable once freely, and again within a short grace window
+    (a duplicate fetch, such as React StrictMode's double effect); past that
+    window the row is deleted. CORS follows the ``spa_cors_origins``
+    allowlist.
+    """
+    from ..oauth_session import get_oauth2_session_manager
+
+    cors = spa_cors_headers(config, origin, methods="GET, OPTIONS")
+
+    def error(
+        status: int, message: str, code: str
+    ) -> tuple[int, dict[str, Any], dict[str, str]]:
+        return (
+            status,
+            {"error": True, "message": message, "code": code},
+            {**cors, ERROR_CODE_HEADER: code},
+        )
+
+    try:
+        session_data = get_oauth2_session_manager(config).retrieve_spa_session(
+            session_id
+        )
+        if not session_data:
+            return error(404, "Session not found or expired", "not_found")
+        token_data = session_data.get("token_data", {})
+        if not token_data or "access_token" not in token_data:
+            # Defensive: retrieve_spa_session() already requires actor_id,
+            # and a success session carries access_token beside it.
+            return error(400, "Invalid session data", "invalid_request")
+        return (
+            200,
+            {
+                "success": True,
+                "access_token": token_data.get("access_token"),
+                "actor_id": token_data.get("actor_id"),
+                "email": token_data.get("email"),
+                "expires_at": token_data.get("expires_at"),
+                "redirect_url": token_data.get("redirect_url"),
+            },
+            cors,
+        )
+    except DbError:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving SPA session: {e}")
+        return error(500, "Failed to retrieve session", "server_error")
+
+
 #: Re-exported from :mod:`actingweb.constants` (the hybrid refresh cookie's
 #: path before 4.0).
 LEGACY_REFRESH_COOKIE_PATH = _LEGACY_REFRESH_COOKIE_PATH

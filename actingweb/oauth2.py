@@ -2624,6 +2624,27 @@ def _record_pending_adoption(
         raise DbError("pending adoption record", actor_id)
 
 
+def _log_adoption(
+    actor_id: str,
+    *,
+    mode: str,
+    previous_auth_method: Any,
+    previous_actor_id: str | None,
+    provider: str | None,
+    details: str = "",
+) -> None:
+    """The one log line of an adoption, at WARNING, for an operator to grep
+    (``ACTOR_ADOPTED:``) when a user asks why their connections are gone.
+    Ids and markers only: never the creator or an email address."""
+    logger.warning(
+        f"ACTOR_ADOPTED: actor={actor_id} mode={mode} "
+        f"previous_auth_method={previous_auth_method or 'legacy'} "
+        f"previous_actor={previous_actor_id or '-'} "
+        f"provider={provider or 'email-verification'}"
+        + (f" {details}" if details else "")
+    )
+
+
 def _announce_pending(
     config: config_class.Config,
     hooks: "HookRegistry | None",
@@ -2693,6 +2714,14 @@ def _announce_pending(
         # removed anything can name the actor that is announcing it.
         if not old_id or old_id in skip or old_id == actor.id:
             continue
+        _log_adoption(
+            actor.id or "",
+            mode="replaced",
+            previous_auth_method=entry.get("previous"),
+            previous_actor_id=old_id,
+            provider=provider_name,
+            details="announced_later=true",
+        )
         _fire_lifecycle(
             hooks,
             "actor_adopted",
@@ -3177,14 +3206,19 @@ def _adopt_actor(
     def _n(items: list[Any] | None) -> str:
         return "unknown" if items is None else str(len(items))
 
-    logger.warning(
-        f"Adopted unvouched actor {actor_id} (was {previous!r}) via "
-        f"{provider_name or 'email verification'}: mode={mode}, "
-        f"trusts={_n(removed_trusts)}, subscriptions={_n(subscription_peers)}, "
-        f"tokens={tokens_revoked}, clients={len(client_ids)}, "
-        f"properties={_n(property_names)}, "
-        f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]}, "
-        f"siblings={swept_ids}"
+    _log_adoption(
+        result.id if result is not None and result.id else actor_id,
+        mode=mode,
+        previous_auth_method=previous,
+        previous_actor_id=actor_id if replace else None,
+        provider=provider_name,
+        details=(
+            f"trusts={_n(removed_trusts)} subscriptions={_n(subscription_peers)} "
+            f"tokens={tokens_revoked} clients={len(client_ids)} "
+            f"properties={_n(property_names)} "
+            f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]} "
+            f"siblings={swept_ids}"
+        ),
     )
     if result is not None:
         # The record names this sign-in's own victim after a replacement (or

@@ -382,9 +382,11 @@ def test_a_chain_fault_on_logout_is_503_and_keeps_everything(env: Env) -> None:
     assert result == {
         "success": False,
         "error": "temporarily_unavailable",
+        "code": "temporarily_unavailable",
         "message": "Token store temporarily unavailable; retry the logout",
         "method": "POST",
     }
+    assert handler.response.headers["X-ActingWeb-Error"] == "temporarily_unavailable"
     assert handler.response.cookies == []
     assert env.alive(access, refresh) == (True, True)
     assert env.provider_clears == []

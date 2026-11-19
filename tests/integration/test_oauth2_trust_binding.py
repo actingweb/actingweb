@@ -500,16 +500,38 @@ def test_the_helper_for_an_own_sign_in_route(flow: Flow, listed: Any) -> None:
     core.get(actor_id=r.json()["id"])
     server = get_actingweb_oauth2_server(flow.host.config)
     listed(["mcp_client", "viewer"])
+    # PKCE from every client (4.0): the route passes the client's challenge.
+    refused = server.complete_client_authorization(
+        core, flow.client_id, REDIRECT, "viewer", state="s0"
+    )
+    assert refused.get("error") == "invalid_request"
     denied = server.complete_client_authorization(
-        core, flow.client_id, REDIRECT, "admin"
+        core,
+        flow.client_id,
+        REDIRECT,
+        "admin",
+        code_challenge=_challenge(),
+        code_challenge_method="S256",
     )
     assert "error=access_denied" in denied["url"]
     hooked = server.complete_client_authorization(
-        core, flow.client_id, REDIRECT, "viewer", decide_trust=lambda *a, **k: None
+        core,
+        flow.client_id,
+        REDIRECT,
+        "viewer",
+        code_challenge=_challenge(),
+        code_challenge_method="S256",
+        decide_trust=lambda *a, **k: None,
     )
     assert "error=access_denied" in hooked["url"]
     done = server.complete_client_authorization(
-        core, flow.client_id, REDIRECT, "viewer", state="s9"
+        core,
+        flow.client_id,
+        REDIRECT,
+        "viewer",
+        code_challenge=_challenge(),
+        code_challenge_method="S256",
+        state="s9",
     )
     assert "code=" in done["url"] and "state=s9" in done["url"]
 
@@ -542,7 +564,13 @@ def test_the_helper_asks_the_applications_decision_hook(
     hooks.register_lifecycle_hook(event, decline)
     try:
         declined = server.complete_client_authorization(
-            core, flow.client_id, REDIRECT, "viewer", state="s1"
+            core,
+            flow.client_id,
+            REDIRECT,
+            "viewer",
+            code_challenge=_challenge(),
+            code_challenge_method="S256",
+            state="s1",
         )
     finally:
         hooks._lifecycle_hooks[event].remove(decline)  # noqa: SLF001
@@ -552,7 +580,13 @@ def test_the_helper_asks_the_applications_decision_hook(
     assert "error=access_denied" in declined["url"]
     # With no hook registered the same call grants, as before.
     granted = server.complete_client_authorization(
-        core, flow.client_id, REDIRECT, "viewer", state="s2"
+        core,
+        flow.client_id,
+        REDIRECT,
+        "viewer",
+        code_challenge=_challenge(),
+        code_challenge_method="S256",
+        state="s2",
     )
     assert "code=" in granted["url"]
 

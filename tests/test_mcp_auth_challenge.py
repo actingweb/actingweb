@@ -6,11 +6,19 @@ the server, restarted, and was never prompted to sign in, reporting the
 protected-resource metadata as malformed.
 """
 
+import asyncio
+from typing import Any
+
+import pytest
+
 from actingweb.aw_web_request import AWResponse
 from actingweb.config import Config
+from actingweb.handlers.async_mcp import AsyncMCPHandler
 from actingweb.handlers.mcp import MCPHandler, mcp_www_authenticate
 from actingweb.handlers.oauth2_endpoints import OAuth2EndpointsHandler
 from actingweb.oauth2_server.oauth2_server import ActingWebOAuth2Server
+from actingweb.oauth2_server.token_manager import TokenStoreUnavailable
+from tests.mcp_helpers import make_mcp_config, make_mcp_webobj
 
 
 def _config() -> Config:
@@ -173,3 +181,78 @@ def test_the_protected_resource_document_reports_what_is_registered():
         hooks = HookRegistry()
         getattr(hooks, register)(func.__name__, func)
         assert flags(hooks) == {**nothing, kind: True}, kind
+
+
+# --- AC-30, AC-31: with_mcp(require_auth_for_initialize=True) ---------------
+
+
+INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "probe", "version": "1"},
+    },
+}
+
+
+def _init_handler(kind: str, *, required: bool, auth: Any) -> Any:
+    cfg = make_mcp_config()
+    cfg.mcp_require_auth_for_initialize = required
+    cls = AsyncMCPHandler if kind == "async" else MCPHandler
+    handler = cls(make_mcp_webobj(), cfg, hooks=None)
+
+    def authenticate() -> Any:
+        if isinstance(auth, BaseException):
+            raise auth
+        return auth
+
+    handler.authenticate_and_get_actor_cached = authenticate  # type: ignore[method-assign]
+    handler._update_trust_with_client_info = lambda *a, **k: None  # type: ignore[method-assign]
+    return handler
+
+
+def _post(handler: Any) -> dict[str, Any]:
+    if isinstance(handler, AsyncMCPHandler):
+        return asyncio.run(handler.post_async(dict(INITIALIZE)))
+    return handler.post(dict(INITIALIZE))
+
+
+@pytest.mark.parametrize("kind", ["sync", "async"])
+def test_initialize_is_challenged_when_required(kind: str) -> None:
+    handler = _init_handler(kind, required=True, auth=None)
+    out = _post(handler)
+    assert handler.response.status_code == 401
+    assert "resource_metadata=" in handler.response.headers["WWW-Authenticate"]
+    assert "error" in out and "result" not in out
+
+
+@pytest.mark.parametrize("kind", ["sync", "async"])
+def test_an_authenticated_initialize_passes(kind: str) -> None:
+    class _Actor:
+        id = "actor-1"
+
+    handler = _init_handler(kind, required=True, auth=_Actor())
+    out = _post(handler)
+    assert handler.response.status_code == 200
+    assert out["result"]["protocolVersion"]
+
+
+@pytest.mark.parametrize("kind", ["sync", "async"])
+def test_a_token_store_fault_is_503(kind: str) -> None:
+    handler = _init_handler(
+        kind, required=True, auth=TokenStoreUnavailable("store down")
+    )
+    out = _post(handler)
+    assert handler.response.status_code == 503
+    assert "result" not in out
+
+
+@pytest.mark.parametrize("kind", ["sync", "async"])
+def test_initialize_is_open_by_default(kind: str) -> None:
+    handler = _init_handler(kind, required=False, auth=None)
+    out = _post(handler)
+    assert handler.response.status_code == 200
+    assert out["result"]["protocolVersion"]

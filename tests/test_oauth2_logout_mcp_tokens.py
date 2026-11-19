@@ -9,7 +9,7 @@ from unittest import mock
 
 from actingweb.oauth2_server.oauth2_server import ActingWebOAuth2Server
 from tests.mcp_oauth_server_helpers import make_handler, make_server
-from tests.mcp_token_double import MemoryStore, make_config
+from tests.mcp_token_double import PKCE_VERIFIER, MemoryStore, make_config
 
 ACTOR = "actor-logout"
 CLIENT = "mcp_client_logout"
@@ -23,8 +23,14 @@ def _rotated() -> tuple[
     config, store = make_config()
     server = make_server(config)
     tm = server.token_manager
-    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
-    first = tm.exchange_authorization_code(code, CLIENT)
+    code = tm.create_authorization_code(
+        ACTOR,
+        CLIENT,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    first = tm.exchange_authorization_code(code, CLIENT, code_verifier=PKCE_VERIFIER)
     assert first
     second = tm.refresh_access_token(first["refresh_token"], CLIENT)
     assert second
@@ -74,6 +80,8 @@ def test_logout_after_a_revocation_fault_can_be_retried() -> None:
     assert out["error"] == "temporarily_unavailable"
     assert handler.response.status_code == 503
     assert handler.response.headers["Retry-After"] == "5"
+    assert handler.response.headers["X-ActingWeb-Error"] == "temporarily_unavailable"
+    assert out["code"] == "temporarily_unavailable"
     assert second["refresh_token"] in store.names(ACTOR, REFRESH)
 
     store.chain_delete_fault = None
@@ -186,6 +194,8 @@ def test_faulted_bearer_logout_is_503_with_retry_after_on_fastapi() -> None:
     assert resp.status_code == 503
     assert resp.headers["Retry-After"] == "5"
     assert resp.json()["error"] == "temporarily_unavailable"
+    assert resp.headers["X-ActingWeb-Error"] == "temporarily_unavailable"
+    assert resp.json()["code"] == "temporarily_unavailable"
     assert "set-cookie" not in resp.headers
 
 
@@ -195,6 +205,8 @@ def test_faulted_bearer_logout_is_503_with_retry_after_on_flask() -> None:
     assert resp.status_code == 503
     assert resp.headers["Retry-After"] == "5"
     assert resp.get_json()["error"] == "temporarily_unavailable"
+    assert resp.headers["X-ActingWeb-Error"] == "temporarily_unavailable"
+    assert resp.get_json()["code"] == "temporarily_unavailable"
 
 
 def test_bearer_logout_success_is_still_200_on_fastapi() -> None:

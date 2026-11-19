@@ -303,9 +303,21 @@ class ActingWebTokenManager:
         stored_challenge = auth_data.get("code_challenge")
         stored_method = str(auth_data.get("code_challenge_method"))
 
-        if stored_challenge:  # PKCE was used in authorization
-            pkce_ok = bool(code_verifier) and self._validate_pkce(
-                code_verifier or "", stored_challenge, stored_method
+        from .oauth2_server import pkce_required, warn_missing_challenge
+
+        if stored_challenge or pkce_required(self.config):
+            # PKCE from every client (4.0): a code without a challenge (one
+            # created directly by create_authorization_code, or before PKCE
+            # was required) is refused. With_mcp(require_pkce=False) keeps
+            # the 4.0.0rc1 rule: only a challenge that was sent is checked.
+            if not stored_challenge:
+                warn_missing_challenge(client_id, "exchange")
+            pkce_ok = (
+                bool(stored_challenge)
+                and bool(code_verifier)
+                and self._validate_pkce(
+                    code_verifier or "", stored_challenge, stored_method
+                )
             )
             if not pkce_ok:
                 logger.warning(f"PKCE validation failed for code {_mask_token(code)}")

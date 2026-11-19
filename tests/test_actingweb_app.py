@@ -535,6 +535,32 @@ class TestSpaCorsOrigins:
 
         assert app._mcp_instructions == "Call how_to_use()"
 
+    def test_a_second_with_mcp_keeps_earlier_options(self):
+        """AC-51: a later with_mcp() changes only the options it names."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:mcp")
+            app.with_mcp(
+                server_name="emm",
+                instructions="Call how_to_use()",
+                require_auth_for_initialize=True,
+                require_pkce=False,
+            )
+            app.with_mcp()
+            config = app.get_config()
+
+        assert config.mcp is True
+        assert config.mcp_server_name == "emm"
+        assert config.mcp_instructions == "Call how_to_use()"
+        assert config.mcp_require_auth_for_initialize is True
+        assert config.mcp_require_pkce is False
+
+    def test_mcp_option_defaults(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            config = ActingWebApp(aw_type="urn:actingweb:test:mcp").get_config()
+
+        assert config.mcp_require_auth_for_initialize is False
+        assert config.mcp_require_pkce is True
+
     def test_with_unique_creator(self):
         """Test with_unique_creator enables unique creator constraint."""
         with patch.object(ActingWebApp, "_initialize_permission_system"):

@@ -17,7 +17,7 @@ from actingweb.oauth2_server import TokenStoreUnavailable
 from actingweb.oauth2_server.token_manager import ActingWebTokenManager
 from tests.mcp_helpers import make_mcp_config, make_mcp_handler, make_mcp_webobj
 from tests.mcp_oauth_server_helpers import make_server, register
-from tests.mcp_token_double import make_config
+from tests.mcp_token_double import PKCE_VERIFIER, make_config
 
 INDEX = "_access_token_index"
 
@@ -40,8 +40,16 @@ def test_refresh_grant_answers_server_error_not_invalid_grant() -> None:
     server = make_server(config)
     resp = register(server, token_endpoint_auth_method="none")
     tm = server.token_manager
-    code = tm.create_authorization_code("a1", resp["client_id"], {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, resp["client_id"])
+    code = tm.create_authorization_code(
+        "a1",
+        resp["client_id"],
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(
+        code, resp["client_id"], code_verifier=PKCE_VERIFIER
+    )
     assert tokens
 
     store.faulty_buckets.add("_refresh_token_index")
@@ -155,8 +163,16 @@ def test_client_lookup_fault_is_server_error_not_invalid_client(bucket: str) -> 
     server = make_server(config)
     resp = register(server, token_endpoint_auth_method="none")
     tm = server.token_manager
-    code = tm.create_authorization_code("a1", resp["client_id"], {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, resp["client_id"])
+    code = tm.create_authorization_code(
+        "a1",
+        resp["client_id"],
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(
+        code, resp["client_id"], code_verifier=PKCE_VERIFIER
+    )
     assert tokens
 
     store.faulty_buckets.add(
@@ -213,8 +229,14 @@ def test_delete_client_still_deletes_when_tokens_cannot_be_listed(
     resp = register(server)
     cid = resp["client_id"]
     tm = server.token_manager
-    code = tm.create_authorization_code("actor-owner", cid, {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, cid)
+    code = tm.create_authorization_code(
+        "actor-owner",
+        cid,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(code, cid, code_verifier=PKCE_VERIFIER)
     assert tokens
 
     store.raising_buckets.add("mcp_refresh_tokens")
@@ -289,8 +311,16 @@ def test_delete_client_fails_while_its_client_row_stays() -> None:
 def test_revoke_client_tokens_counts_only_confirmed_deletes() -> None:
     config, store = make_config()
     tm = ActingWebTokenManager(config)
-    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    code = tm.create_authorization_code(
+        "a1",
+        "mcp_client_x",
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(
+        code, "mcp_client_x", code_verifier=PKCE_VERIFIER
+    )
     assert tokens
     store.delete_faults.add(("a1", "mcp_tokens", tokens["access_token"]))
 
@@ -305,8 +335,16 @@ def test_revoke_client_tokens_counts_a_raising_delete_and_goes_on() -> None:
     client's other tokens are still revoked and the fault is reported."""
     config, store = make_config()
     tm = ActingWebTokenManager(config)
-    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    code = tm.create_authorization_code(
+        "a1",
+        "mcp_client_x",
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(
+        code, "mcp_client_x", code_verifier=PKCE_VERIFIER
+    )
     assert tokens
 
     real = tm._remove_access_token
@@ -330,8 +368,16 @@ def test_revoke_client_tokens_evicts_the_access_tokens_from_the_cache() -> None:
 
     config, _store = make_config()
     tm = ActingWebTokenManager(config)
-    code = tm.create_authorization_code("a1", "mcp_client_x", {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, "mcp_client_x")
+    code = tm.create_authorization_code(
+        "a1",
+        "mcp_client_x",
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(
+        code, "mcp_client_x", code_verifier=PKCE_VERIFIER
+    )
     assert tokens
     mcp_mod._token_cache[tokens["access_token"]] = {"actor_id": "a1"}
     try:
@@ -361,8 +407,14 @@ CLIENT = "mcp_client_x"
 
 
 def _mcp_login(tm: ActingWebTokenManager) -> dict[str, Any]:
-    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, CLIENT)
+    code = tm.create_authorization_code(
+        ACTOR,
+        CLIENT,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(code, CLIENT, code_verifier=PKCE_VERIFIER)
     assert tokens
     return tokens
 
@@ -602,7 +654,13 @@ def test_a_live_auth_code_survives_a_sweep_with_a_fault_on_its_bucket() -> None:
     live code's row must not read as "no such code" and delete its index."""
     config, store = make_config()
     tm = ActingWebTokenManager(config)
-    code = tm.create_authorization_code(ACTOR, CLIENT, {"access_token": "g"})
+    code = tm.create_authorization_code(
+        ACTOR,
+        CLIENT,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
     store.faulty_buckets.add("mcp_auth_codes")
 
     cleaned = tm.cleanup_expired_tokens()

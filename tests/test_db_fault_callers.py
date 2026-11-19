@@ -362,3 +362,40 @@ class TestB10PermissionCallback:
             )
             is None
         )
+
+
+class TestActorInterfaceLookups:
+    """AC-7: a fault under ``get_by_id``/``get_by_creator`` raises, it does
+    not read as "no such actor"."""
+
+    def test_get_by_id_raises_on_a_fault(self, config: Any) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+
+        actor = create_core_actor(config, uuid_email())
+        with seam_fault(config, "actor", "Actor", "get"), pytest.raises(DbError):
+            ActorInterface.get_by_id(aid(actor), config)
+        assert ActorInterface.get_by_id(aid(actor), config) is not None
+
+    def test_get_by_creator_raises_on_a_fault(self, config: Any) -> None:
+        from actingweb.interface.actor_interface import ActorInterface
+
+        creator = uuid_email()
+        create_core_actor(config, creator)
+        with (
+            seam_fault(config, "actor", "Actor", "creator_index.query"),
+            pytest.raises(DbError),
+        ):
+            ActorInterface.get_by_creator(creator, config)
+        assert ActorInterface.get_by_creator(creator, config) is not None
+
+
+class TestListStoreLookups:
+    def test_exists_raises_on_a_fault(self, config: Any) -> None:
+        """AC-8."""
+        from actingweb.property import PropertyListStore
+
+        actor = create_core_actor(config, uuid_email())
+        store = PropertyListStore(actor_id=aid(actor), config=config)
+        with seam_fault(config, "property", "Property", "get"), pytest.raises(DbError):
+            store.exists("notes")
+        assert store.exists("notes") is False

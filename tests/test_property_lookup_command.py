@@ -194,20 +194,54 @@ class TestReport:
         assert name in out and "UNMARKED" in out
         assert "backfill --apply" in out
 
-    def test_a_subset_never_reads_as_a_pass(
+    def test_report_verdict_follows_the_passed_names(
         self,
         store: Store,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """--properties narrows the printout, not the verdict."""
+        """The verdict is about the names passed: an application that sets
+        its names in code has INDEXED_PROPERTIES unset or different (AC-1)."""
         marked, other = store.name(), store.name()
         monkeypatch.setenv("INDEXED_PROPERTIES", f"{marked},{other}")
         store.seed(store.actor(), other, f"v-{uuid.uuid4()}")
         _lookup_module().mark_backfilled([marked])
         _lookup_module().record_configured([marked, other])
-        assert _run("report", "--properties", marked) == 1
-        assert other in capsys.readouterr().out
+        assert _run("report", "--properties", marked) == 0
+        out = capsys.readouterr().out
+        assert "INDEXED_PROPERTIES" in out  # the flag differs from it: noted
+        assert _run("report", "--properties", other) == 1
+        out = capsys.readouterr().out
+        assert f"backfill --apply --properties {other}" in out
+
+    def test_report_names_the_source_and_echoes_the_flag(
+        self,
+        store: Store,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        name = store.name()
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+        store.seed(store.actor(), name, f"v-{uuid.uuid4()}")
+        assert _run("report", "--properties", name) == 1
+        out = capsys.readouterr().out
+        assert "names from: --properties" in out
+        assert f"--properties {name}" in out
+        monkeypatch.setenv("INDEXED_PROPERTIES", name)
+        _run("report")
+        assert "names from: INDEXED_PROPERTIES" in capsys.readouterr().out
+
+    def test_default_names_print_the_hint(
+        self,
+        store: Store,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("INDEXED_PROPERTIES", raising=False)
+        _run("report")
+        out = capsys.readouterr().out
+        assert "names from: the library default" in out
+        assert "with_indexed_properties()" in out and "--properties" in out
 
     def test_counts_exclude_the_meta_rows(self, store: Store) -> None:
         name = store.name()
@@ -245,6 +279,45 @@ class TestReport:
 
 
 class TestBackfill:
+    def test_a_collision_names_the_actors_and_the_ways_out(
+        self,
+        store: Store,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two actors sharing an indexed value leave the name unmarked (fail
+        closed, kept); the output names both actors and both ways out."""
+        name = store.name()
+        monkeypatch.setenv("INDEXED_PROPERTIES", name)
+        value = f"v-{uuid.uuid4()}"
+        first, second = store.actor(), store.actor()
+        store.seed(first, name, value)
+        store.seed(second, name, value)
+        assert _run("backfill", "--apply", "--properties", name, "--segments", "2") == 1
+        out = capsys.readouterr().out
+        assert first in out and second in out
+        assert f"mark-complete --force --properties {name}" in out
+        assert "remove" in out
+
+    def test_the_summary_counts_what_it_read(
+        self,
+        store: Store,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both backends report the rows they matched (PostgreSQL printed
+        scanned=0 matches=0 whatever it processed)."""
+        name = store.name()
+        monkeypatch.setenv("INDEXED_PROPERTIES", name)
+        store.seed(store.actor(), name, f"v-{uuid.uuid4()}")
+        store.seed(store.actor(), name, f"v-{uuid.uuid4()}")
+        _run("backfill", "--properties", name, "--segments", "2")
+        summary = next(
+            ln for ln in capsys.readouterr().out.splitlines() if "Summary:" in ln
+        )
+        assert "matches=2 " in summary
+        assert "scanned=0 " not in summary
+
     def test_dry_run_writes_neither_rows_nor_markers(self, store: Store) -> None:
         name = store.name()
         value = f"v-{uuid.uuid4()}"

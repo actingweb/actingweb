@@ -168,15 +168,26 @@ Custom clients are either confidential or public, set by
     - Issued a ``client_secret`` (``client_secret_expires_at: 0``, it does
       not expire); either transport is accepted at the token endpoint
     - Must present the secret on every grant
-    - May use ``client_credentials``
+    - May use ``client_credentials`` when an actor's owner created it
+      (the grant is not advertised in discovery)
 
 **Public** (``none``)
     - Issued no secret; ``regenerate_client_secret`` refuses it
-    - Must send a PKCE ``S256`` challenge at ``/oauth/authorize`` and the
-      verifier at code exchange
     - Refreshes without a secret, bound by the refresh token's client and
       its single use
     - Refused ``client_credentials`` with ``unauthorized_client``
+
+**Every client** sends a PKCE ``S256`` challenge at ``/oauth/authorize`` and
+the verifier at code exchange (MCP's authorisation rules, OAuth 2.1). A
+request, a callback state or a code without a challenge is refused with 400
+``invalid_request``, and the server logs a WARNING naming the client. An
+application with its own ``aw-oauth-authorization-form.html`` carries the
+hidden fields ``code_challenge`` and ``code_challenge_method`` through; one
+that signs users in on its own route passes the client's challenge to
+``complete_client_authorization``; and one that creates codes itself with
+``create_authorization_code`` passes a challenge. ``with_mcp(require_pkce=False)`` restores the 4.0.0rc1 rule
+(public clients only, at the authorise step) for an application that has
+not checked its clients yet.
 
 Clients registered before 3.15 were stored as confidential whatever they
 asked for; a public client registered then must register again.

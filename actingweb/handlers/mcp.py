@@ -14,6 +14,7 @@ MCP is not available at all.
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -653,6 +654,13 @@ def build_mcp_info(
     }
 
 
+#: The trust row's client name before any client named itself.
+_PLACEHOLDER_CLIENT_NAME = "MCP Client"
+
+#: A URI template expression (RFC 6570), as ``{id}``.
+_TEMPLATE_EXPRESSION = re.compile(r"\{[^{}]+\}")
+
+
 def mcp_www_authenticate(base_url: str) -> str:
     """Build the 401 challenge for the MCP endpoint.
 
@@ -996,8 +1004,9 @@ class MCPHandler(BaseHandler):
         """
         Handle POST requests to /mcp endpoint.
 
-        Handles MCP JSON-RPC protocol. The initialize method doesn't require authentication,
-        but all other methods do.
+        Handles MCP JSON-RPC protocol. ``initialize`` is answered without
+        authentication unless ``with_mcp(require_auth_for_initialize=True)``;
+        every other method except ``ping`` and notifications requires it.
         """
         if not self.config.mcp:
             return self._mcp_disabled_response()
@@ -1058,17 +1067,7 @@ class MCPHandler(BaseHandler):
             except TokenStoreUnavailable:
                 return self._token_store_unavailable_response(request_id)
             if not actor:
-                # Set proper HTTP 401 response headers for framework-agnostic handling
-                base_url = f"{self.config.proto}{self.config.fqdn}"
-                www_auth = mcp_www_authenticate(base_url)
-
-                # Set response headers for authentication challenge
-                self.response.headers["WWW-Authenticate"] = www_auth
-                self.response.set_status(401, "Unauthorized")
-
-                return self._create_jsonrpc_error(
-                    request_id, -32002, "Authentication required for MCP access"
-                )
+                return self._authentication_required_response(request_id)
 
             # Extract and update client info if provided in the request
             # MCP clients send clientInfo with many requests, not just initialize
@@ -1081,6 +1080,8 @@ class MCPHandler(BaseHandler):
                 return self._handle_tools_list(request_id, actor)
             elif method == "resources/list":
                 return self._handle_resources_list(request_id, actor)
+            elif method == "resources/templates/list":
+                return self._handle_resource_templates_list(request_id, actor)
             elif method == "prompts/list":
                 return self._handle_prompts_list(request_id, actor)
             elif method == "tools/call":
@@ -1124,6 +1125,19 @@ class MCPHandler(BaseHandler):
         negotiated_version = negotiate_protocol_version(params.get("protocolVersion"))
         self._negotiated_version = negotiated_version
 
+        # with_mcp(require_auth_for_initialize=True): the handshake itself is
+        # challenged, so a client starts its OAuth flow here rather than at
+        # its first method. Before the client-info cache is written: an
+        # unauthenticated initialize then seeds nothing.
+        authenticated: Any = None
+        if getattr(self.config, "mcp_require_auth_for_initialize", False):
+            try:
+                authenticated = self.authenticate_and_get_actor_cached()
+            except TokenStoreUnavailable:
+                return self._token_store_unavailable_response(request_id)
+            if not authenticated:
+                return self._authentication_required_response(request_id)
+
         # Store client info for later use during OAuth2 authentication
         raw_client_info = params.get("clientInfo", {})
         if raw_client_info and isinstance(raw_client_info, dict):
@@ -1139,7 +1153,7 @@ class MCPHandler(BaseHandler):
             # On an authenticated initialize, name the trust row and cache
             # the info under the bearer token as well.
             try:
-                actor = self.authenticate_and_get_actor_cached()
+                actor = authenticated or self.authenticate_and_get_actor_cached()
                 if actor:
                     logger.debug(
                         "Found authenticated actor during initialize, storing client info in trust relationship"
@@ -1528,96 +1542,130 @@ class MCPHandler(BaseHandler):
 
         return {"jsonrpc": "2.0", "id": request_id, "result": tools_result}
 
-    def _handle_resources_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
-        """Handle MCP resources/list request with permission filtering."""
-        resources = []
+    def _permitted_resources(
+        self, actor: Any, method: str
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        """The resources this client may read, as ``(method_name,
+        uri_template, metadata)``: one enumeration for ``resources/list``
+        and ``resources/templates/list``, so both apply the same
+        permissions. Fail closed: no trust row or no evaluator is an empty
+        list; an item whose evaluation errors is left out."""
+        permitted: list[tuple[str, str, dict[str, Any]]] = []
+        if not self.hooks:
+            return permitted
+        from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
+        from ..permission_evaluator import (
+            PermissionResult,
+            PermissionType,
+            get_permission_evaluator,
+        )
 
-        if self.hooks:
-            from ..mcp.decorators import get_mcp_metadata, is_mcp_exposed
-            from ..permission_evaluator import (
-                PermissionResult,
-                PermissionType,
-                get_permission_evaluator,
+        # No trust relationship resolved for this client -> fail-closed:
+        # an empty list.
+        peer_id = self._peer_id_for_list(actor, method)
+        if not peer_id:
+            return permitted
+
+        # Fail closed: see tools/list.
+        try:
+            evaluator = get_permission_evaluator(self.config)
+        except DbError:
+            raise
+        except Exception:
+            logger.error(
+                f"Permission evaluator unavailable during {method}; "
+                "answering an empty list",
+                exc_info=True,
             )
+            return permitted
 
-            # No trust relationship resolved for this client -> fail-closed:
-            # an empty list.
-            peer_id = self._peer_id_for_list(actor, "resources/list")
-            if not peer_id:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"resources": []},
-                }
+        # Discover MCP resources from method hooks
+        for method_name, hooks in self.hooks._method_hooks.items():
+            for hook in hooks:
+                if not is_mcp_exposed(hook):
+                    continue
+                metadata = get_mcp_metadata(hook)
+                if not (metadata and metadata.get("type") == "resource"):
+                    continue
 
-            # Fail closed: see tools/list.
-            try:
-                evaluator = get_permission_evaluator(self.config)
-            except DbError:
-                raise
-            except Exception:
-                logger.error(
-                    "Permission evaluator unavailable during resources/list; "
-                    "answering an empty list",
-                    exc_info=True,
+                # Decorator stores 'uri_template'; fall back to actingweb://{method_name}
+                uri_template = (
+                    metadata.get("uri_template") or f"actingweb://{method_name}"
                 )
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"resources": []},
-                }
 
-            # Discover MCP resources from method hooks
-            for method_name, hooks in self.hooks._method_hooks.items():
-                for hook in hooks:
-                    if not is_mcp_exposed(hook):
-                        continue
-                    metadata = get_mcp_metadata(hook)
-                    if not (metadata and metadata.get("type") == "resource"):
-                        continue
-
-                    # Decorator stores 'uri_template'; fall back to actingweb://{method_name}
-                    uri_template = (
-                        metadata.get("uri_template") or f"actingweb://{method_name}"
+                # Filter by permissions; an evaluation error skips the
+                # resource (fail closed).
+                try:
+                    decision = evaluator.evaluate_permission(
+                        actor.id,
+                        peer_id,
+                        PermissionType.RESOURCES,
+                        uri_template,
+                        operation="read",
                     )
+                except DbError:
+                    raise
+                except Exception:
+                    logger.error(
+                        f"Error evaluating resource permission for "
+                        f"'{uri_template}'; leaving it out of {method}",
+                        exc_info=True,
+                    )
+                    continue
+                if decision != PermissionResult.ALLOWED:
+                    logger.debug(
+                        f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
+                    )
+                    continue
+                permitted.append((method_name, uri_template, metadata))
+        return permitted
 
-                    # Filter by permissions; an evaluation error skips the
-                    # resource (fail closed).
-                    try:
-                        decision = evaluator.evaluate_permission(
-                            actor.id,
-                            peer_id,
-                            PermissionType.RESOURCES,
-                            uri_template,
-                            operation="read",
-                        )
-                    except DbError:
-                        raise
-                    except Exception:
-                        logger.error(
-                            f"Error evaluating resource permission for "
-                            f"'{uri_template}'; leaving it out of resources/list",
-                            exc_info=True,
-                        )
-                        continue
-                    if decision != PermissionResult.ALLOWED:
-                        logger.debug(
-                            f"Resource '{uri_template}' filtered out for peer {peer_id} (actor {actor.id})"
-                        )
-                        continue
+    @staticmethod
+    def _resource_fields(method_name: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": metadata.get("name") or method_name.replace("_", " ").title(),
+            "description": metadata.get("description")
+            or f"Access {method_name} resource",
+            # Output key follows MCP spec; decorator uses 'mime_type'
+            "mimeType": metadata.get("mime_type", "application/json"),
+        }
 
-                    resource_def = {
-                        "uri": uri_template,
-                        "name": metadata.get("name")
-                        or method_name.replace("_", " ").title(),
-                        "description": metadata.get("description")
-                        or f"Access {method_name} resource",
-                        # Output key follows MCP spec; decorator uses 'mime_type'
-                        "mimeType": metadata.get("mime_type", "application/json"),
-                    }
-                    resources.append(resource_def)
+    def _handle_resources_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
+        """Handle MCP resources/list request with permission filtering.
 
+        Templated resources are listed here too (as well as by
+        ``resources/templates/list``), so a client that never calls the
+        templates method loses nothing."""
+        resources = [
+            {"uri": uri_template, **self._resource_fields(method_name, metadata)}
+            for method_name, uri_template, metadata in self._permitted_resources(
+                actor, "resources/list"
+            )
+        ]
         return {"jsonrpc": "2.0", "id": request_id, "result": {"resources": resources}}
+
+    def _handle_resource_templates_list(
+        self, request_id: Any, actor: Any
+    ) -> dict[str, Any]:
+        """Handle MCP resources/templates/list: the permitted resources
+        whose declared ``uri_template`` holds a ``{...}`` expression. A
+        resource declared only by a regex (``uri_pattern``) is not a
+        template and is not listed here."""
+        templates = [
+            {
+                "uriTemplate": uri_template,
+                **self._resource_fields(method_name, metadata),
+            }
+            for method_name, uri_template, metadata in self._permitted_resources(
+                actor, "resources/templates/list"
+            )
+            if _TEMPLATE_EXPRESSION.search(str(metadata.get("uri_template") or ""))
+        ]
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"resourceTemplates": templates},
+        }
 
     def _handle_prompts_list(self, request_id: Any, actor: Any) -> dict[str, Any]:
         """Handle MCP prompts/list request with permission filtering."""
@@ -2793,7 +2841,7 @@ class MCPHandler(BaseHandler):
 
             # Extract client metadata from client_info. Client-supplied text:
             # sanitised before it reaches the trust row.
-            client_name = sanitize_client_name(client_info.get("name")) or "MCP Client"
+            incoming_name = sanitize_client_name(client_info.get("name")) or ""
             client_version = sanitize_client_name(client_info.get("version")) or None
 
             # Get platform info from User-Agent or client info
@@ -2819,6 +2867,19 @@ class MCPHandler(BaseHandler):
             existing_platform = (
                 getattr(trust_rel, "client_platform", None) if trust_rel else None
             )
+
+            # The first name an authenticated request set is kept: clients
+            # sharing one registration's trust row (a connector and its CLI)
+            # would otherwise rename it, and write it, on every request. The
+            # placeholder and an empty name are not a first name.
+            first_name = (
+                existing_name
+                if isinstance(existing_name, str)
+                and existing_name
+                and existing_name != _PLACEHOLDER_CLIENT_NAME
+                else None
+            )
+            client_name = first_name or incoming_name or _PLACEHOLDER_CLIENT_NAME
 
             # Skip update if client info hasn't changed
             if (
@@ -2867,6 +2928,16 @@ class MCPHandler(BaseHandler):
         except Exception as e:  # folds DbError: non-critical metadata write
             logger.error(f"Could not update trust with client info: {e}")
             # Non-critical, don't raise exception
+
+    def _authentication_required_response(self, request_id: Any) -> dict[str, Any]:
+        """401 with the MCP ``WWW-Authenticate`` challenge (RFC 9728
+        discovery pointer), for a method that needs a signed-in client."""
+        base_url = f"{self.config.proto}{self.config.fqdn}"
+        self.response.headers["WWW-Authenticate"] = mcp_www_authenticate(base_url)
+        self.response.set_status(401, "Unauthorized")
+        return self._create_jsonrpc_error(
+            request_id, -32002, "Authentication required for MCP access"
+        )
 
     def _token_store_unavailable_response(
         self, request_id: Any = None

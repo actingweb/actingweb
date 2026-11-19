@@ -268,6 +268,19 @@ the application sets in its builder they cannot see, so pass it:
   ``python -m actingweb.db.verify_tables``, for an application that calls
   ``with_unique_creator(False)``.
 
+**The store comes first.** Every command prints the store it will read
+before its first read, on stdout (a production ``LOG_LEVEL=WARNING`` does
+not hide it): the backend and, on DynamoDB, the table prefix, endpoint and
+region, or on PostgreSQL the host, database, schema and prefix. Check it
+before trusting a clean report: a report from the wrong tables looks like
+a clean one. On DynamoDB a command in a writing mode (``--apply``,
+``--migrate``, ``--repair``, ``--downgrade``, or
+``actingweb-mark-actors-vouched`` without ``--dry-run``) refuses with exit
+status 2 when ``AWS_DB_PREFIX`` is unset or empty, because the library's
+default prefix (``demo_actingweb``) can name a real deployment. Set it
+explicitly, even when the application runs on the default. Dry runs and
+PostgreSQL are not refused.
+
 On DynamoDB the role that runs them needs more than the application's role:
 ``Scan``; ``DescribeTable`` on the actor, property and creators tables
 (``actingweb-unique-creators`` and ``actingweb-property-lookup`` check that

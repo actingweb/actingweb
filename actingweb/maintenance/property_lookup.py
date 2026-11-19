@@ -52,6 +52,7 @@ from types import ModuleType
 from typing import Any
 
 from actingweb.db.exceptions import DbError
+from actingweb.maintenance._common import preflight
 
 from ..migration_guide import guide_section
 
@@ -614,7 +615,8 @@ def _run_segment(
                 else:
                     stats.collision(
                         name,
-                        f"property={name} actor={actor_id} digest={key[:12]}",
+                        f"property={name} actor={actor_id} held_by={owner} "
+                        f"digest={key[:12]}",
                     )
             else:
                 outcome = _put_lookup_row(None, name, value, actor_id)
@@ -624,9 +626,14 @@ def _run_segment(
                 elif outcome is True:
                     stats.bump("written")
                 elif outcome is False:
+                    digest = compute_lookup_key(name, value)
+                    try:
+                        holder = _lookup_owner(digest) or "?"
+                    except DbError:  # folds DbError: the detail says unknown
+                        holder = "?"
                     detail = (
-                        f"property={name} actor={actor_id} "
-                        f"digest={compute_lookup_key(name, value)[:12]}"
+                        f"property={name} actor={actor_id} held_by={holder} "
+                        f"digest={digest[:12]}"
                     )
                     checkpoint.note_collision(name, detail)
                     stats.collision(name, detail)
@@ -743,6 +750,17 @@ def backfill_postgresql(
                 )
                 row = cur.fetchone()
                 stats.orphans = int(row[0]) if row else 0
+                # The pass is set-based, so there is no per-row scan to
+                # count: report the rows of the names it covers (scanned)
+                # and those of a live actor (matches), as DynamoDB does.
+                cur.execute(
+                    "SELECT count(*), count(a.id) FROM properties p "
+                    "LEFT JOIN actors a ON a.id = p.id WHERE p.name = ANY(%s)",
+                    (names,),
+                )
+                row = cur.fetchone()
+                stats.scanned = int(row[0]) if row else 0
+                stats.matched = int(row[1]) if row else 0
                 if not apply:
                     cur.execute(
                         "SELECT count(*), count(*) FILTER "
@@ -1017,25 +1035,49 @@ def _readiness_or_empty(database: str, names: list[str]) -> Readiness:
         raise StoreUnavailable(str(e)) from e
 
 
+def _names_source(args: argparse.Namespace) -> str:
+    """Where the name set came from: the command cannot see an application's
+    ``with_indexed_properties()``, so it says what it assumed."""
+    if args.properties:
+        return "--properties"
+    if os.getenv("INDEXED_PROPERTIES", "").strip():
+        return "INDEXED_PROPERTIES"
+    return "the library default"
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     config = make_config()
-    configured = list(dict.fromkeys(config.indexed_properties))
-    shown = _names(args, config)
+    names = _names(args, config)
+    source = _names_source(args)
     database = config.database
     _require_tables(database)
-    if not configured:
+    if not names:
         print("No indexed properties are configured: reverse lookup is off.")
         return 0
-    # The verdict is always about the whole configured set: --properties only
-    # narrows what is printed, so a subset cannot read as "the check passes".
-    state = _readiness_or_empty(database, sorted(set(configured) | set(shown)))
-    counts = count_rows(database, shown, read_rcu=args.read_rcu)
+    # The verdict is about the names reported on: the application's own set,
+    # passed with --properties when it sets the names in code.
+    state = _readiness_or_empty(database, sorted(set(names)))
+    counts = count_rows(database, names, read_rcu=args.read_rcu)
     recorded = state.recorded
     print(
-        f"Backend: {database}; configured names: {configured}; recorded name "
-        f"set: {sorted(recorded) if recorded is not None else 'none'}"
+        f"Backend: {database}; indexed names: {names} (names from: {source}); "
+        f"recorded name set: {sorted(recorded) if recorded is not None else 'none'}"
     )
-    for name in shown:
+    if source == "the library default":
+        print(
+            "  These are the library's default names. If the application sets "
+            "its names with with_indexed_properties(), pass the same names with "
+            "--properties a,b."
+        )
+    env_names = [
+        p.strip() for p in os.getenv("INDEXED_PROPERTIES", "").split(",") if p.strip()
+    ]
+    if args.properties and env_names and sorted(set(env_names)) != sorted(names):
+        print(
+            f"  Note: INDEXED_PROPERTIES here is {env_names}, which differs from "
+            "--properties; the verdict is about --properties."
+        )
+    for name in names:
         c = counts[name]
         flags = ["marked" if name in state.marked else "UNMARKED"]
         if recorded is not None and name not in recorded:
@@ -1046,19 +1088,20 @@ def cmd_report(args: argparse.Namespace) -> int:
         )
     refuses = [
         n
-        for n in configured
+        for n in names
         if n not in state.marked or (recorded is not None and n not in recorded)
     ]
     if refuses and properties_table_empty(database):
         print("The store holds no actor data: the first start marks every name.")
         return 0
     if refuses:
+        flag = f" --properties {','.join(names)}" if args.properties else ""
         print(
             f"The startup check would refuse: {', '.join(refuses)}. "
-            f"Run '{PROG} backfill --apply'."
+            f"Run '{PROG} backfill --apply{flag}'."
         )
         return 1
-    print("Every configured name is marked: the startup check passes.")
+    print("Every name reported on is marked: the startup check passes for them.")
     return 0
 
 
@@ -1098,10 +1141,11 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         f"unindexable={sum(stats.unindexable.values())} orphans={stats.orphans} "
         f"faults={stats.faults}"
     )
+    # On stdout: these name the actors an operator has to act on.
     for detail in stats.collision_details:
-        logger.warning(f"COLLISION (not overwritten): {detail}")
+        print(f"COLLISION (not overwritten): {detail}")
     for detail in stats.unindexable_details:
-        logger.warning(f"UNINDEXABLE (value too long to index): {detail}")
+        print(f"UNINDEXABLE (value too long to index): {detail}")
     if stats.maybe_unindexable:
         print(
             f"{stats.maybe_unindexable} value(s) are over "
@@ -1136,11 +1180,18 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     colliding = [n for n in names if n in stats.collisions]
     if colliding:
         print(
-            f"Left unmarked (collisions): {', '.join(colliding)}. Two actors "
-            "share an indexed value; the earlier lookup row was kept. "
-            "Resolve it, then re-run (idempotent). A run resumed from a "
-            "checkpoint still reports collisions found before the checkpoint: "
-            "after resolving them, delete the checkpoint file first."
+            f"Left unmarked (collisions): {', '.join(colliding)}. Two or more "
+            "actors share an indexed value (the COLLISION lines name them); "
+            "the earlier lookup row was kept, and the application refuses to "
+            "start until the name is marked. Either remove or change the "
+            "property on all but one of those actors (or delete actors that "
+            "should not exist), then re-run (idempotent); or, after review, "
+            f"accept the collisions with '{PROG} mark-complete --force "
+            f"--properties {','.join(colliding)} --apply', and a reverse lookup "
+            "of a shared value then finds only the actor that holds its lookup "
+            "row. A run resumed from a checkpoint still reports collisions "
+            "found before the checkpoint: after resolving them, delete the "
+            "checkpoint file first."
         )
     too_long = [n for n in names if n in stats.unindexable]
     if too_long:
@@ -1280,6 +1331,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     args = _build_parser().parse_args(argv)
+    refused = preflight(PROG, writing=bool(getattr(args, "apply", False)))
+    if refused is not None:
+        return refused
     handlers = {
         "report": cmd_report,
         "backfill": cmd_backfill,

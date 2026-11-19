@@ -19,6 +19,7 @@ from actingweb.oauth2_server.token_manager import (
     TokenStoreUnavailable,
 )
 from tests._adoption_helpers import aid, create_core_actor, make_config, uuid_email
+from tests.mcp_token_double import PKCE_VERIFIER
 
 
 @pytest.fixture
@@ -28,12 +29,18 @@ def config() -> Any:
 
 def _code(manager: ActingWebTokenManager, actor_id: str) -> str:
     return manager.create_authorization_code(
-        actor_id, "client-1", {"access_token": "provider-at"}
+        actor_id,
+        "client-1",
+        {"access_token": "provider-at"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
     )
 
 
 def _exchange(manager: ActingWebTokenManager, code: str) -> dict[str, Any] | None:
-    return manager.exchange_authorization_code(code=code, client_id="client-1")
+    return manager.exchange_authorization_code(
+        code=code, client_id="client-1", code_verifier=PKCE_VERIFIER
+    )
 
 
 class TestBump:

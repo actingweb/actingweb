@@ -24,7 +24,7 @@ from actingweb.constants import (
 )
 from actingweb.handlers import mcp as mcp_mod
 from actingweb.oauth2_server.token_manager import ActingWebTokenManager
-from tests.mcp_token_double import MemoryStore, index_actor, make_config
+from tests.mcp_token_double import PKCE_VERIFIER, MemoryStore, index_actor, make_config
 
 ACTOR = "actor-rot"
 CLIENT = "mcp_client_rot"
@@ -42,8 +42,14 @@ def env() -> tuple[ActingWebTokenManager, MemoryStore]:
 
 
 def _login(tm: ActingWebTokenManager, actor: str = ACTOR) -> dict[str, Any]:
-    code = tm.create_authorization_code(actor, CLIENT, {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, CLIENT)
+    code = tm.create_authorization_code(
+        actor,
+        CLIENT,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(code, CLIENT, code_verifier=PKCE_VERIFIER)
     assert tokens
     return tokens
 

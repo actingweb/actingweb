@@ -24,6 +24,7 @@ from actingweb.interface.actor_interface import ActorInterface
 from actingweb.interface.app import ActingWebApp
 from actingweb.interface.oauth_client_manager import OAuth2ClientManager
 from actingweb.trust_permissions import TrustPermissions, TrustPermissionStore
+from tests.mcp_token_double import PKCE_VERIFIER
 
 # Get database backend from environment (set by conftest.py)
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
@@ -944,8 +945,12 @@ class TestTrustDeletionConverges:
             holder.id,  # type: ignore[arg-type]
             client_id,
             {"access_token": "g"},
+            code_challenge=PKCE_VERIFIER,
+            code_challenge_method="plain",
         )
-        pair = tokens.exchange_authorization_code(code, client_id)
+        pair = tokens.exchange_authorization_code(
+            code, client_id, code_verifier=PKCE_VERIFIER
+        )
         assert pair is not None and pair.get("refresh_token")
 
         # What the deletion must end: all of it exists before.

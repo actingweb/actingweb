@@ -30,7 +30,7 @@ from .db.exceptions import DbError
 logger = logging.getLogger(__name__)
 
 # How long a process uses a cached override, or a cached "no override", before
-# it reads storage again (3.16): the bound on how long a grant changed by
+# it reads storage again (4.0): the bound on how long a grant changed by
 # another worker stays in force here. The window docs/reference/security.rst
 # states for MCP tokens and resolved trust entries. Not configurable.
 PERMISSION_CACHE_TTL_SECONDS = 300
@@ -43,6 +43,10 @@ PEER_NOTIFICATION_TIMEOUT = 10.0
 PERMISSION_CALLBACK_RESENDS = 2
 PERMISSION_CALLBACK_RESEND_WAIT = 1.0
 PERMISSION_CALLBACK_RESEND_WAIT_CAP = 2.0
+
+# Background permission notifications still running (see
+# ``store_permissions_async``).
+_NOTIFY_TASKS: set[asyncio.Task[None]] = set()
 
 
 def _retry_after(value: str | None) -> float:
@@ -131,7 +135,7 @@ def _is_name_list(value: Any) -> bool:
 
 def permission_updates_problem(updates: Any) -> str | None:
     """Why ``updates`` (a grant edit from a request) cannot be stored, or
-    None (3.16). An edit is an object; each permission category is an object
+    None (4.0). An edit is an object; each permission category is an object
     or null; a rule's pattern and operation keys are lists of strings (a
     string in their place replaced the trust type's list on merge, dropping
     its base exclusions)."""
@@ -158,12 +162,12 @@ def permission_updates_problem(updates: Any) -> str | None:
 
 def is_client_peer(peer_id: str) -> bool:
     """An OAuth2/MCP client's peer id (``oauth2_client:...``), the rows a
-    client authorisation creates and re-types (3.16)."""
+    client authorisation creates and re-types (4.0)."""
     return str(peer_id or "").startswith("oauth2_client:")
 
 
 def override_applies(permissions: Any, peer_id: str, row_type: str | None) -> bool:
-    """Whether a stored override is applied for this trust (3.16, owner
+    """Whether a stored override is applied for this trust (4.0, owner
     decision 2026-11-11): always for a peer; for an OAuth2/MCP client only
     when it names the row's type (its level is the one the user approved).
     The evaluator, the owner's grant API and the views use this one rule."""
@@ -194,7 +198,7 @@ class TrustPermissionStore:
         # seen (actingweb/_bounded_cache.py). Entries, a cached None
         # included, expire after PERMISSION_CACHE_TTL_SECONDS: a store or
         # delete updates only this process's cache, so another worker sees
-        # the change when its entry expires (3.16).
+        # the change when its entry expires (4.0).
         self._cache: BoundedDict[str, TrustPermissions | None] = BoundedDict(
             CACHE_MAX_ENTRIES, ttl=PERMISSION_CACHE_TTL_SECONDS
         )
@@ -336,13 +340,19 @@ class TrustPermissionStore:
             don't affect the return value.
 
         Performance Notes:
-            Async version: Notification is fire-and-forget using background task.
-            This prevents blocking when the peer is on the same server.
+            The notification runs as a background task, so the call does not
+            wait for the peer (which may be on the same server). With
+            ``with_sync_callbacks()`` it is awaited before the call returns
+            instead: a function platform may freeze after the response and
+            lose a background task. With ``callback_delivery_budget_seconds``
+            set, the wait counts against the deadline the request's callbacks
+            use in the same context (a sync handler run in FastAPI's thread
+            pool works in a copy and starts its own): the peer exchange is
+            cut when it runs out, and nothing is sent when it already has.
         """
         success = self._store_permissions_internal(permissions)
 
         if success and self._should_notify_peer(notify_peer):
-            # Fire-and-forget: schedule notification as background task
 
             async def _notify_with_error_handling():
                 try:
@@ -353,7 +363,43 @@ class TrustPermissionStore:
                         exc_info=True,
                     )
 
-            asyncio.create_task(_notify_with_error_handling())
+            if getattr(self.config, "sync_subscription_callbacks", False):
+                # A function platform (``with_sync_callbacks()``) may freeze
+                # once the response is sent, and a background task with it:
+                # the peer is told before this returns (4.0), within the
+                # callback delivery budget when one is set: what the
+                # request has left of the deadline its callbacks share.
+                from .callback_sender import _Deadline, settings_for
+
+                left = _Deadline.for_request(
+                    settings_for(self.config).budget
+                ).remaining()
+                if left is None:
+                    await _notify_with_error_handling()
+                elif left <= 0:
+                    logger.warning(
+                        f"Permission notification for {permissions.actor_id} "
+                        f"to {permissions.peer_id} not sent: the request's "
+                        "callback delivery budget is spent; the peer catches "
+                        "up at its next sync_peer"
+                    )
+                else:
+                    try:
+                        await asyncio.wait_for(_notify_with_error_handling(), left)
+                    except TimeoutError:
+                        logger.warning(
+                            f"Permission notification for {permissions.actor_id} "
+                            f"to {permissions.peer_id} cut by the callback "
+                            f"delivery budget ({left:.1f}s left); the peer "
+                            "catches up at its next sync_peer"
+                        )
+            else:
+                # Fire-and-forget: the notification runs as a background
+                # task, referenced until done (the loop keeps only a weak
+                # reference to a task).
+                task = asyncio.create_task(_notify_with_error_handling())
+                _NOTIFY_TASKS.add(task)
+                task.add_done_callback(_NOTIFY_TASKS.discard)
 
         return success
 
@@ -691,7 +737,7 @@ class TrustPermissionStore:
     def get_permissions_uncached(
         self, actor_id: str, peer_id: str
     ) -> TrustPermissions | None:
-        """The stored override, read from the store, not the cache (3.16: a
+        """The stored override, read from the store, not the cache (4.0: a
         delete decides from what is there). Never answered from the cache,
         which another thread can refill at any moment; the read refreshes
         it. A fault raises ``DbError``."""
@@ -700,7 +746,7 @@ class TrustPermissionStore:
     def notify_default_grant(
         self, actor_id: str, peer_id: str, trust_type: str
     ) -> None:
-        """Tell the peer its grant is back to its trust type's default (3.16:
+        """Tell the peer its grant is back to its trust type's default (4.0:
         the override was deleted), through the sender a store uses, with its
         resends; when peer notification is on. Fire-and-forget."""
         if not self._should_notify_peer(None):
@@ -721,7 +767,7 @@ class TrustPermissionStore:
 
     def notify_stored_grant(self, actor_id: str, peer_id: str) -> None:
         """Send the peer the grant stored for it now, when peer notification
-        is on (3.16: the trust ``PUT`` stores a grant silently and tells the
+        is on (4.0: the trust ``PUT`` stores a grant silently and tells the
         peer only once the trust write landed). Fire-and-forget."""
         if not self._should_notify_peer(None):
             return
@@ -780,7 +826,7 @@ class TrustPermissionStore:
         structured format before storage.
         """
         # Merge into the stored override, not a cached one another process
-        # may have changed since (3.16).
+        # may have changed since (4.0).
         existing = self.get_permissions_uncached(actor_id, peer_id)
         if not existing:
             logger.error(
@@ -796,7 +842,7 @@ class TrustPermissionStore:
             for field, value in updates.items():
                 if field in _IDENTITY_FIELDS:
                     # Which actor, peer and base type an override belongs to
-                    # is the store's, never the request's (3.16: the store
+                    # is the store's, never the request's (4.0: the store
                     # keys on these, so an owner's PUT could write into
                     # another actor's grants).
                     logger.warning(f"Refused to update permission field: {field}")
@@ -838,7 +884,7 @@ allowed); it replaces the trust type's rule, never merges into it."""
 
 def _well_formed_rule(category: str, rule: Any) -> dict[str, Any]:
     """An override's rule for ``category`` in the shape the evaluator reads,
-    failing toward less access (3.16; a row written before the intake check
+    failing toward less access (4.0; a row written before the intake check
     or through the store API may hold anything):
 
     - not an object: the ``properties`` shorthand list of names is
@@ -994,7 +1040,7 @@ def create_permission_override(
         tools=permission_updates.get("tools"),
         resources=permission_updates.get("resources"),
         prompts=permission_updates.get("prompts"),
-        # The store's bookkeeping, not the request's (3.16; an update
+        # The store's bookkeeping, not the request's (4.0; an update
         # refuses it too).
         created_by="system",
         notes=permission_updates.get("notes"),

@@ -1,5 +1,5 @@
 """A fault part-way through an operation leaves no worse state than before
-(3.16 iteration, Issues H, I, K, L and M of
+(4.0 iteration, Issues H, I, K, L and M of
 ``thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness.md``).
 """
 
@@ -65,7 +65,7 @@ class TestIUniqueCreatorMatch:
     def test_a_matching_passphrase_no_longer_returns_the_actor(
         self, config: Any
     ) -> None:
-        """3.16 PR 2: the passphrase match is gone. A second create for a
+        """4.0 PR 2: the passphrase match is gone. A second create for a
         held creator raises ``CreatorTaken`` and binds nothing, so nothing
         it returns can act on the first actor's row."""
         config.unique_creator = True

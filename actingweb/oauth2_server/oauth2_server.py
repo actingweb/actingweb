@@ -29,7 +29,7 @@ _PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}")
 
 
 def _shown_host(redirect_uri: str) -> str:
-    """The host a confirmation page names as where the code goes (3.16):
+    """The host a confirmation page names as where the code goes (4.0):
     host and port only. ``netloc`` carries userinfo, so
     ``https://claude.ai@evil.test/cb`` read as claude.ai while the code went
     to evil.test."""
@@ -112,7 +112,7 @@ class ActingWebOAuth2Server:
                 # An anonymous registration (RFC 7591): the client lives on the
                 # OAuth2 system actor, and a user grants it a level later, at
                 # sign-in. It may not choose its own level or a grant that
-                # needs no user (3.16).
+                # needs no user (4.0).
                 registration_data = self._anonymous_registration(registration_data)
                 from .system_actor import ensure_oauth2_system_actor
 
@@ -130,7 +130,7 @@ class ActingWebOAuth2Server:
             raise ValueError(f"Client registration failed: {str(e)}") from e
         except (DbError, ClientRegistrationError):
             # A store fault, or a client whose trust row could not be created
-            # (3.16), is not a bad registration request (400).
+            # (4.0), is not a bad registration request (400).
             raise
         except Exception as e:
             logger.error(f"Client registration error: {e}")
@@ -139,7 +139,7 @@ class ActingWebOAuth2Server:
     def _anonymous_registration(
         self, registration_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """An anonymous registration's data as stored (3.16): a requested
+        """An anonymous registration's data as stored (4.0): a requested
         ``trust_type`` the client list does not accept, or ``grant_types``
         asking for ``client_credentials``, is refused (``ValueError``, a 400
         ``invalid_client_metadata``); the client's row on the system actor is
@@ -247,7 +247,7 @@ class ActingWebOAuth2Server:
 
             if method == "GET":
                 # Show email form (same UX as GET /). The nonce binds the
-                # sign-in to the browser that shows the form (3.16): the
+                # sign-in to the browser that shows the form (4.0): the
                 # caller sets it as a cookie and puts it in the form.
                 return {
                     "action": "show_form",
@@ -274,7 +274,7 @@ class ActingWebOAuth2Server:
 
                 # Get trust type from form submission: one the client list
                 # accepts, and the client's own allowed_trust_types when it
-                # has them (3.16; any registered type was taken).
+                # has them (4.0; any registered type was taken).
                 from ..permission_integration import (
                     client_trust_type_acceptable,
                     default_client_trust_type,
@@ -288,7 +288,7 @@ class ActingWebOAuth2Server:
                     isinstance(per_client, list) and trust_type not in per_client
                 ):
                     if trust_type == "admin":
-                        # The one a pre-3.16 form preselected: say how to
+                        # The one a pre-4.0 form preselected: say how to
                         # offer it, if that is what the application wants.
                         logger.error(
                             f"Authorization for client {client_id} asked for "
@@ -495,7 +495,7 @@ class ActingWebOAuth2Server:
 
             # The level the user chose (or the default for a provider link),
             # re-checked: a state minted before a list change, or by a client
-            # that skipped the form, gets no more than the list offers (3.16).
+            # that skipped the form, gets no more than the list offers (4.0).
             from .. import session_generation
             from ..permission_integration import (
                 client_trust_type_acceptable,
@@ -753,7 +753,7 @@ class ActingWebOAuth2Server:
                 "invalid_client", "Client not properly configured"
             )
         # A client registered anonymously lives on the system actor: no user
-        # granted it anything, so it has no grant that needs no user (3.16).
+        # granted it anything, so it has no grant that needs no user (4.0).
         # A client an actor's owner created keeps it.
         from ..constants import OAUTH2_SYSTEM_ACTOR
 
@@ -1011,7 +1011,7 @@ class ActingWebOAuth2Server:
             return ""
 
     # ------------------------------------------------------------------
-    # Completing a client's authorisation (3.16)
+    # Completing a client's authorisation (4.0)
     # ------------------------------------------------------------------
 
     def _denied(self, redirect_uri: str, original_state: str | None) -> dict[str, Any]:
@@ -1022,6 +1022,20 @@ class ActingWebOAuth2Server:
         sep = "&" if "?" in redirect_uri else "?"
         return {"action": "redirect", "url": f"{redirect_uri}{sep}{urlencode(params)}"}
 
+    def _application_decision(self) -> Any:
+        """The application's ``oauth2_trust_requested`` hooks as the callable
+        ``_decided_type`` takes, or None when the application registered no
+        hook registry on this config (``ActingWebApp`` sets ``config._hooks``)."""
+        hooks = getattr(self.config, "_hooks", None)
+        if hooks is None:
+            return None
+        config = self.config
+
+        def decide(actor: Any, trust_type: str, **info: Any) -> str | None:
+            return hooks.decide_oauth2_trust(actor, trust_type, config, **info)
+
+        return decide
+
     def _decided_type(
         self, actor_obj: Any, record: dict[str, Any], decide_trust: Any, confirmed: bool
     ) -> str | None:
@@ -1031,6 +1045,11 @@ class ActingWebOAuth2Server:
         from ..permission_integration import client_trust_type_acceptable
 
         requested = str(record.get("trust_type") or "")
+        # A caller that passes no ``decide_trust`` (any of the three public
+        # entry points) gets the application's ``oauth2_trust_requested``
+        # hooks, as the library's own routes do.
+        if decide_trust is None:
+            decide_trust = self._application_decision()
         if decide_trust is None:
             return (
                 requested
@@ -1053,7 +1072,7 @@ class ActingWebOAuth2Server:
         )
         decided = str(result) if result else None
         # Whatever answered (the registry's dispatcher re-checks, a caller's
-        # own ``decide_trust`` may not): only an acceptable type (3.16).
+        # own ``decide_trust`` may not): only an acceptable type (4.0).
         if decided and not client_trust_type_acceptable(self.config, decided):
             return None
         return decided
@@ -1078,7 +1097,7 @@ class ActingWebOAuth2Server:
 
     def _complete(self, actor_obj: Any, record: dict[str, Any]) -> dict[str, Any]:
         """The trust at the approved type, then the code: no code when the
-        trust could not be written (3.16; it was issued anyway)."""
+        trust could not be written (4.0; it was issued anyway)."""
         from ..interface.actor_interface import ActorInterface
         from ..oauth2 import create_oauth2_trust_relationship
 
@@ -1129,7 +1148,7 @@ class ActingWebOAuth2Server:
     def handle_confirmation(
         self, token: str, approve: bool, *, decide_trust: Any = None
     ) -> dict[str, Any]:
-        """The user's answer to a paused authorisation (3.16).
+        """The user's answer to a paused authorisation (4.0).
 
         The record is consumed once; an unknown, used or expired token is
         ``invalid_request`` ("start again from the client"). Decline sends
@@ -1167,7 +1186,7 @@ class ActingWebOAuth2Server:
             isinstance(per_client, list) and effective not in per_client
         ):
             # The client's own list may have narrowed since the page was
-            # shown (3.16).
+            # shown (4.0).
             return self._denied(redirect_uri, record.get("original_state"))
         return self._complete(actor_obj, record)
 
@@ -1186,11 +1205,15 @@ class ActingWebOAuth2Server:
         decide_trust: Any = None,
     ) -> dict[str, Any]:
         """Authorise ``client_id`` for ``actor`` from a route that signed the
-        user in itself (3.16): the client list (and the client's own
+        user in itself (4.0): the client list (and the client's own
         ``allowed_trust_types``), the decision hook, the trust, then the
         code, in one call. Returns ``{"action": "redirect", "url": ...}`` (a
         code, or ``access_denied``) or an error dict. ``actor`` is the core
-        actor or an ``ActorInterface``."""
+        actor or an ``ActorInterface``. The decision hook is the
+        application's ``oauth2_trust_requested`` hooks; ``decide_trust``
+        replaces them with a callable of the caller's (a route that already
+        asked its hooks passes ``decide_trust=lambda actor, trust_type,
+        **info: trust_type``, or they run twice)."""
         from .. import session_generation
         from ..permission_integration import (
             client_trust_type_acceptable,

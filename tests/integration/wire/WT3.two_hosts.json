@@ -205,7 +205,7 @@
       "specification": "",
       "trustee_root": "",
       "type": "urn:actingweb:test:integration",
-      "version": "3.15.1"
+      "version": "<library-version>"
      },
      "status": 200
     },
@@ -274,7 +274,7 @@
         "specification": "",
         "trustee_root": "",
         "type": "urn:actingweb:test:integration",
-        "version": "3.15.1"
+        "version": "<library-version>"
        },
        "status": 200
       },

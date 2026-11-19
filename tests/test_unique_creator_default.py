@@ -1,4 +1,4 @@
-"""Creator uniqueness is on by default (3.16).
+"""Creator uniqueness is on by default (4.0).
 
 A deployment with duplicate creators refuses to start until it has run
 ``actingweb-unique-creators`` or opts out with ``with_unique_creator(False)``;

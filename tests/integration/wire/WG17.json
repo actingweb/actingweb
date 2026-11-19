@@ -86,6 +86,10 @@
       "tools": [
        {
         "description": "Search (wire harness).",
+        "inputSchema": {
+         "properties": {},
+         "type": "object"
+        },
         "name": "search"
        }
       ]
@@ -130,7 +134,7 @@
        "protocolVersion": "2025-06-18",
        "serverInfo": {
         "name": "actingweb",
-        "version": "3.15.1"
+        "version": "<library-version>"
        }
       }
      },
@@ -158,6 +162,10 @@
        "tools": [
         {
          "description": "Search (wire harness).",
+         "inputSchema": {
+          "properties": {},
+          "type": "object"
+         },
          "name": "search"
         }
        ]

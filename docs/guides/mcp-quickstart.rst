@@ -60,7 +60,9 @@ Wire it up and run it:
 
    api = FastAPI(title="My MCP Server")
    aw.integrate_fastapi(api)
-   # then: uvicorn.run(api, host="0.0.0.0", port=5000)
+   # then: uvicorn.run(api, host="127.0.0.1", port=5000)
+   # (HOST and PORT override both; behind a tunnel or proxy, set
+   # APP_HOST_FQDN to the public host and PORT to the local port)
 
 .. code-block:: bash
 
@@ -114,7 +116,9 @@ and a JSON-RPC response sent by the client; both are answered
 ``202 Accepted`` with an empty body). A body that is not a single JSON-RPC
 object, such as a batch array, is answered ``400`` with a ``-32600`` error.
 An unauthenticated ``GET /mcp`` is a ``401`` challenge too,
-not a discovery document. There is **no dev bypass**;
+not a discovery document (an authenticated one with ``Accept:
+text/event-stream`` answers ``405`` with ``Allow: POST``: the server opens no
+stream). There is **no dev bypass**;
 ``with_devtest(True)`` does not open the MCP endpoint. Sending these without a
 token returns HTTP 401 with a ``WWW-Authenticate: Bearer`` header:
 

@@ -1,4 +1,4 @@
-"""The default (non-enforced) adoption path after the fault contract (3.16,
+"""The default (non-enforced) adoption path after the fault contract (4.0,
 Phase 2: BR, BU and BS of
 ``thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md``).
 

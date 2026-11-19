@@ -1,4 +1,4 @@
-"""The creator follows the stored email where the email is written (3.16,
+"""The creator follows the stored email where the email is written (4.0,
 email-as-creator Phase 2).
 
 Under ``with_email_as_creator`` (on in ``make_config``) a write of a vouched
@@ -443,7 +443,7 @@ class TestTheLoad:
         assert done.creator == x
         assert istore(done).email == old
         # With a recorded address the actor reads unvouched for X; vouched
-        # before 3.16 (none recorded) it stays vouched (owner, 2026-11-15).
+        # before 4.0 (none recorded) it stays vouched (owner, 2026-11-15).
         assert is_vouched_store(istore(done), x) is (not recorded)
         if recorded:
             # Not vouched for its creator X, so re-saving the old address

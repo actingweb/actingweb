@@ -89,7 +89,7 @@ class TestMCPOAuth2Authorization:
 
     @pytest.fixture
     def registered_client(self, base_url, worker_info) -> dict[str, Any]:
-        """A client an actor's owner created (3.16: an anonymous registration
+        """A client an actor's owner created (4.0: an anonymous registration
         may not ask for client_credentials)."""
         from .conftest import TEST_APP_CONFIG
         from .utils.oauth2_helper import create_owner_client
@@ -208,7 +208,7 @@ class TestMCPOAuth2Integration:
     def test_client_registration_and_token_flow(self, http_client, base_url):
         """An anonymous registration may not ask for client_credentials (400),
         and a client registered without it may not use it on the system
-        actor (unauthorized_client) (3.16)."""
+        actor (unauthorized_client) (4.0)."""
         refused = http_client.post(
             f"{base_url}/oauth/register",
             json={

@@ -17,7 +17,7 @@ _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 _actor_id: ContextVar[str | None] = ContextVar("actor_id", default=None)
 _peer_id: ContextVar[str | None] = ContextVar("peer_id", default=None)
 # When the current request's callback delivery budget runs out (a monotonic
-# time), so every diff a write registers shares one budget (3.16).
+# time), so every diff a write registers shares one budget (4.0).
 _delivery_deadline: ContextVar[float | None] = ContextVar(
     "delivery_deadline", default=None
 )

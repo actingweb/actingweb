@@ -1,4 +1,4 @@
-"""``prompt`` on the authorize URL (3.16): additive to the always-sent
+"""``prompt`` on the authorize URL (4.0): additive to the always-sent
 ``consent``, Google only."""
 
 from urllib.parse import parse_qs, urlparse

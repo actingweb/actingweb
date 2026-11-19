@@ -1,4 +1,4 @@
-"""``actingweb-unique-creators`` against seeded duplicates (3.16, PR 2).
+"""``actingweb-unique-creators`` against seeded duplicates (4.0, PR 2).
 
 Runs on an isolated store (``tests/integration/_isolated_store.py``) in the
 ``unique_creator`` xdist group; each test starts from an empty store.
@@ -410,7 +410,7 @@ class TestRecordsStayTrue:
 
 
 class TestDefaultCreator:
-    """Actors left with the default creator (3.16, owner-decided plan D5):
+    """Actors left with the default creator (4.0, owner-decided plan D5):
     the create path no longer moves them; ``resolve
     --default-creator-to-email`` does."""
 

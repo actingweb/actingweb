@@ -63,7 +63,7 @@ REST API
 - ``GET /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 - ``DELETE /{actor_id}/trust/{relationship}/{peer_id}/permissions``
 
-**What changes and who is told (3.16).**
+**What changes and who is told (4.0).**
 
 - Deleting a peer's permission override puts the peer back on its trust
   type's default grant, and the peer is sent the permission callback with
@@ -139,7 +139,7 @@ Subscriptions require an established trust relationship:
    * - Deleted
      - All subscriptions terminated, peer data cleaned up (if ``auto_cleanup=True``)
 
-**Trust answers (3.16, specification 1.5).** The answer to a trust request
+**Trust answers (4.0, specification 1.5).** The answer to a trust request
 carries ``approved``, ``peer_approved`` and ``verified`` as JSON booleans,
 as a ``GET`` of the relationship does. ``approved`` in a ``PUT`` accepts
 ``true`` (or the web UI form's ``"true"``) only; anything else, ``false``
@@ -486,7 +486,7 @@ callbacks contain the full *effective* permissions (base trust-type defaults mer
 per-trust overrides), enabling accurate change detection. When new property patterns are
 granted, an incremental sync automatically fetches only the newly granted properties.
 Peers supporting this feature advertise ``permissioncallback`` in their
-``/meta/actingweb/supported`` endpoint. Since 3.16 an ActingWeb actor
+``/meta/actingweb/supported`` endpoint. Since 4.0 an ActingWeb actor
 advertises ``permissioncallback`` and ``permissionquery`` whenever it serves
 the two endpoints, which is always; before, only with peer permission caching
 turned on.

@@ -794,7 +794,7 @@ caches, application attributes):
    CREATE INDEX idx_attributes_chain_id ON attributes ((data ->> 'chain_id'))
        WHERE (data ->> 'chain_id') IS NOT NULL;
    -- Partial index for attribute list range and prefix reads by byte order
-   -- (3.16). Added in migration a7b8c9d0e1f2.
+   -- (4.0). Added in migration a7b8c9d0e1f2.
    CREATE INDEX ix_attributes_list_rows ON attributes (id, bucket, name COLLATE "C")
        WHERE starts_with(name, 'list:');
 
@@ -808,6 +808,6 @@ the migration's transaction on an empty one. A failed concurrent build leaves an
 invalid index, which ``check_ready()`` refuses (``AttributeSchemaNotReady``)
 and a second ``alembic upgrade head`` rebuilds. Until the revision is applied,
 ``check_ready()`` (called by ``integrate_flask``/``integrate_fastapi``) raises
-``AttributeSchemaNotReady``, so run the upgrade before deploying 3.16.
+``AttributeSchemaNotReady``, so run the upgrade before deploying 4.0.
 
 See ``actingweb/db/postgresql/schema.py`` for complete schema definitions.

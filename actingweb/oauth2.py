@@ -1152,7 +1152,7 @@ class OAuth2Authenticator:
                 ``with_unique_creator()`` it cannot close it, so this is a
                 best-effort narrowing, not a guarantee; with the flag on the
                 database refuses the second create (``CreatorTaken``, 409).
-                See ``docs/migration/v3.16.rst``, "Creator uniqueness".
+                See the migration guide, "Creator uniqueness".
             auth_method: Marker written on a newly created actor. Defaults to
                 ``"<provider>_oauth2"``; the self-asserted email form passes
                 ``"email_unverified"``.
@@ -1796,7 +1796,7 @@ def _winner_is_marked(winner: actor_module.Actor) -> bool:
 
     ``Actor.create`` writes the marker before the row for a generated id,
     so a winner created by this version is always marked. An unmarked one
-    is a pre-3.16 actor, a row an old flag-off process wrote, or a create
+    is a pre-4.0 actor, a row an old flag-off process wrote, or a create
     whose answer was lost before its marker landed. Adopted, the adoption
     rule would clean it in place on the strength of a race; the conflict
     stands instead (409), and a plain sign-in decides it.
@@ -1821,9 +1821,9 @@ def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
 
     Vouched means ``auth_method`` is a non-empty string outside
     :data:`UNVOUCHED_AUTH_METHODS` **and** ``email_verified`` is not
-    ``"false"`` (a pre-3.16 free-text actor carries ``"<provider>_oauth2"`` for
+    ``"false"`` (a pre-4.0 free-text actor carries ``"<provider>_oauth2"`` for
     an address the provider never verified). An actor with no marker, created
-    before 3.16, is unvouched.
+    before 4.0, is unvouched.
     """
     store = actor_instance.store
     if not store:
@@ -1849,7 +1849,7 @@ def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool
     With ``creator`` (the actor's current creator, or the address a sign-in
     is resolving) the vouch must also be for that address: the recorded
     :data:`VOUCHED_CREATOR`, or the actor's own stored ``email`` (a provider
-    or the emailed link wrote it). An actor vouched before 3.16 has no
+    or the emailed link wrote it). An actor vouched before 4.0 has no
     recorded address and is judged by its marker alone.
     """
     method = store.auth_method
@@ -2931,7 +2931,7 @@ def _adopt_actor(
         # ones (get_from_creator prefers it). This narrows the race to the
         # gap between two statements; with with_unique_creator() off nothing
         # in the database enforces one actor per creator (the enforced path
-        # is the branch above; docs/migration/v3.16.rst, "Creator uniqueness").
+        # is the branch above; the migration guide, "Creator uniqueness").
         # A new actor is created only when every actor left is a factory one
         # (BR): one whose marker cannot be read fails the sign-in, since a new
         # vouched actor would outrank the owner's unvouched one for good. The
@@ -2990,7 +2990,7 @@ def _adopt_actor(
                     )
                 _seed_missing_email(result, result.store, user_info)
         elif marker_class == "unvouched":
-            # The owner's own unvouched actor (from before 3.16, or the email
+            # The owner's own unvouched actor (from before 4.0, or the email
             # form's) sat beside the factory ones: clean it in place instead
             # of leaving it, and its data, behind a new actor.
             return _adopt_actor(

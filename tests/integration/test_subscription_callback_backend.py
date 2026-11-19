@@ -1,5 +1,5 @@
 """A subscription's ``callback`` flag round-trips as a bool on both backends
-(3.16: a non-bool raises ``TypeError``; ``tests/test_subscription_callback_type.py``)."""
+(4.0: a non-bool raises ``TypeError``; ``tests/test_subscription_callback_type.py``)."""
 
 import os
 import uuid

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Mark existing actors as vouched when upgrading to 3.16.
+Mark existing actors as vouched when upgrading to 4.0.
 
-From 3.16 an actor whose ``auth_method`` marker is absent (an actor created
+From 4.0 an actor whose ``auth_method`` marker is absent (an actor created
 before the upgrade other than by a provider login) or ``"factory"`` is
 *unvouched*: the first sign-in that proves its creator's address cleans it in place (absent marker: passphrase
 rotated, trusts, subscriptions, sessions and registered OAuth2 clients
 removed, data kept) or replaces it (``"factory"``: deleted and recreated with
-a new id). Actors created by a provider login before 3.16 already carry
+a new id). Actors created by a provider login before 4.0 already carry
 ``"<provider>_oauth2"`` and are not touched. If you know the remaining actors
 are legitimate, write a marker first and the sign-in leaves them alone.
 
@@ -16,7 +16,7 @@ pending (``email_verified == "false"``): proving the address is what that
 actor is waiting for. Those are marked, counted as ``pending`` as well, and
 stay unvouched until the address is proven.
 
-The tool needs the 3.16 library. Install it, then run this before the
+The tool needs the 4.0 library. Install it, then run this before the
 application serves its first sign-in, with the SAME environment as the
 application (``DATABASE_BACKEND``, the database settings, ``AWS_DB_PREFIX``,
 credentials)::

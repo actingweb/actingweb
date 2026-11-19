@@ -271,10 +271,10 @@ class PeerPermissionStore:
 
         ``fetched_at`` is this receiver's clock, stamped before the fetch
         began, on every path (a query and a callback alike), and compared as
-        times, not strings (a row stored before 3.16 may carry a sender's
+        times, not strings (a row stored before 4.0 may carry a sender's
         timestamp in another format). The comparison is against the row in
         the database, not this process's cache, and the write is conditional
-        on that row (3.16): a query that began before a callback was stored,
+        on that row (4.0): a query that began before a callback was stored,
         in any process, never writes over it. False when the stored copy is
         newer or concurrent writers kept winning; a fault raises ``DbError``.
         """

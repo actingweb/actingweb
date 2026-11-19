@@ -1,4 +1,4 @@
-"""A peer's grant holds at every level of a property (3.16).
+"""A peer's grant holds at every level of a property (4.0).
 
 ``thoughts/plans/2026-11-10-grant-enforcement-per-route.md``, Phase 1, over
 HTTP on the test app (both backends by the suite's parametrisation): reads
@@ -351,7 +351,7 @@ def test_writes_over_text_beyond_the_parser(world: World) -> None:
 
 
 def test_a_grant_edit_cannot_name_another_actor(world: World) -> None:
-    """Re-run 6, Issue 1 (on master before 3.16): the store took
+    """Re-run 6, Issue 1 (on master before 4.0): the store took
     ``actor_id``/``peer_id``/``trust_type`` from a permissions PUT, and keys
     on them, so A's owner wrote a grant into another actor's store. Over
     HTTP on real storage: nothing lands in the other actor's store, and A's

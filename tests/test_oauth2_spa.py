@@ -855,7 +855,7 @@ class TestLogoutDoesNotRevokeProviderGrant:
 
 class TestSpaAuthorizePrompt:
     """``prompt`` is additive: ``consent`` is always sent, the client may add
-    ``select_account``, anything else is a 400 (3.16)."""
+    ``select_account``, anything else is a 400 (4.0)."""
 
     @pytest.fixture
     def handler_parts(self):

@@ -656,7 +656,7 @@ class TestCallbackProcessorOptimisticLocking:
 
 
 class TestCallbackProcessorClaim:
-    """Two deliveries of one in-order callback run the handler once (3.16,
+    """Two deliveries of one in-order callback run the handler once (4.0,
     owner-decided plan D13): the winner claims the batch in the state row."""
 
     def test_a_concurrent_delivery_of_a_claimed_sequence_is_a_duplicate(

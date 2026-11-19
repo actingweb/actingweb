@@ -1,4 +1,4 @@
-"""Creator uniqueness over HTTP and at the fixed-id creates (3.16, PR 2).
+"""Creator uniqueness over HTTP and at the fixed-id creates (4.0, PR 2).
 
 The HTTP tests run against a harness with ``with_unique_creator()`` on the
 isolated store (``unique_creator_app``); the bootstrap and startup tests call

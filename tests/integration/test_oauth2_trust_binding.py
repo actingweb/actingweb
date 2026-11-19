@@ -1,4 +1,4 @@
-"""An MCP client's access level is the user's choice (3.16, plan Phase 3).
+"""An MCP client's access level is the user's choice (4.0, plan Phase 3).
 
 On the ``wire_oauth`` app (OAuth2 and MCP on, the stand-in provider), not
 recordings: the browser binding, the confirmation and its refusals, the
@@ -512,6 +512,80 @@ def test_the_helper_for_an_own_sign_in_route(flow: Flow, listed: Any) -> None:
         core, flow.client_id, REDIRECT, "viewer", state="s9"
     )
     assert "code=" in done["url"] and "state=s9" in done["url"]
+
+
+def test_the_helper_asks_the_applications_decision_hook(
+    flow: Flow, listed: Any
+) -> None:
+    """Release validation 2026-11-18: called as the documents show it (no
+    ``decide_trust``), ``complete_client_authorization`` skipped the
+    application's ``oauth2_trust_requested`` hooks, so a hook that declines
+    a client had no say on an application's own sign-in route."""
+    from actingweb.actor import Actor
+    from actingweb.interface.hooks import LifecycleEvent
+    from actingweb.oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+    r = requests.post(f"{flow.host.url}/", json={"creator": flow.email})
+    assert r.status_code == 201
+    core = Actor(config=flow.host.config)
+    core.get(actor_id=r.json()["id"])
+    server = get_actingweb_oauth2_server(flow.host.config)
+    listed(["mcp_client", "viewer"])
+    hooks = flow.host.config._hooks  # noqa: SLF001 - the application's registry
+    seen: list[dict[str, Any]] = []
+
+    def decline(actor: Any, **info: Any) -> bool:
+        seen.append(info)
+        return False
+
+    event = LifecycleEvent.OAUTH2_TRUST_REQUESTED.value
+    hooks.register_lifecycle_hook(event, decline)
+    try:
+        declined = server.complete_client_authorization(
+            core, flow.client_id, REDIRECT, "viewer", state="s1"
+        )
+    finally:
+        hooks._lifecycle_hooks[event].remove(decline)  # noqa: SLF001
+
+    assert len(seen) == 1 and seen[0]["trust_type"] == "viewer"
+    assert seen[0]["confirmed"] is True
+    assert "error=access_denied" in declined["url"]
+    # With no hook registered the same call grants, as before.
+    granted = server.complete_client_authorization(
+        core, flow.client_id, REDIRECT, "viewer", state="s2"
+    )
+    assert "code=" in granted["url"]
+
+
+def test_a_confirmation_called_directly_asks_the_applications_decision_hook(
+    flow: Flow,
+) -> None:
+    """The fallback sits where every entry point decides
+    (``_decided_type``): an application that answers a paused authorisation
+    through ``handle_confirmation`` without ``decide_trust`` gets its hooks
+    asked too, and a declining hook refuses the grant."""
+    from actingweb.interface.hooks import LifecycleEvent
+    from actingweb.oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+    _browser, token = flow.paused()
+    server = get_actingweb_oauth2_server(flow.host.config)
+    hooks = flow.host.config._hooks  # noqa: SLF001 - the application's registry
+    seen: list[dict[str, Any]] = []
+
+    def decline(actor: Any, **info: Any) -> bool:
+        seen.append(info)
+        return False
+
+    event = LifecycleEvent.OAUTH2_TRUST_REQUESTED.value
+    hooks.register_lifecycle_hook(event, decline)
+    try:
+        answer = server.handle_confirmation(token, True)
+    finally:
+        hooks._lifecycle_hooks[event].remove(decline)  # noqa: SLF001
+
+    assert len(seen) == 1 and seen[0]["confirmed"] is True
+    assert "error=access_denied" in answer["url"]
+    assert flow.user_rows() == []
 
 
 def test_a_form_posted_without_its_nonce_is_named_once(

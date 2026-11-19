@@ -1,4 +1,4 @@
-"""One access decision for a peer on every route (3.16).
+"""One access decision for a peer on every route (4.0).
 
 ``decide()`` answers whether a peer may perform an operation on a path of a
 category at an actor, the same way for every caller: the REST handlers, the
@@ -59,7 +59,7 @@ ALLOWED = "allowed"
 
 class _PermissionDenied:
     """The property hooks' answer when the caller may not perform the
-    operation (3.16): distinct from ``None``, which a hook returns to hide a
+    operation (4.0): distinct from ``None``, which a hook returns to hide a
     value (404) or reject a write."""
 
     _instance: _PermissionDenied | None = None
@@ -115,7 +115,7 @@ _evaluator_failure_logged = False
 
 def log_evaluator_unavailable(message: str) -> None:
     """An evaluator that cannot be built is a configuration fault, the same
-    on every request: ERROR once per process, DEBUG after (3.16, plan:
+    on every request: ERROR once per process, DEBUG after (4.0, plan:
     the decision denies, the log names it once)."""
     global _evaluator_failure_logged
     if _evaluator_failure_logged:
@@ -182,7 +182,7 @@ def decide(
         return Decision(False, EXCLUDED, snapshot)
     client = snapshot.is_client if is_client is None else is_client
     if not path and kind in _NAMED_KINDS and snapshot.mentions(kind):
-        # A request that names nothing (3.16; spec: a method, an action and
+        # A request that names nothing (4.0; spec: a method, an action and
         # a resource are addressed by the path): a call has nothing to
         # grant. The library's GET listing of methods and actions is
         # filtered per name afterwards, so it is admitted when the rule
@@ -263,7 +263,7 @@ def named_route_allows(
     get_evaluator: Any,
     legacy_method: str = "GET",
 ) -> bool:
-    """A ``/methods`` or ``/actions`` request (3.16): a peer is answered by
+    """A ``/methods`` or ``/actions`` request (4.0): a peer is answered by
     :func:`decide` with the request's method for the access table (the
     evaluator resolved by the handler's own module, ``get_evaluator``); an
     evaluator that cannot be built denies. A caller that is not a peer is
@@ -342,7 +342,7 @@ def listable_names(
     }
 
 
-# Targets whose subscription is read access to what they carry (3.16, spec
+# Targets whose subscription is read access to what they carry (4.0, spec
 # :2438-2442); other targets are the application's, decided by the table.
 SUBSCRIBABLE = {
     "properties": PermissionType.PROPERTIES,
@@ -352,7 +352,7 @@ SUBSCRIBABLE = {
 }
 
 
-# The categories whose routes address one name each (3.16).
+# The categories whose routes address one name each (4.0).
 _NAMED_KINDS = frozenset(
     {PermissionType.METHODS, PermissionType.ACTIONS, PermissionType.RESOURCES}
 )
@@ -399,14 +399,14 @@ def subscription_allowed(
     snapshot: GrantSnapshot | None = None,
 ) -> Decision:
     """Whether a peer may subscribe to ``target`` (with ``subtarget`` and
-    ``resource``) (3.16): read access to the path for ``properties``,
+    ``resource``) (4.0): read access to the path for ``properties``,
     ``resources``, ``methods`` and ``actions``. A whole-target subscription
     is admitted when the grant's rule reads at least one name, or, when the
     grant does not mention the category, when the access table admits the
     peer's GET on the target. Other targets: the access table only (as the
     route's own row decides already).
 
-    Asked again when a diff is delivered (3.16), so a subscription the grant
+    Asked again when a diff is delivered (4.0), so a subscription the grant
     no longer admits delivers nothing; ``snapshot`` is the grant when the
     caller read it already."""
     kind = SUBSCRIBABLE.get(target)

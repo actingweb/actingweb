@@ -66,10 +66,49 @@ on a running event loop. Off the loop (Flask, FastAPI's sync handlers) every
 write already waits for its callbacks; on a running loop, the setting blocks
 the loop while they are sent, so leave it off there.
 
+One thing the setting does not cover: an ``async`` subscription data hook
+run by a poll made on the event loop (from an ``async`` route) is started
+as a task and not awaited, with or without ``with_sync_callbacks()``. On a
+function platform, register that hook as a plain function, or poll off
+the loop.
+
+**The startup check on a function platform:**
+
+``integrate_flask`` and ``integrate_fastapi`` run ``check_ready()`` when they
+are called, not in a startup event, so an ASGI adapter that runs no lifespan
+events does not skip it. In a handler module like the one above, that is
+while the module is imported, so a platform that imports the handler module
+when it starts an instance runs the check once per new instance, during its
+initialisation. What the check does on DynamoDB:
+
+- with table auto-creation on, the table pre-warm first (with
+  ``AWS_DB_AUTO_CREATE_TABLES=false`` it is skipped);
+- unless reverse lookup is off (``with_indexed_properties([])``; three
+  names are indexed by default), one consistent ``BatchGetItem`` on
+  ``<prefix>_property_lookup_v2``;
+- with creator uniqueness on (the default), one consistent ``GetItem`` on
+  ``<prefix>_creators``;
+- with ``with_email_as_creator``, one read of its readiness marker.
+
+That is the ready case. On a store with no properties yet the reverse-lookup
+check also scans the properties table and writes its backfill-complete
+markers, and when the configured names changed it writes the new set, so a
+role sized from the list above is refused there; size it for the first
+start, or run ``actingweb-property-lookup`` from the operator's credentials
+first.
+
+A check that passed is not repeated in that process. A store that is not
+ready raises ``StoreNotReady`` out of ``integrate_*``, and so does a read
+that faults (a throttle, a missing permission): the check fails closed. If
+your platform fails every invocation of an instance whose initialisation
+raised, the function serves nothing until the store is ready. Run the
+`Operator commands`_ before the new version's code is deployed, and watch
+for initialisation errors during the rollout.
+
 Callback Delivery by Deployment Shape
 -------------------------------------
 
-Since 3.16 one write's callbacks are sent concurrently, at most
+Since 4.0 one write's callbacks are sent concurrently, at most
 ``max_concurrent_callbacks`` (default 4) to subscribers on other hosts, and
 subscribers on the publisher's own host one at a time
 (``serialize_own_host_callbacks``). A send takes at most 15 s (5 s to
@@ -172,14 +211,14 @@ Kubernetes
 
 With several replicas, each write's callbacks are bounded per write, in the
 process that served the write; there is no process-wide or cross-replica
-limit and no per-peer back-off (3.16 removed the unused ``FanOutManager``).
+limit and no per-peer back-off (4.0 removed the unused ``FanOutManager``).
 
 Notes
 =====
 
 - Ensure AWS IAM policies allow the DynamoDB actions the library uses; the
-  list, including the ones the startup checks need (``BatchGetItem`` on the
-  lookup table, ``ConditionCheckItem``), is in :doc:`configuration`,
+  list, including ``BatchGetItem`` on the lookup table (which the startup
+  check needs) and ``ConditionCheckItem``, is in :doc:`configuration`,
   "Production (AWS DynamoDB)".
 - For base paths (reverse proxies, API gateways), templates should use ``actor_root`` and ``actor_www``; see :doc:`../guides/web-ui`.
 - See :doc:`../reference/routing-overview` for generated routes and structure.
@@ -193,20 +232,76 @@ commands that make it ready run with the application's environment
 (``DATABASE_BACKEND``, the database settings, ``AWS_DB_PREFIX``,
 credentials), in this order, before a deploy:
 
-1. ``actingweb-mark-actors-vouched`` (with ``--email-as-creator`` under
+1. ``alembic upgrade head`` on PostgreSQL. It comes first: it creates the
+   tables the commands below read, including the
+   ``property_lookup_backfill`` table step 4 writes its markers to.
+2. ``actingweb-mark-actors-vouched`` (with ``--email-as-creator`` under
    ``with_email_as_creator``), if legacy actors are to be vouched.
-2. ``actingweb-unique-creators report``, ``resolve --apply`` and
+3. ``actingweb-unique-creators report``, ``resolve --apply`` and
    ``enable --apply`` (creator uniqueness, on by default).
-3. ``actingweb-property-lookup backfill --apply`` (reverse lookup, when
+4. ``actingweb-property-lookup backfill --apply`` (reverse lookup, when
    properties are indexed).
-4. ``alembic upgrade head`` on PostgreSQL.
 5. ``actingweb-unique-creators creator-to-email`` and then its ``--apply``
    (under ``with_email_as_creator``).
 
-After the deploy, run ``enable --apply`` and ``creator-to-email --apply``
-again: processes of the old version can leave work behind during the
-rollout. Run ``creator-to-email`` again after a restore or after any period
-with the email flag off. :doc:`../migration/v3.16` gives the details.
+A fresh PostgreSQL database needs no first start of the application to
+create its tables (the application never creates them; Alembic does):
+``alembic upgrade head``, then ``actingweb-unique-creators enable --apply``,
+then start.
+
+**Where they run, and what they must be told.** The commands are console
+scripts of the package and do not import your application. Run them from any
+machine that has this version installed and can reach the database (an
+operator's machine, a CI job, a one-off task), with the application's
+prefix, region and credentials. They take the backend from
+``DATABASE_BACKEND`` and use ``dynamodb`` when it is unset, also for an
+application that names its backend with ``ActingWebApp(database=...)``. What
+the application sets in its builder they cannot see, so pass it:
+
+- ``--properties a,b`` to every ``actingweb-property-lookup`` subcommand,
+  when the indexed names come from ``with_indexed_properties()`` and not
+  from ``INDEXED_PROPERTIES``;
+- ``--email-as-creator`` to ``actingweb-mark-actors-vouched`` and
+  ``--default-creator-to-email`` to ``actingweb-unique-creators resolve``,
+  under ``with_email_as_creator``;
+- ``--no-unique-creator`` to ``actingweb-deletions`` and to
+  ``python -m actingweb.db.verify_tables``, for an application that calls
+  ``with_unique_creator(False)``.
+
+On DynamoDB the role that runs them needs more than the application's role:
+``Scan``; ``DescribeTable`` on the actor, property and creators tables
+(``actingweb-unique-creators`` and ``actingweb-property-lookup`` check that
+the tables exist, whatever the auto-create setting); and ``CreateTable`` on
+``<prefix>_creators`` when ``enable --apply`` is to create it. Unless the
+command's environment sets ``AWS_DB_AUTO_CREATE_TABLES=false``, the library
+also describes each table a command touches, and creates one that is
+missing, as it does for the application.
+
+**After the deploy.** Processes of the old version can leave work behind
+during the rollout. Once every instance runs the new version:
+
+1. ``actingweb-unique-creators enable --apply`` again, then ``report``; if
+   it lists anything, ``resolve --apply`` and ``enable --apply`` once more.
+2. Under ``with_email_as_creator``, ``actingweb-unique-creators
+   creator-to-email --apply`` again.
+
+Then:
+
+- ``actingweb-verify-property-lists --attributes`` (attribute lists still
+  in the old layout, and conflicts);
+- ``actingweb-deletions report`` (deletions that stopped part-way);
+- ``actingweb-peer-state report``, then ``prune --apply``, then replace the
+  application's running processes: they keep the permissions they cached
+  until they are restarted. Where there is no process to restart (a
+  function platform that keeps instances warm), make the platform start new
+  instances. On AWS Lambda, update the function's code or configuration (a
+  changed environment variable will do); invocations then run in new
+  instances. Where traffic goes through an alias, point the alias at a
+  version published after that change: publishing a version alone does
+  not move it.
+
+Run ``creator-to-email`` again after a restore or after any period
+with the email flag off. :doc:`../migration/v4.0` gives the details.
 
 Health Checks
 =============

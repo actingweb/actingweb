@@ -606,7 +606,7 @@ def test_the_spa_handler_has_no_logout_endpoint(env: Env) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A logout that races a refresh (chain-revoked marker, 3.16)
+# A logout that races a refresh (chain-revoked marker, 4.0)
 # ---------------------------------------------------------------------------
 
 

@@ -84,7 +84,7 @@ class TestLegacyRouteNoLongerRegistered:
         self, flask_app: Flask
     ) -> None:
         """Flask's catch-all www route claims the path; with no OAuth
-        provider it reaches the www handler (3.16, as on FastAPI), which
+        provider it reaches the www handler (4.0, as on FastAPI), which
         answers 404 for an actor that does not exist. Nothing rotates a
         token, which is what the removal was for."""
         client = flask_app.test_client()

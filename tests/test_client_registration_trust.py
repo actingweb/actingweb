@@ -1,4 +1,4 @@
-"""A client registration that cannot create its trust row fails (3.16).
+"""A client registration that cannot create its trust row fails (4.0).
 
 Registration writes the client's trust row first, then the client row and
 the index row. A missing actor, a refused trust or an unexpected error fails

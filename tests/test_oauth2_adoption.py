@@ -1,4 +1,4 @@
-"""The adoption rule (3.16): a sign-in that proves an address over an actor
+"""The adoption rule (4.0): a sign-in that proves an address over an actor
 nobody vouched for replaces it (``factory``) or cleans it in place (legacy,
 ``email_unverified``, pending verification).
 

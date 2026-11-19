@@ -215,7 +215,7 @@ class TestDeniedListsAreRemovedFromBothHalves:
     @pytest.mark.parametrize("admitted", [True, False])
     def test_not_found_goes_to_the_access_table(self, admitted):
         """A name the grant's rule does not decide is the access table's, as
-        a direct read decides it (3.16; it used to be listed regardless)."""
+        a direct read decides it (4.0; it used to be listed regardless)."""
         store = FakeListStore({"unmatched": _v1_rows("unmatched", ["x"])})
         with (
             patch(PATCH_TARGET) as m,

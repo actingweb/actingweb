@@ -3,8 +3,8 @@
 **Filed** 2026-11-13 by `thoughts/plans/2026-11-13-attribute-list-v2-port.md`
 (Phase 4).
 
-3.16 moved attribute lists onto the property list format
-(`list:<name>-meta`, `list:<name>-#<rank>`). A list written before 3.16
+4.0 moved attribute lists onto the property list format
+(`list:<name>-meta`, `list:<name>-#<rank>`). A list written before 4.0
 (`list:<name>:meta`, `list:<name>:<i>`) is read in place and converted on its
 first change (`actingweb/attribute_list.py`: `_settle_layout`, `_convert`,
 the old-layout readers, the `layout_cleanup` marker, and the conflict
@@ -18,6 +18,6 @@ tool still needs it. Before that, `actingweb-verify-property-lists
 --attributes` (with `--repair` to convert) must report no old-layout list in
 the deployments that matter, Emm's included.
 
-**Why not now:** rolling back from 3.16 to 3.15 relies on old-layout lists
+**Why not now:** rolling back from 4.0 to 3.15 relies on old-layout lists
 staying readable until they are written, and a rolling deploy has 3.15 and
-3.16 processes side by side.
+4.0 processes side by side.

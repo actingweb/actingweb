@@ -2,7 +2,7 @@
 
 Every `POST /oauth/register` writes a client record, an index row and a trust
 row that nothing ever deletes. (The per-registration walk of the actor's trust
-list is gone in 3.16: it only built a log string, the peer id was already known.)
+list is gone in 4.0: it only built a log string, the peer id was already known.)
 
 **Where.** `MCPClientRegistry.register_client`
 (`actingweb/oauth2_server/client_registry.py`) stores `created_at` and no TTL;

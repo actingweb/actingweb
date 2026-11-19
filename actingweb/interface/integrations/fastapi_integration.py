@@ -1506,7 +1506,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     )
                 except (json.JSONDecodeError, TypeError, RecursionError):
                     # Not parseable here (RecursionError: nested beyond the
-                    # parser, 3.16): the body as the handler wrote it.
+                    # parser, 4.0): the body as the handler wrote it.
                     response = Response(
                         content=webobj.response.body,
                         status_code=webobj.response.status_code,
@@ -2014,7 +2014,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 )
 
         if webobj.response.template_name and self.templates:
-            # An MCP sign-in paused for the user's confirmation (3.16).
+            # An MCP sign-in paused for the user's confirmation (4.0).
             page = self.templates.TemplateResponse(
                 request,
                 webobj.response.template_name,
@@ -2281,7 +2281,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 )
             if self.templates:
                 # This is an HTML template response: the handler names it
-                # (the confirmation page, 3.16), else the authorization form.
+                # (the confirmation page, 4.0), else the authorization form.
                 template_name = (
                     webobj.response.template_name or "aw-oauth-authorization-form.html"
                 )
@@ -2291,11 +2291,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         request,
                         template_name,
                         context=webobj.response.template_values,
-                        # A refusal page keeps its status (3.16).
+                        # A refusal page keeps its status (4.0).
                         status_code=webobj.response.status_code or 200,
                     )
                     # The handler's cookies and headers reach the page (the
-                    # sign-in binding, the frame and cache headers; 3.16).
+                    # sign-in binding, the frame and cache headers; 4.0).
                     for key, value in webobj.response.headers.items():
                         page.headers[key] = value
                     _apply_cookies(page, webobj)
@@ -2312,7 +2312,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
                             "template_values": webobj.response.template_values,
                         },
                         # A refusal keeps its status; a page that failed is
-                        # not a 200 (3.16).
+                        # not a 200 (4.0).
                         status_code=template_fallback_status(
                             webobj.response.status_code
                         ),

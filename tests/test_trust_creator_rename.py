@@ -1,4 +1,4 @@
-"""``PUT /<id>/trust/trustee`` with a new ``creator`` (3.16, second iteration).
+"""``PUT /<id>/trust/trustee`` with a new ``creator`` (4.0, second iteration).
 
 A self-asserted creator unvouches the actor (``creator_changed``). Two values
 hand the actor to nobody new and keep the marker: the protocol's
@@ -45,7 +45,7 @@ def _put(
     auth_result.actor = actor
     auth_result.authorize = Mock(return_value=True)
     # The creator's call: only the creator and the trustee may change the
-    # creator (3.16, spec-1-5 Phase 2).
+    # creator (4.0, spec-1-5 Phase 2).
     auth_result.auth_obj.acl = {"relationship": "creator", "peerid": ""}
     handler.authenticate_actor = Mock(return_value=auth_result)
     handler._get_actor_interface = Mock(return_value=interface or Mock())  # type: ignore[method-assign]
@@ -320,7 +320,7 @@ class TestConcurrentRestore:
     def test_a12_a_pre_316_vouched_actor_is_bound_by_the_restore(self) -> None:
         config = self._config()
         actor, owner = _vouched(config)
-        assert istore(actor).set_confirmed(VOUCHED_CREATOR, None)  # before 3.16
+        assert istore(actor).set_confirmed(VOUCHED_CREATOR, None)  # before 4.0
         real_modify = Actor.modify
 
         def restore_lands_last(self: Actor, *args: Any, **kwargs: Any) -> bool:

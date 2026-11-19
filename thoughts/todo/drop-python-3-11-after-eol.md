@@ -38,5 +38,5 @@ is breaking for consumers still on 3.11, so it never goes in a patch.
 - A changelog entry with a **Breaking:** lead under `CHANGED`, and a row in
   that minor's migration guide.
 
-`demo.actingweb.io` moves to Python 3.14 with the 3.16 pin (actingwebdemo
-branch `deps/actingweb-3.16-python-3.14`), so the demo does not block this.
+`demo.actingweb.io` moves to Python 3.14 with the 4.0 pin (actingwebdemo
+branch `deps/actingweb-4.0-python-3.14`), so the demo does not block this.

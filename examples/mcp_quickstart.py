@@ -60,7 +60,17 @@ def init_actor(actor: ActorInterface, **kwargs):
 
 # MCP tool: attach to an action hook and expose with @mcp_tool
 @aw.action_hook("create_note")
-@mcp_tool(description="Create a new note for this actor")
+@mcp_tool(
+    description="Create a new note for this actor",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "The note's title"},
+            "content": {"type": "string", "description": "The note's text"},
+        },
+        "required": ["title"],
+    },
+)
 def create_note_tool(actor: ActorInterface, action_name: str, data: dict):
     title = data.get("title", "Untitled")
     content = data.get("content", "")
@@ -93,5 +103,11 @@ if __name__ == "__main__":
     api = FastAPI(title="My MCP Server")
     aw.integrate_fastapi(api)
 
-    _port = int(os.getenv("APP_HOST_FQDN", "localhost:5000").rsplit(":", 1)[-1])
-    uvicorn.run(api, host="0.0.0.0", port=_port)
+    # PORT, else the port in APP_HOST_FQDN, else 5000. Behind a tunnel or a
+    # proxy (APP_HOST_FQDN=your.public.host, no port) set PORT to the local
+    # port it forwards to. HOST is 127.0.0.1 unless you set it: 0.0.0.0
+    # would serve every network this machine is on.
+    _fqdn = os.getenv("APP_HOST_FQDN", "localhost:5000")
+    _fqdn_port = _fqdn.rsplit(":", 1)[-1] if ":" in _fqdn else ""
+    _port = int(os.getenv("PORT") or _fqdn_port or 5000)
+    uvicorn.run(api, host=os.getenv("HOST", "127.0.0.1"), port=_port)

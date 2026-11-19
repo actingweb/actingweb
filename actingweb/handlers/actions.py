@@ -25,12 +25,12 @@ class ActionsHandler(base_handler.BaseHandler):
         self, actor_id: str, auth_obj: Any, action_name: str, method: str = "POST"
     ) -> bool:
         """The shared access decision for a peer's ``/actions`` request
-        with the request's ``method`` (3.16): a rule the grant states (even
+        with the request's ``method`` (4.0): a rule the grant states (even
         empty) answers, else the access table; an evaluator that cannot be
         built denies. A caller that is not a peer is answered by the access
         table, as before."""
         method = getattr(self, "_verb_override", None) or method
-        # The verb the hooks this request runs are decided with (3.16).
+        # The verb the hooks this request runs are decided with (4.0).
         self._request_method = method
         return named_route_allows(
             self.config,
@@ -44,7 +44,7 @@ class ActionsHandler(base_handler.BaseHandler):
 
     def _listable_actions(self, actor_id: str, auth_obj: Any) -> list[Any]:
         """The actions a listing shows: all for a caller that is not a peer;
-        for a peer, each decided as a call of it would be (3.16), none when
+        for a peer, each decided as a call of it would be (4.0), none when
         the grant cannot be read (it showed all)."""
         assert self.hooks is not None
         entries = self.hooks.get_action_metadata_list()

@@ -1,4 +1,4 @@
-"""``DbActor.rename_creator`` on both backends (3.16, email-as-creator
+"""``DbActor.rename_creator`` on both backends (4.0, email-as-creator
 Phase 1).
 
 One operation moves the creator, the uniqueness record and writes to the

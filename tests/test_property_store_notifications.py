@@ -114,7 +114,7 @@ class TestPropertyStoreNotifications:
         store.clear()
 
         # One diff carrying every deleted name, registered once before the
-        # deletes (3.16, specification 1.5).
+        # deletes (4.0, specification 1.5).
         assert mock_actor.register_diffs.call_count == 1
         kwargs = mock_actor.register_diffs.call_args.kwargs
         assert kwargs["subtarget"] is None

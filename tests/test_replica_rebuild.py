@@ -665,7 +665,7 @@ def test_a_subtarget_answering_404_is_gone() -> None:
         ({}, b"blue", 200, "application/jsonx", False, None),
         ({}, b"blue", 200, "", False, None),
         # Specification 1.5: a value that is not JSON is labelled
-        # text/plain by a 3.16 publisher; still not through a redirect.
+        # text/plain by a 4.0 publisher; still not through a redirect.
         ({}, b"blue", 200, "text/plain; charset=utf-8", False, "blue"),
         ({}, b"blue", 200, "Text/Plain", False, "blue"),
         ({}, b"blue", 200, "text/plain", True, None),
@@ -768,7 +768,7 @@ class TestVerification2026_11_16:
         assert seen == []
 
 
-# -- a poll that replaced the replica tells the data hooks (3.16) ------------
+# -- a poll that replaced the replica tells the data hooks (4.0) ------------
 
 
 def _hooked(seen: list[Any], **kwargs: Any) -> Any:

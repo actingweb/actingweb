@@ -12,7 +12,7 @@ the property list's row layout in its bucket: ``list:{name}-meta`` and
 the attribute's JSON ``data``. Span bodies and key rows live in the side
 bucket ``{bucket}$aux``.
 
-**The old layout.** Before 3.16 an attribute list was ``list:{name}:meta``
+**The old layout.** Before 4.0 an attribute list was ``list:{name}:meta``
 (a JSON object with ``length``) and ``list:{name}:{index}`` rows. Such a
 list is read in place (one range read, no write) until its first change,
 which converts it: item ``i`` is written at the ``i``-th rank of
@@ -22,7 +22,7 @@ converters write identical rows; an interrupted one resumes), then the
 winner), then the old rows are deleted and the marker removed. A list whose
 old rows are damaged (a hole, a wrong ``length``) is not converted:
 ``ListCorruptionError``. Rows of both layouts without the marker are what a
-pre-3.16 writer leaves beside a converted list: neither copy is known to be
+pre-4.0 writer leaves beside a converted list: neither copy is known to be
 right, and every access raises ``ListLayoutConflictError``.
 ``clear()`` and ``delete()`` remove both layouts, whatever their state.
 
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 # The -meta field a conversion writes and its cleanup removes: while it is
 # there, old-layout rows beside the list are the conversion's residue, not a
-# pre-3.16 writer's.
+# pre-4.0 writer's.
 CLEANUP_MARKER = "layout_cleanup"
 OLD_LAYOUT = "attribute-v1"
 # Old rows the converter creates per batch, checking for a finished
@@ -396,7 +396,7 @@ class ListAttribute(ListCore):
                 self.name,
                 f"rows of both layouts ({self._storage.location}): "
                 f"'{self._old_meta_name()}' beside '{self._get_meta_property_name()}' "
-                f"without a cleanup marker, as a pre-3.16 writer leaves them. "
+                f"without a cleanup marker, as a pre-4.0 writer leaves them. "
                 f"{self._storage.remedy}",
             )
         self._layout = "old" if old_meta is not None else "v2"
@@ -450,7 +450,7 @@ class ListAttribute(ListCore):
         meta, items, _ = self._old_rows()
         old = meta or {}
         length = old.get("length", 0)
-        # Rows at or above the recorded length are a crashed pre-3.16 append's
+        # Rows at or above the recorded length are a crashed pre-4.0 append's
         # leftovers (it wrote the row before the length): ignored, as the old
         # readers ignore them, and swept with the old layout.
         if (
@@ -537,7 +537,7 @@ class ListAttribute(ListCore):
             try:
                 value_str, carries_marker = encode_item(item), False
             except ValueError:
-                # A pre-3.16 item carrying the reserved envelope key: kept
+                # A pre-4.0 item carrying the reserved envelope key: kept
                 # as it is, inside an envelope (a plain row would read as
                 # one).
                 value_str, carries_marker = json.dumps(item), True

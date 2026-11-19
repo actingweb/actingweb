@@ -93,20 +93,17 @@ ActingWeb handlers follow a consistent pattern:
 
 .. code-block:: python
 
-    from actingweb.handlers import (
-        PropertiesHandler,
-        TrustHandler,
-        SubscriptionHandler,
-        CallbacksHandler,
-        MethodsHandler,
-        ActionsHandler,
-        FactoryHandler,
-        OAuthHandler,
-        OAuth2CallbackHandler,
-        MetaHandler,
-        WwwHandler,
-        DevtestHandler,
-    )
+    from actingweb.handlers.actions import ActionsHandler
+    from actingweb.handlers.callbacks import CallbacksHandler
+    from actingweb.handlers.devtest import DevtestHandler
+    from actingweb.handlers.factory import RootFactoryHandler
+    from actingweb.handlers.meta import MetaHandler
+    from actingweb.handlers.methods import MethodsHandler
+    from actingweb.handlers.oauth2_callback import OAuth2CallbackHandler
+    from actingweb.handlers.properties import PropertiesHandler
+    from actingweb.handlers.subscription import SubscriptionHandler
+    from actingweb.handlers.trust import TrustHandler
+    from actingweb.handlers.www import WwwHandler
 
     def invoke_handler(handler_class, method: str, webobj: AWWebObj,
                        actor_id: str, config, hooks, **kwargs):
@@ -151,10 +148,16 @@ Map URLs to handlers following this pattern:
         "/<actor_id>/www": WwwHandler,
 
         # Application routes
-        "/": FactoryHandler,
-        "/oauth": OAuthHandler,
+        "/": RootFactoryHandler,
         "/oauth/callback": OAuth2CallbackHandler,
     }
+
+The OAuth2 callback is ``/oauth/callback`` at the application's root;
+specification 1.5 no longer defines a per-actor ``/oauth`` path, and 4.0
+removed ``CallbackOauthHandler`` (see :doc:`../migration/v4.0`). Every
+handler requires ``config`` (a ``ValueError`` without it, 4.0), and an
+application that builds its own routes calls ``ActingWebApp.check_ready()``
+before serving, as ``integrate_flask`` and ``integrate_fastapi`` do.
 
 Django Integration Example
 ==========================
@@ -222,7 +225,7 @@ Here's an example integration with Django:
 
     # views.py
     from django.urls import path
-    from actingweb.handlers import PropertiesHandler
+    from actingweb.handlers.properties import PropertiesHandler
 
     def properties_view(request, actor_id, path=""):
         webobj = create_webobj(request)
@@ -386,7 +389,7 @@ Different handlers require different arguments:
     handler.get(actor_id="...", name="method_name")
     handler.post(actor_id="...", name="method_name")
 
-    # FactoryHandler (no actor_id)
+    # RootFactoryHandler (no actor_id)
     handler.get()
     handler.post()
 

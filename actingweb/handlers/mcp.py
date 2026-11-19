@@ -912,6 +912,22 @@ class MCPHandler(BaseHandler):
                     "error_description": "Authentication required for MCP access",
                 }
 
+            # The Streamable HTTP transport allows a stream or 405 for a GET
+            # that opens the server-to-client stream; this server offers no
+            # such stream. A 200 here made Claude Code reopen it in a loop
+            # (4.0).
+            request = getattr(self, "request", None)
+            headers = (getattr(request, "headers", None) or {}) if request else {}
+            accept = str(headers.get("Accept") or headers.get("accept") or "")
+            if "text/event-stream" in accept.lower():
+                self.response.headers["Allow"] = "POST"
+                self.response.set_status(405, "Method Not Allowed")
+                return {
+                    "error": "method_not_allowed",
+                    "error_description": "This server offers no server-to-client "
+                    "stream; send requests with POST",
+                }
+
             # Same derivations as initialize and /mcp/info, so the three
             # can no longer disagree.
             return {
@@ -1152,7 +1168,7 @@ class MCPHandler(BaseHandler):
         # Build capabilities based on what's actually available
         capabilities: dict[str, Any] = {}
 
-        # listChanged is false for all three (3.16): this server never sends
+        # listChanged is false for all three (4.0): this server never sends
         # a notifications/*/list_changed, so a client must not wait for one.
         if self._has_mcp_tools():
             capabilities["tools"] = {"listChanged": False}
@@ -1443,9 +1459,13 @@ class MCPHandler(BaseHandler):
                     if title:
                         tool_def["title"] = title
 
+                    # MCP requires inputSchema on every tool; a client
+                    # rejects the whole list over one without it (4.0).
                     input_schema = metadata.get("input_schema")
-                    if input_schema:
-                        tool_def["inputSchema"] = input_schema
+                    tool_def["inputSchema"] = input_schema or {
+                        "type": "object",
+                        "properties": {},
+                    }
 
                     output_schema = metadata.get("output_schema")
                     if output_schema:

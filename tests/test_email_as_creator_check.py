@@ -1,4 +1,4 @@
-"""``check_ready()``'s fourth check, ``EmailAsCreatorNotReady`` (3.16): its
+"""``check_ready()``'s fourth check, ``EmailAsCreatorNotReady`` (4.0): its
 place among the other three. The check itself is tested against both
 backends in ``tests/integration/test_email_as_creator_sweep.py``."""
 

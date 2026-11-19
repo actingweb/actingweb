@@ -98,7 +98,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
-    """``FanOutManager`` and ``FanOutResult`` were removed in 3.16: their
+    """``FanOutManager`` and ``FanOutResult`` were removed in 4.0: their
     import raises with the migration pointer instead of a bare error."""
     if name in ("FanOutManager", "FanOutResult"):
         from ..config import FANOUT_REMOVED

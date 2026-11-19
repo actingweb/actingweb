@@ -355,7 +355,7 @@ class TestRemotePeerStoreCallbackData:
         assert remote.get_list("items") == ["dup", "new", "z"]
 
     def test_apply_list_update_of_equal_rows_without_index_takes_the_first(self):
-        """3.16 (verification re-run 3): equal rows give the same list
+        """4.0 (verification re-run 3): equal rows give the same list
         whichever is updated (``update_by_handle`` and ``update_where`` send
         no position)."""
         remote, _ = _replica()
@@ -389,7 +389,7 @@ class TestRemotePeerStoreCallbackData:
         assert remote.get_list("items") == ["x", "T", "y"]
 
     def test_apply_list_update_with_old_item_not_found_is_out_of_step(self):
-        """3.16 verification re-run 2: it overwrote whatever sat at the index;
+        """4.0 verification re-run 2: it overwrote whatever sat at the index;
         the replica drifted, so it is rebuilt instead."""
         remote, _ = _replica()
         remote.set_list("items", ["a", "b"])

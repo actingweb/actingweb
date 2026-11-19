@@ -5,7 +5,7 @@ so ``actingweb.config`` can read the defaults without pulling in a backend,
 and the codec is list-agnostic (row-name prefixes are arguments).
 
 **The envelope.** A v2 list item's raw stored value is either the item's
-JSON (every row written before 3.16, and every item at or under the span
+JSON (every row written before 4.0, and every item at or under the span
 threshold) or an *envelope*: a JSON object whose **first** key is
 ``"__aw_env": 1``, with optional ``key`` and ``tok`` (the keyed-append hash
 and writer token), ``span`` (``{"gen", "parts", "bytes"}``: the item's
@@ -191,7 +191,7 @@ class Envelope:
 
 def looks_like_envelope(raw: Any) -> bool:
     """True if ``raw`` begins the way every envelope does. A plain item can
-    only begin this way if it predates 3.16 (encoding refuses it since)."""
+    only begin this way if it predates 4.0 (encoding refuses it since)."""
     return isinstance(raw, str) and raw.startswith(_ENVELOPE_PREFIX)
 
 
@@ -200,7 +200,7 @@ def _envelope_obj(raw: Any) -> dict[str, Any] | None:
 
     ``None``: a plain item. That is anything not starting with the marker,
     and a valid JSON object whose marker value is anything but the int
-    ``1`` (a pre-3.16 user item such as ``{"__aw_env": "x", ...}`` or
+    ``1`` (a pre-4.0 user item such as ``{"__aw_env": "x", ...}`` or
     ``{"__aw_env": 2, ...}``, which reads as itself: no other envelope
     format exists). A dict: an envelope with the marker ``1``, to validate
     further.
@@ -247,7 +247,7 @@ def parse(raw: Any) -> Envelope | None:
     """Parse a raw stored value. ``None`` means a plain item (decode it as
     JSON); an ``Envelope`` means read the item through it.
 
-    See ``_envelope_obj`` for what is plain: a pre-3.16 user item that
+    See ``_envelope_obj`` for what is plain: a pre-4.0 user item that
     merely starts like an envelope (a marker other than the int ``1``)
     reads as that item.
 

@@ -113,7 +113,7 @@ class TestB4ListWrappersFold:
                 listing.fetch()
 
     def test_register_diffs_raises_after_a_committed_write(self) -> None:
-        """3.16 (Phase 3 of the adoption and fault plan): the write that
+        """4.0 (Phase 3 of the adoption and fault plan): the write that
         produced the diff stays, but a fault reading the subscribers raises
         DbError, so the caller answers 503 instead of a diff no subscriber
         could detect was lost."""
@@ -404,7 +404,7 @@ class TestJ4PostCommitFolds:
             "approved": True,
             "peer_approved": True,
         }
-        # The hook fires on the transition (3.16): pending before, approved after.
+        # The hook fires on the transition (4.0): pending before, approved after.
         core.get_trust_relationship.side_effect = [
             {**approved, "approved": False},
             approved,

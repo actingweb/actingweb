@@ -1,4 +1,4 @@
-"""The web UI without an OAuth provider asks the browser for credentials (3.16).
+"""The web UI without an OAuth provider asks the browser for credentials (4.0).
 
 With no provider configured, ``/<actor_id>/www`` without credentials is
 answered 401 with a ``Basic`` challenge in the application's realm, so a
@@ -132,7 +132,7 @@ def test_the_creator_signs_in_and_a_wrong_passphrase_is_refused(
     refused = client.get(f"/{actor_id}/www", headers=basic(email, "wrong"))
     assert refused.status_code == 403
     # The browser keeps the wrong credentials and will not ask again, so
-    # the 403 says how to retry (3.16; it had no body).
+    # the 403 says how to retry (4.0; it had no body).
     assert "close the browser" in refused.text
     signed_in = client.get(f"/{actor_id}/www", headers=basic(email, passphrase))
     assert signed_in.status_code == 200
@@ -144,7 +144,7 @@ def test_a_403_that_is_not_a_wrong_passphrase_gets_no_retry_text(
 ) -> None:
     """An actor with no passphrase (made through OAuth, say) refuses every
     Basic sign-in; closing the browser cannot help, so the 403 does not say
-    it would (3.16)."""
+    it would (4.0)."""
     import base64
 
     from actingweb.actor import Actor

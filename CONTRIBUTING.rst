@@ -180,6 +180,33 @@ after merging.
 
 **For contributors:** Add CHANGELOG.rst entries to the "Unreleased" section. No version bumps needed in PRs.
 
+Which number a release gets
+---------------------------
+
+- **Patch** (``X.Y.Z``): no route, hook name, keyword, response field, public
+  signature or configuration option changes (additive keyword-only
+  parameters with defaults are fine), and nothing for an operator to do. A
+  patch never touches ``docs/migration/``.
+- **Minor** (``X.Y.0``): everything a patch may not do and nothing a major
+  is for (the major rule below wins), as long as an
+  application that upgrades without reading anything either keeps working or
+  is told at start-up what to do, and stored data stays readable by the
+  previous minor (or becomes unreadable only after an opt-in call or an
+  operator's explicit step). A minor has a migration guide.
+- **Major** (``X.0.0``): any of these: a documented name is removed (a
+  tombstone that raises counts as removed); the release writes data the
+  previous release cannot read, when an application that changed nothing
+  upgrades (an opt-in call or an operator's step does not count); a default
+  changes what an unchanged application does on the wire or to its users; a
+  peer on the previous release loses a flow for a reason other than a
+  security fix. A major has a migration guide. A tombstone a release
+  leaves behind (a name that only raises, with a pointer to the guide) is
+  deleted at the major after it and not before.
+
+The protocol version an application announces (``/meta/actingweb/version``)
+is a separate number and decides none of this.
+
+
 **For maintainers (stable or pre-release):**
 
 1. On the PR branch, update version in ``pyproject.toml`` and ``actingweb/__init__.py``
@@ -188,7 +215,7 @@ after merging.
 4. Commit: ``git commit -am "Release vX.Y.Z"``
 5. Push and merge the PR once CI is green
 6. On master: ``git pull``, then ``git tag vX.Y.Z``
-7. Push: ``git push --tags``
+7. Push the tag by name: ``git push origin vX.Y.Z`` (never ``--tags``)
 
 GitHub Actions validates the tag is on master and that both version files match
 the tag, runs tests, publishes to PyPI, and creates a GitHub Release.
@@ -207,9 +234,10 @@ Pre-release versions are automatically published to **TestPyPI** (not production
 
 **To create a pre-release:**
 
-1. Update version to pre-release version (e.g., ``3.10.0a1``)
-2. Commit and tag: ``git tag v3.10.0a1``
-3. Push: ``git push && git push --tags``
+1. The steps above, with a pre-release version (e.g., ``3.10.0a1``) and
+   the commit ``Pre-release v3.10.0a1``
+2. After the merge, on master: ``git tag v3.10.0a1`` on the merge commit
+3. Push the tag by name: ``git push origin v3.10.0a1``
 
 **Installing pre-releases from TestPyPI:**
 

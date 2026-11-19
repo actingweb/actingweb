@@ -1,4 +1,4 @@
-"""Creator uniqueness fails closed when enforcement is not in place (3.16).
+"""Creator uniqueness fails closed when enforcement is not in place (4.0).
 
 A process that builds ``Config()`` directly, with uniqueness on and
 ``actingweb-unique-creators enable --apply`` not yet run, must not claim

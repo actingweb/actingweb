@@ -51,7 +51,7 @@ class TestPhase2ProtocolCompliance:
         assert isinstance(instance, DbActorProtocol)
 
     def test_rename_creator_has_the_protocol_signature(self, backend: str) -> None:
-        """Both backends implement ``rename_creator`` (3.16) with the
+        """Both backends implement ``rename_creator`` (4.0) with the
         protocol's parameters."""
         import inspect
 

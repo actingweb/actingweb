@@ -1,5 +1,5 @@
 """``actingweb-unique-creators creator-to-email`` and the start-up check it
-satisfies (3.16, email-as-creator Phase 3), on both backends.
+satisfies (4.0, email-as-creator Phase 3), on both backends.
 
 The sweep moves each vouched actor whose stored email differs from its
 creator to that email, conditioned on what it read; after a complete clean

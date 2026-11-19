@@ -1,4 +1,4 @@
-"""An existing OAuth2/MCP client's row at its next authorisation (3.16,
+"""An existing OAuth2/MCP client's row at its next authorisation (4.0,
 verification 2026-11-10 of the grant-enforcement plan, Issues 6 and 10).
 
 No code without the trust: a row deleted between the read and the write

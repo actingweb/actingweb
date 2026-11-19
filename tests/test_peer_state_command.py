@@ -1,4 +1,4 @@
-"""``actingweb-peer-state``: report and prune peer state written before 3.16.
+"""``actingweb-peer-state``: report and prune peer state written before 4.0.
 
 Plan: thoughts/plans/2026-11-06-peer-authorisation-fixes.md, Phase 4. Real
 storage; both backends through ``DATABASE_BACKEND``.

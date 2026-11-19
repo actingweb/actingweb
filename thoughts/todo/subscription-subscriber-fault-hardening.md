@@ -16,7 +16,7 @@ periodic backup poll are listed only as guidance "for stronger delivery
 guarantees". Everything below goes beyond the minimum; none of it is a spec
 violation today.
 
-## What 3.16 changed (attribute-list-v2-port)
+## What 4.0 changed (attribute-list-v2-port)
 
 The replica is on the list core: a list diff the replica cannot apply is out
 of step and the replica is rebuilt from a baseline (at most one attempt a
@@ -50,7 +50,7 @@ still waits for it.
   G6). After the handlers ran, a folded `_update_last_seq` fault is followed
   by `_prune_pending`; if that faults too, `last_seq` is stale and the
   drained entries stay pending, so a later drain applies them again. Before
-  3.16 they left pending before the handlers ran (at-most-once by loss).
+  4.0 they left pending before the handlers ran (at-most-once by loss).
 - **Two error rules for one callback.** The consumer data hooks fold their
   errors (`handlers/callbacks.py`); the legacy callback hooks re-raise through
   `hooks.py`. State one rule in the hook docs.
@@ -72,12 +72,12 @@ still waits for it.
 The spec does not require it, the failure needs a store fault mid-callback,
 and the fix touches the delivery model (idempotency keys) rather than one
 site. The library side of the key now exists: `ListProperty.append_once(item,
-*, key)` (3.16, `thoughts/plans/2026-10-30-spanned-list-items.md` Phase 3)
+*, key)` (4.0, `thoughts/plans/2026-10-30-spanned-list-items.md` Phase 3)
 stores a list item at most once per key, so a re-applied `append` diff can
 use it once each diff carries a stable key (for example its sequence number
 and position).
 
-## Also, from the 3.16 callback claim (owner-decided plan, verified 2026-11-02)
+## Also, from the 4.0 callback claim (owner-decided plan, verified 2026-11-02)
 
 - **A callback at `claimed + 1` that arrives while a claim runs waits in
   pending** (`callback_processor.py`, the gap branch): the gap branch never
@@ -143,7 +143,7 @@ and position).
   handler that finishes after a resync landed writes its older sequence
   over the resync's (`_finish_batch`, the sequence write is unconditional).
   The resync clears the whole queue, a callback above its own sequence
-  included, and does not drain what is queued after the clear. Since 3.16 a
+  included, and does not drain what is queued after the clear. Since 4.0 a
   resume always sends a resync, so suspend, bulk write, resume, one more
   write can leave a quiet subscription without the last write until later
   traffic. Make the sequence write conditional on the claim still being
@@ -152,7 +152,7 @@ and position).
 - **Duplicate diffs under a publisher sequence that is not an integer come
   back on every poll** (`SubscriptionManager._poll_subscription[_async]`,
   the duplicate-diffs path; verification
-  `2026-11-17-3-16-pre-validation-fixes`, Issue 3). Since 3.16 such a
+  `2026-11-17-3-16-pre-validation-fixes`, Issue 3). Since 4.0 such a
   sequence is neither recorded nor used to clear, and the hooks are not
   told, but the baseline is still fetched and applied on each poll. A
   broken or hostile publisher only; clearing up to the highest diff

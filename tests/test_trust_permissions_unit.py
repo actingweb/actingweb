@@ -367,6 +367,9 @@ class TestTrustPermissionStoreNotifications:
         config = Mock()
         config.notify_peer_on_change = notify_peer_on_change
         config.database = "dynamodb"
+        # A bare Mock attribute is truthy: say which mode explicitly.
+        config.sync_subscription_callbacks = False
+        config._subscription_config = None
         return config
 
     def _create_permissions(self) -> Any:
@@ -591,6 +594,9 @@ class TestTrustPermissionStoreAsyncNotifications:
         config = Mock()
         config.notify_peer_on_change = notify_peer_on_change
         config.database = "dynamodb"
+        # A bare Mock attribute is truthy: say which mode explicitly.
+        config.sync_subscription_callbacks = False
+        config._subscription_config = None
         return config
 
     def _create_permissions(self) -> Any:
@@ -638,11 +644,154 @@ class TestTrustPermissionStoreAsyncNotifications:
 
             assert result is True
 
-            # Wait for the background task to complete
-            if created_tasks:
-                await asyncio.gather(*created_tasks)
+            # Without with_sync_callbacks() it is a background task.
+            assert len(created_tasks) == 1
+            await asyncio.gather(*created_tasks)
 
             mock_notify.assert_called_once_with(permissions)
+
+    async def test_store_permissions_async_awaits_the_peer_when_sync(self):
+        """With ``with_sync_callbacks()`` the notification is awaited, not
+        scheduled: it has finished when the call returns."""
+        from unittest.mock import AsyncMock, patch
+
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(
+                store, "_notify_peer_async", new_callable=AsyncMock
+            ) as mock_notify,
+            patch("asyncio.create_task") as create_task,
+        ):
+            assert await store.store_permissions_async(permissions) is True
+
+        create_task.assert_not_called()
+        mock_notify.assert_awaited_once_with(permissions)
+
+    async def test_store_permissions_async_shares_the_request_deadline(self, caplog):
+        """Verification 2026-11-18, Issue 1: the wait counts against the
+        deadline the request's callbacks share (callback_sender's
+        ``_Deadline.for_request``), not a fresh budget. A request that has
+        spent it sends nothing and returns at once, and says so."""
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from actingweb import request_context
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        config._subscription_config = SubscriptionProcessingConfig(
+            callback_delivery_budget_seconds=5
+        )
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        async def slow_peer(_permissions):
+            await asyncio.sleep(5)
+
+        request_context.set_request_id("req-spent-budget")
+        # The request's callbacks used the whole budget already.
+        request_context.set_delivery_deadline(time.monotonic() - 0.1)
+        try:
+            started = time.monotonic()
+            with (
+                patch.object(store, "_store_permissions_internal", return_value=True),
+                patch.object(
+                    store, "_notify_peer_async", side_effect=slow_peer
+                ) as notify,
+                caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+            ):
+                assert await store.store_permissions_async(permissions) is True
+            assert time.monotonic() - started < 1
+        finally:
+            request_context.set_delivery_deadline(None)
+            request_context.set_request_id(None)
+        notify.assert_not_called()
+        assert "delivery budget" in caplog.text
+
+    async def test_store_permissions_async_waits_only_what_the_request_has_left(
+        self, caplog
+    ):
+        """Re-verification 2026-11-18, Issue 2: with 0.2 s left of a 5 s
+        budget, a slow peer holds the call for about 0.2 s, not the whole
+        budget."""
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from actingweb import request_context
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        config._subscription_config = SubscriptionProcessingConfig(
+            callback_delivery_budget_seconds=5
+        )
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        async def slow_peer(_permissions):
+            await asyncio.sleep(5)
+
+        request_context.set_request_id("req-partly-spent")
+        request_context.set_delivery_deadline(time.monotonic() + 0.2)
+        try:
+            started = time.monotonic()
+            with (
+                patch.object(store, "_store_permissions_internal", return_value=True),
+                patch.object(store, "_notify_peer_async", side_effect=slow_peer),
+                caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+            ):
+                assert await store.store_permissions_async(permissions) is True
+            assert time.monotonic() - started < 1
+        finally:
+            request_context.set_delivery_deadline(None)
+            request_context.set_request_id(None)
+        assert "cut by the callback delivery budget" in caplog.text
+
+    async def test_store_permissions_async_cut_by_the_delivery_budget(self, caplog):
+        """With ``with_sync_callbacks()`` and a delivery budget, a peer that
+        does not answer in time does not hold the call past the budget."""
+        import asyncio
+        import logging
+        import time
+        from unittest.mock import patch
+
+        from actingweb.subscription_config import SubscriptionProcessingConfig
+        from actingweb.trust_permissions import TrustPermissionStore
+
+        config = self._create_mock_config(notify_peer_on_change=True)
+        config.sync_subscription_callbacks = True
+        config._subscription_config = SubscriptionProcessingConfig(
+            callback_delivery_budget_seconds=0.2
+        )
+        store = TrustPermissionStore(config)
+        permissions = self._create_permissions()
+
+        async def slow_peer(_permissions):
+            await asyncio.sleep(5)
+
+        started = time.monotonic()
+        with (
+            patch.object(store, "_store_permissions_internal", return_value=True),
+            patch.object(store, "_notify_peer_async", side_effect=slow_peer),
+            caplog.at_level(logging.WARNING, logger="actingweb.trust_permissions"),
+        ):
+            assert await store.store_permissions_async(permissions) is True
+        assert time.monotonic() - started < 2
+        assert "cut by the callback delivery budget" in caplog.text
 
     async def test_store_permissions_async_skips_notify_when_storage_fails(self):
         """
@@ -816,7 +965,7 @@ def test_an_update_cannot_change_whose_override_it_is() -> None:
     )
     written: list[TrustPermissions] = []
     with (
-        # The stored override (3.16: an update merges from storage).
+        # The stored override (4.0: an update merges from storage).
         mock.patch.object(store, "get_permissions_uncached", return_value=existing),
         mock.patch.object(
             store,

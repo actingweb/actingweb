@@ -364,7 +364,7 @@ Flow 2.2: Web UI Login without Email (GitHub Private Email)
        ↓
        Token validated
        ↓
-       Actor cleaned in place (3.16; the free-text actor is unvouched):
+       Actor cleaned in place (4.0; the free-text actor is unvouched):
          passphrase rotated, sessions, MCP tokens, trusts, subscriptions
          and OAuth2 clients removed; actor_adopted fired
        ↓

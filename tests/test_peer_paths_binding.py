@@ -753,7 +753,7 @@ class TestAPeersOwnTrustRowAfterReverify5:
 
     @staticmethod
     def _meta(peer_id: str) -> Any:
-        # The /meta check reads through the bounded verification GET (3.16).
+        # The /meta check reads through the bounded verification GET (4.0).
         return mock.patch(
             "actingweb.actor._bounded_get_json",
             return_value=(200, {"id": peer_id}),

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import __version__
 from ..config import Config
+from ..migration_guide import guide_section
 from ..property_list_span import (
     validate_limit_pair,
     validate_max_bytes,
@@ -61,7 +62,7 @@ class AttributeSchemaNotReady(StoreNotReady):
 
 class EmailAsCreatorNotReady(StoreNotReady):
     """``with_email_as_creator`` is on, but the actors that existed before
-    3.16 have not been moved to their stored email
+    4.0 have not been moved to their stored email
     (``actingweb-unique-creators creator-to-email``), or the actor backend
     lacks ``rename_creator`` (see :meth:`ActingWebApp.check_ready`)."""
 
@@ -363,7 +364,7 @@ class ActingWebApp:
 
     def with_app_version(self, version: str) -> "ActingWebApp":
         """Set the application's version, served at ``/meta/version`` and in
-        the ``/meta`` object (3.16).
+        the ``/meta`` object (4.0).
 
         The specification defines ``/meta/version`` as the version of the
         application, not of the library serving it. Unset, it is the
@@ -520,7 +521,7 @@ class ActingWebApp:
         return self
 
     def with_legacy_property_index(self, enable: bool = False) -> "ActingWebApp":
-        """Removed in 3.16; always raises ``RuntimeError``.
+        """Removed in 4.0; always raises ``RuntimeError``.
 
         The legacy GSI/index reverse lookup is gone and the lookup table is
         the only mechanism, so there is nothing to switch. The method stays
@@ -579,7 +580,7 @@ class ActingWebApp:
         return self
 
     def with_unique_creator(self, enable: bool = True) -> "ActingWebApp":
-        """Set creator uniqueness, which is **on by default** since 3.16.
+        """Set creator uniqueness, which is **on by default** since 4.0.
 
         With it on the database holds one actor per creator and
         :meth:`check_ready` refuses to start until
@@ -1268,7 +1269,7 @@ class ActingWebApp:
     ) -> Callable[..., Any]:
         """Decorator to register actor-level callback hooks.
 
-        ``allow_anonymous=True`` (3.16) also runs the hook for a ``POST`` to
+        ``allow_anonymous=True`` (4.0) also runs the hook for a ``POST`` to
         ``/<actor>/callbacks/<callback_name>`` without credentials, for a
         third party's webhook; the hook authenticates its caller itself from
         ``data["headers"]`` and ``data["raw_body"]`` (``data["anonymous"]``
@@ -1416,7 +1417,7 @@ class ActingWebApp:
             max_pending: Maximum pending callbacks; a callback beyond it is refused with 400
             storage_prefix: Bucket prefix for RemotePeerStore
             max_concurrent_callbacks: Callbacks of one write sent at once to
-                subscribers on other hosts (default 4, 3.16). A FastAPI
+                subscribers on other hosts (default 4, 4.0). A FastAPI
                 deployment whose subscribers call it back through another
                 origin sizes its handler pool for this; see the deployment
                 guide.
@@ -1427,10 +1428,10 @@ class ActingWebApp:
             serialize_own_host_callbacks: Send subscribers on this host one at
                 a time (default ``True``). Turn it off only where each request
                 has its own function instance.
-            max_payload_for_high_granularity: Removed in 3.16; passing it
+            max_payload_for_high_granularity: Removed in 4.0; passing it
                 raises ``RuntimeError`` naming the migration guide.
-            circuit_breaker_threshold: Removed in 3.16, as above.
-            circuit_breaker_cooldown: Removed in 3.16, as above.
+            circuit_breaker_threshold: Removed in 4.0, as above.
+            circuit_breaker_cooldown: Removed in 4.0, as above.
 
         Returns:
             Self for method chaining
@@ -1479,7 +1480,7 @@ class ActingWebApp:
         serialize_own_host_callbacks: bool | None = None,
     ) -> "ActingWebApp":
         """Set how this actor's outbound subscription callbacks are delivered
-        (3.16), without turning on the processing of incoming callbacks that
+        (4.0), without turning on the processing of incoming callbacks that
         ``with_subscription_processing()`` turns on. An argument left as
         ``None`` keeps its value. See ``with_subscription_processing()`` for
         what each setting does, and the deployment guide for the shapes."""
@@ -1760,7 +1761,7 @@ class ActingWebApp:
                 f"{set_note} Run "
                 "'actingweb-property-lookup report', then "
                 "'actingweb-property-lookup backfill --apply' "
-                '(docs/migration/v3.16.rst, "One reverse-lookup mechanism"). '
+                f"({guide_section('One reverse-lookup mechanism')}). "
                 "The command reads INDEXED_PROPERTIES; if this application "
                 "sets the names with with_indexed_properties(), pass the same "
                 "names with --properties a,b. "
@@ -1798,13 +1799,13 @@ class ActingWebApp:
                     "There are no actors yet: run "
                     "'actingweb-unique-creators enable --apply' and start "
                     "again, or opt out with with_unique_creator(False) "
-                    '(docs/migration/v3.16.rst, "Creator uniqueness").'
+                    f"({guide_section('Creator uniqueness')})."
                 )
             raise UniqueCreatorNotReady(
                 f"Creator uniqueness is on (the default) but {missing}. Run "
                 "'actingweb-unique-creators report', then 'resolve --apply' "
-                "and 'enable --apply' (docs/migration/v3.16.rst, "
-                '"Creator uniqueness"), or opt out with '
+                f"and 'enable --apply' ({guide_section('Creator uniqueness')}), "
+                "or opt out with "
                 "with_unique_creator(False)."
             )
         self._unique_creator_checked = True
@@ -1817,9 +1818,8 @@ class ActingWebApp:
         if not callable(getattr(backend, "rename_creator", None)):
             raise EmailAsCreatorNotReady(
                 "The actor backend lacks rename_creator, which every creator "
-                "change of a vouched actor goes through since 3.16. Implement "
-                'it (DbActorProtocol, docs/migration/v3.16.rst, "Custom '
-                'database backends").'
+                "change of a vouched actor goes through since 4.0. Implement "
+                f"it (DbActorProtocol, {guide_section('Custom database backends')})."
             )
         from ..maintenance import email_as_creator
 
@@ -1852,8 +1852,7 @@ class ActingWebApp:
                 "The attribute backend lacks the list primitives "
                 f"{', '.join(missing)}, which attribute lists (and every "
                 "replica of a peer's list) are stored through. Implement them "
-                '(DbAttributeProtocol, docs/migration/v3.16.rst, "Custom '
-                'database backends").'
+                f"(DbAttributeProtocol, {guide_section('Custom database backends')})."
             )
         if getattr(config, "database", None) == "postgresql":
             from ..db.postgresql.attribute import (
@@ -1876,8 +1875,7 @@ class ActingWebApp:
                     f"(revision {LIST_ROWS_REVISION}) before starting this "
                     "version; if it times out on its lock behind a long "
                     "transaction, run it again "
-                    '(docs/migration/v3.16.rst, "Attribute lists and list '
-                    'diffs").'
+                    f"({guide_section('Attribute lists and list diffs')})."
                 )
         self._attribute_schema_checked = True
 

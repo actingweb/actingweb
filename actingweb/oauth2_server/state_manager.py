@@ -131,7 +131,7 @@ class OAuth2StateManager:
         """
         Create state parameter for MCP OAuth2 flow with trust type selection.
 
-        ``form_nonce``: the nonce of the authorize form the user saw (3.16);
+        ``form_nonce``: the nonce of the authorize form the user saw (4.0);
         the callback compares it with the browser's cookie to bind the
         sign-in to the form.
 

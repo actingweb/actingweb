@@ -26,7 +26,7 @@ from actingweb.db import get_property
 from actingweb.db.exceptions import DbError
 
 # The format moved to list_core; these names are re-exported under their
-# pre-3.16 names. Patching one of them on this module changes nothing (the
+# pre-4.0 names. Patching one of them on this module changes nothing (the
 # code that reads it is in list_core): patch actingweb.list_core instead.
 from actingweb.list_core import (
     _KEYED_IN_FLIGHT_SECONDS as _KEYED_IN_FLIGHT_SECONDS,
@@ -263,7 +263,7 @@ def diff_reference(diff: dict[str, Any], config: Any) -> dict[str, Any]:
     blob. A reference **removes** the value-carrying fields (``item``,
     ``old_item``, ``value``, ``items``) and adds top-level ``"spanned":
     true`` and ``"bytes"`` (the values' total encoded size). Removed rather
-    than replaced by a marker, because a pre-3.16 receiver applies an
+    than replaced by a marker, because a pre-4.0 receiver applies an
     ``append``/``insert``/``update`` whenever ``"item"`` is present and an
     ``extend`` whenever ``"items"`` is: without them an older receiver
     answers ``unknown operation`` and stores nothing. A subscriber that
@@ -538,7 +538,7 @@ class ListProperty(ListCore):
     below its limit and confirm with ``len()`` once it reaches the limit --
     the exact read is then paid only at the boundary, not on every save.
 
-    SPANNED ITEMS (v2, 3.16). An item whose encoded size is over
+    SPANNED ITEMS (v2, 4.0). An item whose encoded size is over
     ``list_item_span_threshold`` is stored as a head row holding an envelope
     (``property_list_span``) plus body rows in the actor's side partition
     (``{actor_id}$aux``), which no dump or range read of the actor's
@@ -888,7 +888,7 @@ class ListProperty(ListCore):
     def append_indexed(self, item: Any, *, _locate: bool = True) -> int | None:
         """Add ``item`` to the end of the list and return the index it landed
         at, or None when it was written but its index could not be read
-        (3.16; see :meth:`ListCore.append_indexed`). A v1 list writes at the
+        (4.0; see :meth:`ListCore.append_indexed`). A v1 list writes at the
         index it read as the length, so two concurrent appends to a v1 list
         can both report (and write) the same index, as ``append()`` always
         could on v1."""
@@ -1913,7 +1913,7 @@ class ListProperty(ListCore):
             if self._get_item_property_name(i) in rows
         ]
 
-        # Step 4 copies raw v1 values into v2 heads. A pre-3.16 dict item
+        # Step 4 copies raw v1 values into v2 heads. A pre-4.0 dict item
         # whose first key is the reserved envelope marker would then read
         # as an envelope. Refuse before writing anything, the way
         # downgrade_to_v1 refuses a list holding envelopes.

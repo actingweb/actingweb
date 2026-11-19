@@ -8,7 +8,7 @@ are in
 [`../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md`](../research/2026-09-14-v2-list-mutation-raises-after-its-write-committed.md)'s
 "Adjacent finding" section.
 
-**Narrowed 2026-10-31.** 3.16 closed it for writes whose bytes are unique to
+**Narrowed 2026-10-31.** 4.0 closed it for writes whose bytes are unique to
 the call: a spanned head (it names a fresh body generation) and a keyed head
 from `append_once()` (it carries the writer's token) are read back after a
 `False`, and a row holding exactly that head is the call's own landed write

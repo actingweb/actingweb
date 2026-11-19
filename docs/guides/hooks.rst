@@ -187,7 +187,7 @@ Lifecycle Hooks
 
 Available events: ``actor_created``, ``actor_deleted``, ``actor_deleted_complete``, ``actor_adopted``, ``oauth_success``, ``email_verification_required``, ``email_sign_in_code_required``, ``email_verified``, ``trust_initiated``, ``trust_request_received``, ``trust_fully_approved_local``, ``trust_fully_approved_remote``, ``trust_deleted``, ``subscription_deleted``, ``oauth2_trust_requested``.
 
-``trust_fully_approved_local`` fires once, on every approving route (3.16);
+``trust_fully_approved_local`` fires once, on every approving route (4.0);
 ``trust_approved`` is its deprecated name (registering it logs a warning)
 and runs only when no ``trust_fully_approved_local`` hook is registered.
 ``oauth2_trust_requested`` decides the level an OAuth2/MCP client is
@@ -212,7 +212,7 @@ Webhooks From Third Parties
 Every ``/callbacks/<name>`` request is authenticated, so a provider that
 cannot send an actor's credentials (a payment or SMS service) gets 401.
 Register its hook with ``allow_anonymous=True`` and an unauthenticated
-``POST`` to that one name reaches it (3.16). The library then knows nothing
+``POST`` to that one name reaches it (4.0). The library then knows nothing
 about the caller: **the hook authenticates it**, from the provider's
 signature over ``data["raw_body"]`` or a shared secret in
 ``data["headers"]``, and refuses anything else before it writes. It
@@ -341,7 +341,7 @@ The runtime context is request-scoped and automatically managed by the framework
 is stored in a ``contextvars.ContextVar`` keyed by actor id, not as state on the
 actor object, so it is isolated per request even when an application reuses one
 actor object across many requests. (ActingWeb's own handlers, MCP included since
-3.16, build the actor per request.) Flask and FastAPI
+4.0, build the actor per request.) Flask and FastAPI
 integrations clear it at the end of every request -- including when a handler raises
 -- so nothing survives onto a request that reuses the same worker thread.
 

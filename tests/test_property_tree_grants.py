@@ -1,4 +1,4 @@
-"""Exclusions hold on the whole property tree (3.16).
+"""Exclusions hold on the whole property tree (4.0).
 
 ``thoughts/plans/2026-11-10-grant-enforcement-per-route.md``, Phase 1: an
 exclusion covers its node and the node's descendants, a pattern ending in

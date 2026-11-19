@@ -1,4 +1,4 @@
-"""GitHub's ``/user/emails`` is requested once per sign-in (3.16).
+"""GitHub's ``/user/emails`` is requested once per sign-in (4.0).
 
 The callback's email-required path asked GitHub twice for the same token:
 ``get_primary_email`` inside ``get_email_from_user_info``, then
@@ -150,7 +150,7 @@ class TestCallbackRequestsOnce:
             assert webobj.response.status_code == 502
 
     def test_a_public_email_is_checked_once(self, spa: bool) -> None:
-        """E1 (3.16): GitHub's /user carries no verified claim, so a public
+        """E1 (4.0): GitHub's /user carries no verified claim, so a public
         address is checked against /user/emails, once per token."""
         get = MagicMock(return_value=_response(200, ENTRIES))
         _run({"id": 42, "login": "someone", "email": "pub@example.com"}, get, spa=spa)

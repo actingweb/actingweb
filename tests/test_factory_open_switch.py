@@ -1,4 +1,4 @@
-"""``with_open_factory(False)`` closes the actor factory (``POST /``) (3.16).
+"""``with_open_factory(False)`` closes the actor factory (``POST /``) (4.0).
 
 The gate sits at the top of ``RootFactoryHandler.post()``, so it also closes
 the unauthenticated existing-creator redirect (an actor-id oracle).

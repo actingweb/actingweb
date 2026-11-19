@@ -737,7 +737,7 @@ class TestThePermissionOrderUsesOneClock:
         self,
     ) -> None:
         w = World()
-        # Stored before 3.16, an hour ago, in the sender's +02:00 format: as a
+        # Stored before 4.0, an hour ago, in the sender's +02:00 format: as a
         # string it sorts after the current UTC time.
         an_hour_ago = (datetime.now(UTC) - timedelta(hours=1)).astimezone(
             timezone(timedelta(hours=2))

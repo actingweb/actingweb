@@ -42,7 +42,7 @@ def mock_actor_sync():
 
             actor = Actor(actor_id="test_actor", config=mock_config)
             # The transport is tested here, not the grant: the delivery
-            # re-check (3.16) admits.
+            # re-check (4.0) admits.
             actor.filter_subscription_blob = (  # type: ignore[method-assign]
                 lambda peerid, sub, blob, **kw: blob
             )
@@ -76,7 +76,7 @@ def mock_actor_async():
 
             actor = Actor(actor_id="test_actor", config=mock_config)
             # The transport is tested here, not the grant: the delivery
-            # re-check (3.16) admits.
+            # re-check (4.0) admits.
             actor.filter_subscription_blob = (  # type: ignore[method-assign]
                 lambda peerid, sub, blob, **kw: blob
             )
@@ -221,7 +221,7 @@ class TestSyncSubscriptionCallbacks:
 
                 # Verify error handling
                 # Callback sends no longer write the actor's last response
-                # (3.16); the sender's result says the send was not delivered.
+                # (4.0); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
                 assert actor.last_response_message == ""
                 from actingweb import callback_sender
@@ -271,7 +271,7 @@ class TestSyncSubscriptionCallbacks:
 
                 # Verify error handling
                 # Callback sends no longer write the actor's last response
-                # (3.16); the sender's result says the send was not delivered.
+                # (4.0); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
                 assert actor.last_response_message == ""
                 from actingweb import callback_sender
@@ -321,7 +321,7 @@ class TestSyncSubscriptionCallbacks:
 
                 # Verify error handling
                 # Callback sends no longer write the actor's last response
-                # (3.16); the sender's result says the send was not delivered.
+                # (4.0); the sender's result says the send was not delivered.
                 assert actor.last_response_code == 0
                 assert actor.last_response_message == ""
                 from actingweb import callback_sender

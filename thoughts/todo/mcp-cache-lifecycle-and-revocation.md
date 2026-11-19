@@ -17,7 +17,7 @@ plan.
 **Cache eviction must be actor-wide, not keyed on one client's entries.** One
 revocation (a revoked-all, a deleted trust, a downgraded permission) or one
 re-typing of a client's trust covers every client of the actor, so every token
-and trust entry of the actor goes. (Until 3.16 the reason was `_actor_cache`'s
+and trust entry of the actor goes. (Until 4.0 the reason was `_actor_cache`'s
 shared `ActorInterface`; that cache is gone, the MCP path builds its actor per
 request, `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md`.) Fills check
 the revocation counter and write under the lock the eviction holds. Anyone
@@ -27,7 +27,7 @@ adding a cache or a new revocation path inherits this.
 
 The MCP caches (`_token_cache`, `_trust_cache`, `_mcp_client_info_cache` and
 the others in `mcp.py`'s module-level declarations) are plain module globals;
-none holds instance state since 3.16 (no actor object is cached). Single-process eviction on every
+none holds instance state since 4.0 (no actor object is cached). Single-process eviction on every
 revocation path exists (`actingweb/mcp/invalidation.py`), and none of it crosses
 a process boundary: `clear_token_from_cache()` clears the process that served
 the revocation request, and in any multi-process deployment (multiple Lambda
@@ -53,7 +53,7 @@ other three caches and the trust type registry's cache have no expiry.
 ## 2. No explicit trust-freshness policy
 
 There is no documented answer to "how stale can a cached trust relationship be,
-and is that acceptable for this deployment's threat model?" Since 3.16 a
+and is that acceptable for this deployment's threat model?" Since 4.0 a
 resolved trust entry expires after `_TRUST_CACHE_TTL = _cache_ttl` (300 s; a
 cached "no trust" after 10 s), stated in `docs/reference/security.rst`; before
 that its only expiry was the actor cache's sweep. Still open: whether it should
@@ -76,7 +76,7 @@ be scoped by something server-verified (e.g. bound to the resolved `peer_id`).
 ## 6. Module-global cache keys assume one ActingWeb application per interpreter
 
 The two MCP globals that authenticate, `_token_cache` and `_trust_cache`,
-record the `Config` that filled each entry since 3.16, and an entry another
+record the `Config` that filled each entry since 4.0, and an entry another
 application filled is a miss (`thoughts/plans/2026-11-06-subs-list-cache-lifetime.md`,
 Phase 1). The keys are still shared, so two applications holding the same
 actor id evict and replace each other's entries (a re-validation, never an

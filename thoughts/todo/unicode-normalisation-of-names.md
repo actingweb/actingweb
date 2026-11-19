@@ -2,7 +2,7 @@
 
 Found by the 3.14.4 architecture review
 (`thoughts/plans/2026-09-02-identifier-matching-and-metadata-fidelity.md`).
-Renamed and trimmed in 3.16: the backslash-escape half of this item landed
+Renamed and trimmed in 4.0: the backslash-escape half of this item landed
 (`thoughts/plans/2026-11-01-single-mode-and-consumer-primitives.md`, Phase 4:
 `glob_to_regex` honours `\*`, `\?` and `\\`).
 

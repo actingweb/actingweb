@@ -1,4 +1,4 @@
-"""Adoption under a backend write or delete fault (3.16, second iteration).
+"""Adoption under a backend write or delete fault (4.0, second iteration).
 
 Each backend hides one kind of fault: PostgreSQL's ``set_attr`` answers
 ``False``, which a plain ``store.x = y`` discards, and DynamoDB's
@@ -79,7 +79,7 @@ class TestMarkerWriteFault:
         creator = uuid_email()
         actor = Actor(config=config)
 
-        # 3.16: a marker-write fault rolls the row back and raises (503).
+        # 4.0: a marker-write fault rolls the row back and raises (503).
         with marker_write_fault(config), pytest.raises(DbError):
             actor.create(
                 url="https://test.example.com/",
@@ -144,7 +144,7 @@ class TestThirdIterationFaults:
             marker_write_fault(config, aid(live)),
         ):
             # create() still answers True when the id is taken (older than
-            # 3.16; see thoughts/todo/adoption-fault-and-hygiene-followups.md).
+            # 4.0; see thoughts/todo/adoption-fault-and-hygiene-followups.md).
             Actor(config=config).create(
                 url="https://test.example.com/",
                 creator="oauth2-user@unknown.domain",
@@ -194,7 +194,7 @@ class TestThirdIterationFaults:
         with backend_fault(
             config, "get_bucket", lambda a, b, _n: a == aid(actor), _raise
         ):
-            # 3.16: the store's load folds (strict=False), so the fault leaves
+            # 4.0: the store's load folds (strict=False), so the fault leaves
             # it unloaded; the write and its strict read-back still decide.
             confirmed = store.set_confirmed("auth_method", "operator")
         assert store.loaded is False

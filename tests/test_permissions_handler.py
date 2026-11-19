@@ -203,7 +203,7 @@ class TestPermissionsHandler:
         handler.get("actor123", "peer456")
 
         # Verify authorization was checked with correct parameters: before the
-        # trust lookup, and bound to the peer the path names (3.16)
+        # trust lookup, and bound to the peer the path names (4.0)
         mock_auth_obj.check_authorisation.assert_called_once_with(
             path="permissions",
             subpath="<id>",
@@ -251,7 +251,7 @@ class TestPermissionsHandler:
             with patch("actingweb.handlers.permissions.get_registry", mock_registry):
                 handler.get("actor123", "peer456")
 
-                # 404, as the trust permissions endpoint answers (3.16,
+                # 404, as the trust permissions endpoint answers (4.0,
                 # specification 1.5; it was a 500)
                 handler.response.set_status.assert_called_with(
                     404, "Trust type 'unknown_type' not found"

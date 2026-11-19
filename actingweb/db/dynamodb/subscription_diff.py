@@ -31,7 +31,7 @@ class SubscriptionDiff(Model):
     id = UnicodeAttribute(hash_key=True)
     subid_seqnr = UnicodeAttribute(range_key=True)
     subid = UnicodeAttribute()
-    # Set by ``create()`` (3.16): a default here was evaluated once, at import,
+    # Set by ``create()`` (4.0): a default here was evaluated once, at import,
     # so every diff of a process carried the same time.
     timestamp = UTCDateTimeAttribute()
     diff = UnicodeAttribute()

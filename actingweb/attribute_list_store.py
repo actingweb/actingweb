@@ -79,7 +79,7 @@ class AttributeListStore:
         "nothing to delete").
 
         Known gap: a list whose name continues another list's name with
-        ``-#`` (``a-#x``, possible only for a pre-3.16 list) or ``:<digit>``
+        ``-#`` (``a-#x``, possible only for a pre-4.0 list) or ``:<digit>``
         (``a:1x``, of either layout) beside that list has its rows inside the
         other list's item block, which the walk jumps, and is not listed.
         """
@@ -117,7 +117,7 @@ class AttributeListStore:
             elif match := _NEW_ITEM_RE.match(row):
                 upper = _below(f"list:{match.group(1)}-#")
             else:
-                # A scalar whose name starts "list:" (refused since 3.16).
+                # A scalar whose name starts "list:" (refused since 4.0).
                 upper = _below(row)
             if upper < "list:":
                 break

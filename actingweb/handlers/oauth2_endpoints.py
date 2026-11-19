@@ -46,7 +46,7 @@ from ..secret_compare import secret_equals
 
 logger = logging.getLogger(__name__)
 
-# The cookies that bind an MCP client's sign-in to the browser (3.16). Over
+# The cookies that bind an MCP client's sign-in to the browser (4.0). Over
 # https they carry the __Host- prefix (no Domain, Path=/, Secure: a sibling
 # subdomain cannot plant one); over http (development, the test apps) the
 # bare name without Secure.
@@ -74,7 +74,7 @@ _form_without_nonce_warned = False
 
 def _warn_form_without_nonce() -> None:
     """A browser that was shown the authorize form (it holds the nonce
-    cookie) posted it without ``form_nonce`` (3.16): most likely a custom
+    cookie) posted it without ``form_nonce`` (4.0): most likely a custom
     ``aw-oauth-authorization-form.html`` without the hidden input, so every
     sign-in goes through the confirmation page. Once per process."""
     global _form_without_nonce_warned
@@ -239,7 +239,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             except DbError:
                 raise
             except Exception as e:
-                # Includes ClientRegistrationError (3.16: no trust row, no
+                # Includes ClientRegistrationError (4.0: no trust row, no
                 # client). Fixed text: the cause, which can name the client
                 # or the actor, is logged only.
                 logger.error(f"Client registration failed: {e}")
@@ -310,7 +310,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                     "provider": form_data.get("provider", [""])[
                         0
                     ],  # OAuth provider (google/github)
-                    # The form's nonce (3.16): rides in the state to the callback
+                    # The form's nonce (4.0): rides in the state to the callback
                     "form_nonce": form_data.get("form_nonce", [""])[0],
                     # PKCE, carried back by the form's hidden inputs
                     "code_challenge": form_data.get("code_challenge", [""])[0] or None,
@@ -367,6 +367,11 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # Error response
                 error = server_response.get("error", "server_error")
                 description = server_response.get("error_description", "Unknown error")
+                # Logged: a 400 here left nothing to read in the server log
+                # (release validation 2026-11-18).
+                logger.warning(
+                    f"Authorization {method} refused with 400: {error}: {description}"
+                )
                 return self.error_response(400, f"{error}: {description}")
 
         except DbError:
@@ -567,7 +572,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             }
 
             # Handle using OAuth2 server: the browser's nonce cookie and the
-            # application's decision hook go with it (3.16).
+            # application's decision hook go with it (4.0).
             callback_response = self.oauth2_server.handle_oauth_callback(
                 params,
                 form_nonce_cookie=self._flow_cookie(FORM_NONCE_COOKIE),
@@ -618,7 +623,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
     def _set_page_headers(self) -> None:
         """The form and the confirmation are not framed or cached, and refer
-        no other site (3.16). ``same-origin``, not ``no-referrer``: under
+        no other site (4.0). ``same-origin``, not ``no-referrer``: under
         ``no-referrer`` a browser sends ``Origin: null`` on the page's own
         POST, which a browser without Fetch Metadata then has refused as
         cross-site (the confirmation's Approve)."""
@@ -642,7 +647,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
     def _confirm_refusal(self, status: int, error: str, message: str) -> dict[str, Any]:
         """A refused confirmation: the JSON error for an API caller, the
-        confirmation template with ``error`` (no form) for a browser (3.16;
+        confirmation template with ``error`` (no form) for a browser (4.0;
         a person saw raw JSON)."""
         self.response.set_status(status)
         if "application/json" in self._header("accept") or not self._header("accept"):
@@ -695,7 +700,7 @@ class OAuth2EndpointsHandler(BaseHandler):
         return self.error_response(status, f"{error}: {description}")
 
     def _handle_confirmation(self) -> dict[str, Any]:
-        """``POST /oauth/authorize/confirm`` (3.16): the user approves or
+        """``POST /oauth/authorize/confirm`` (4.0): the user approves or
         declines a paused authorisation. Refused cross-site (evidence
         required); the token must match the cookie set with the page."""
         from urllib.parse import parse_qs
@@ -744,7 +749,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             )
         except TokenStoreUnavailable:
             # The pending record was not consumed: the cookie stays, so the
-            # user's retry of the same page can still answer (3.16).
+            # user's retry of the same page can still answer (4.0).
             return self._confirm_refusal(
                 503,
                 "temporarily_unavailable",
@@ -791,7 +796,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             and self.request
             and "application/json" not in self._header("accept")
         )
-        # The browser binding (3.16): the nonce is set as a cookie here and
+        # The browser binding (4.0): the nonce is set as a cookie here and
         # carried by the form and every provider link the form offers; the
         # callback compares the two.
         form_nonce = str(form_data.get("form_nonce") or "")
@@ -851,7 +856,7 @@ class OAuth2EndpointsHandler(BaseHandler):
             for trust_type in trust_types:
                 should_include = True
 
-                # Option 1: the client list (3.16: with no list, every
+                # Option 1: the client list (4.0: with no list, every
                 # registered type except admin; admin only when listed)
                 if not client_trust_type_acceptable(self.config, trust_type.name):
                     should_include = False
@@ -926,7 +931,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                 # Don't provide hardcoded fallbacks - app must configure trust types
 
             # The preselected type: the client default when offered here
-            # (3.16; it was the first type in the registry, admin with no
+            # (4.0; it was the first type in the registry, admin with no
             # list configured), else the first offered.
             offered = [tt["name"] for tt in available_trust_types]
             default_trust_type = default_client_trust_type(self.config)
@@ -1008,7 +1013,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                         # The type rides in the state (the encrypted MCP
                         # context, or the nonce's payload for Apple): passing
                         # it here wrapped a short state in JSON, and Apple
-                        # posted back JSON no nonce matched (3.16).
+                        # posted back JSON no nonce matched (4.0).
                         auth_url = auth.create_authorization_url(state=state_param)
                         oauth_providers.append(
                             {
@@ -1049,7 +1054,7 @@ class OAuth2EndpointsHandler(BaseHandler):
                 "oauth_enabled": oauth_enabled,  # Enable OAuth buttons
                 "oauth_providers": oauth_providers,  # OAuth provider list
                 # Every form posts it back (a hidden input): it binds the
-                # sign-in to this browser (3.16).
+                # sign-in to this browser (4.0).
                 "form_nonce": form_nonce,
             }
             return None  # Template will be rendered by framework
@@ -1113,7 +1118,7 @@ class OAuth2EndpointsHandler(BaseHandler):
 
         base_url = f"{self.config.proto}{self.config.fqdn}"
         # What the application registered, as initialize and /mcp/info
-        # answer it (3.16; these were fixed values).
+        # answer it (4.0; these were fixed values).
         from .mcp import (
             registry_has_mcp_prompts,
             registry_has_mcp_resources,

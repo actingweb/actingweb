@@ -249,7 +249,7 @@ class RemotePeerStore:
 
         list_attr = self._get_list_store().get(name)
         if self.get_value(name) is not None:
-            # A scalar of this name (a pre-3.16 publisher's REST list edit
+            # A scalar of this name (a pre-4.0 publisher's REST list edit
             # arrived as one): the list replaces it.
             self.delete_value(name)
             list_attr = self._get_list_store().get(name)
@@ -569,7 +569,7 @@ class RemotePeerStore:
         """Whether a subtarget-level ``properties`` subscription's data is
         stored by a subscription to the peer's whole ``properties`` target
         too: then only that one writes the replica, so no diff is applied
-        twice (3.16; overlapping subscriptions doubled every append). Only
+        twice (4.0; overlapping subscriptions doubled every append). Only
         when ``target`` is given; one subscription read, a fault raises."""
         if not subtarget or target != "properties":
             return False
@@ -631,7 +631,7 @@ class RemotePeerStore:
             return {"error": "refused", "reason": "scalar key starts with list:"}
         if value == "" or value is None:
             if self._list_exists(key):
-                # A pre-3.16 publisher's list DELETE.
+                # A pre-4.0 publisher's list DELETE.
                 self.delete_list(key)
                 return {"deleted": True, "type": "list"}
             self.delete_value(key)
@@ -750,7 +750,7 @@ class RemotePeerStore:
             ListItemTooLargeError,
         ) as e:
             # An item this replica cannot store leaves it short: out of step,
-            # so the rebuild settles it as a baseline would (3.16).
+            # so the rebuild settles it as a baseline would (4.0).
             raise ReplicaOutOfStep(list_name, f"{type(e).__name__}: {e}") from e
 
     def _apply_list_operation_once(
@@ -1016,7 +1016,7 @@ class RemotePeerStore:
                     f"Skipping list {key!r} in resync: metadata without items "
                     f"(transformation may have failed)"
                 )
-                # A failure (3.16, verification M5): the baseline did not
+                # A failure (4.0, verification M5): the baseline did not
                 # carry the list, so an owed rebuild stays owed.
                 return key, {
                     "operation": "skip",

@@ -52,7 +52,7 @@ class AwProxy:
         self.last_response_code = 0
         self.last_response_message = 0
         # The last GET's Content-Type, and whether a redirect to another
-        # host was followed (3.16: a single property's unparsed body is its
+        # host was followed (4.0: a single property's unparsed body is its
         # value only when the publisher itself answered it as JSON; a
         # redirect on the same host, http to https or a trailing slash, is
         # the publisher's own answer and logged as a configuration warning).

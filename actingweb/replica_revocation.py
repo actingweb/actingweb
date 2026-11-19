@@ -1,4 +1,4 @@
-"""What a changed grant takes away from a peer's replica (3.16).
+"""What a changed grant takes away from a peer's replica (4.0).
 
 With ``auto_delete_on_revocation`` on, a permission change from a peer whose
 ``properties`` target this actor subscribes to (at any level) deletes what

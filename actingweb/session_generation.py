@@ -13,7 +13,7 @@ authorization code, an MCP refresh-token row, an SPA refresh-token row, and
 an MCP client registration (for the client-credentials grant). The grant
 writes its new token, then compares the credential's stamp with a strict
 read of the current generation; a mismatch revokes what it just wrote and
-fails the grant. A credential issued before 3.16 has no stamp and matches
+fails the grant. A credential issued before 4.0 has no stamp and matches
 only an actor whose generation was never written.
 
 Not covered: access tokens. The clean's revokes remove them, but another

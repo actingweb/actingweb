@@ -1,8 +1,8 @@
-"""Callers that used to act on a folded read (3.16, Phase 2 rows B1-B11 of
+"""Callers that used to act on a folded read (4.0, Phase 2 rows B1-B11 of
 ``thoughts/plans/2026-10-28-db-fault-semantics-and-creator-uniqueness.md``).
 
 Each test injects a read fault (a ``DbError``, as both backends raise since
-3.16) where the caller once read "absent" and then created, overwrote or
+4.0) where the caller once read "absent" and then created, overwrote or
 deleted something. The fault must propagate (the integrations answer 503)
 and leave storage as it was.
 """

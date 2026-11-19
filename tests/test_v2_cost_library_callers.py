@@ -144,7 +144,7 @@ class TestWwwPropertiesOverviewCost:
         tv = handler.response.template_values
         assert tv["properties"]["notes"] == "[List with 3 items]"
         assert tv["properties"]["todos"] == "[List with 2 items]"
-        assert tv["properties"]["tags"] == "[List with 1 items]"
+        assert tv["properties"]["tags"] == "[List with 1 item]"
         assert set(tv["list_properties"]) == {"notes", "todos", "tags"}
 
 

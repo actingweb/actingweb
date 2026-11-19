@@ -1,6 +1,6 @@
 """An indexed property write and its lookup row succeed or fail together.
 
-Before 3.16 a DynamoDB write that could not write its lookup row logged and
+Before 4.0 a DynamoDB write that could not write its lookup row logged and
 committed the property anyway, so a value could exist that reverse lookup
 never found. Now the pair is one ``TransactWriteItems`` (DynamoDB) or one
 database transaction (PostgreSQL), and a fault raises ``DbError`` with nothing

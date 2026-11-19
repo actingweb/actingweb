@@ -3,7 +3,7 @@ Table-creation shape: ``ensure_table`` creates a table once and never alters
 a live one ("first creator wins").
 
 The properties table is created WITHOUT the legacy value-keyed
-``property-index`` GSI (the legacy reverse lookup was removed in 3.16; the
+``property-index`` GSI (the legacy reverse lookup was removed in 4.0; the
 clone models below keep a GSI'd variant only to exercise ``ensure_table``'s
 no-alter rule). Existing tables are never altered.
 

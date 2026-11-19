@@ -96,7 +96,7 @@ class TestSharedPropertiesEndpoint:
                 assert "data_private" not in shared_names
                 assert "config_settings" not in shared_names
 
-                # A name the peer may not read is not listed at all (3.16:
+                # A name the peer may not read is not listed at all (4.0:
                 # "excluded_properties" named them)
                 assert "excluded_properties" not in response_data
 
@@ -273,7 +273,7 @@ class TestSharedPropertiesEndpoint:
         assert self.mock_response.set_status.call_args[0][0] == 503
 
     def test_an_unapproved_peer_is_refused(self):
-        """A trust this actor has not approved lists nothing (3.16)."""
+        """A trust this actor has not approved lists nothing (4.0)."""
         webobj = Mock()
         webobj.request = Mock()
         handler = TrustSharedPropertiesHandler(webobj, self.mock_config)

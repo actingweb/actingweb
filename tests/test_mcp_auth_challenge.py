@@ -138,7 +138,7 @@ def test_both_protected_resource_variants_advertise_offline_access():
 
 
 def test_the_protected_resource_document_reports_what_is_registered():
-    """3.16: the three flags follow the registry, as ``initialize`` and
+    """4.0: the three flags follow the registry, as ``initialize`` and
     ``/mcp/info`` do; before they were tools and prompts true, resources
     false, whatever the application registered."""
     from actingweb.interface.hooks import HookRegistry

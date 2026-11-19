@@ -334,7 +334,7 @@ def migrate_actor(
             # the checkpoint forever over a list that no longer exists.
             logger.info(f"actor={actor_id} list={name}: deleted while migrating")
         elif result.get("reason") == "envelope-shaped item":
-            # A pre-3.16 dict item whose first key is the reserved envelope
+            # A pre-4.0 dict item whose first key is the reserved envelope
             # marker: migrating would turn it into a storage envelope. The
             # item needs editing first; migrate_to_v2() logged which list.
             refused.append((f"{actor_id}/{name}", "envelope-shaped item"))
@@ -429,7 +429,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Bulk-migrate v1 property lists to v2 storage format. Attribute "
-            "lists (3.16) are not migrated here: one in the pre-3.16 layout "
+            "lists (4.0) are not migrated here: one in the pre-4.0 layout "
             "converts on its first change, or with "
             "'actingweb-verify-property-lists --attributes --repair'."
         )

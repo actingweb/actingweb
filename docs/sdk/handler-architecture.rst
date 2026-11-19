@@ -287,6 +287,11 @@ Handlers use consistent error responses:
     # 500 Internal Server Error
     self._server_error("Unexpected error")
 
+A database fault is not one of these: it raises ``DbError`` instead of
+reading as absence, and the integration answers it with **503** and
+``Retry-After: 5`` (500 for a backend error a retry cannot fix; 4.0, see
+"Fault Contract" in :doc:`../reference/database-backends`).
+
 Testing Handlers
 ================
 

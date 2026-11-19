@@ -1,4 +1,4 @@
-"""Creator uniqueness in the actor backends (3.16, PR 2 Phase 3).
+"""Creator uniqueness in the actor backends (4.0, PR 2 Phase 3).
 
 With ``with_unique_creator()`` the database holds one actor per non-exempt
 creator: DynamoDB through the ``creators`` table written in the same

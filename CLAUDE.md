@@ -180,10 +180,18 @@ after merging. Tag the merge commit.
 - Version files: `pyproject.toml` (`version = "X.Y.Z"`) and
   `actingweb/__init__.py` (`__version__ = "X.Y.Z"`), PEP 440; both must match
   the tag exactly. The tag workflow validates this.
-- Patch vs minor: a patch (`3.14.x`) when no route, hook name, kwarg,
+- Patch, minor or major (`CONTRIBUTING.rst`, "Which number a release
+  gets", has the full rule): a patch when no route, hook name, kwarg,
   response field, public signature or config option changes (additive
   keyword-only parameters with defaults are fine); a minor otherwise, with a
-  migration guide.
+  migration guide, as long as an application that upgrades unread keeps
+  working or is told at start-up what to do and its stored data stays
+  readable by the previous minor; a major when a documented name is
+  removed, data is written that the previous release cannot read when an
+  unchanged application upgrades (an opt-in call or an operator's step does
+  not count), a default changes what an unchanged application does, or
+  a peer on the previous release loses a flow for a reason other than a
+  security fix. The release after 3.15.1 is 4.0.0 (owner, 2026-11-18).
 - Changelog promotion: rename `Unreleased` to `vX.Y.Z: Month D, YYYY` (or
   `vX.Y.ZrcN: ...`), add a new empty `Unreleased` above it; a minor's entry
   opens with a `.. note::` pointing at its migration guide.
@@ -436,7 +444,7 @@ app.with_indexed_properties(["oauthId", "email", "externalUserId"])
 ```
 
 **Key Points:**
-- **One mechanism** (since 3.16): DynamoDB `property_lookup_v2` (digest keys) or PostgreSQL `property_lookup`. The legacy GSI path, the v1 table, the PostgreSQL value scan, `USE_PROPERTY_LOOKUP_TABLE` and `with_legacy_property_index()` are gone; the last two fail at configure time with a pointer to the migration guide.
+- **One mechanism** (since 4.0): DynamoDB `property_lookup_v2` (digest keys) or PostgreSQL `property_lookup`. The legacy GSI path, the v1 table, the PostgreSQL value scan, `USE_PROPERTY_LOOKUP_TABLE` and `with_legacy_property_index()` are gone; the last two fail at configure time with a pointer to the migration guide.
 - **No size limit on DynamoDB** (digest keys, no plaintext values); on PostgreSQL a value's key row is limited to about 2.7 KB after compression (`backfill` reports larger ones as `UNINDEXABLE`).
 - **Fail closed**: an indexed property write and its lookup row succeed or fail together (`DbError` on a fault); a value another actor holds is a logged collision.
 - **Readiness**: `check_ready()` (called by `integrate_*`) raises `PropertyLookupNotReady` when a configured name has data but no backfill-complete marker, naming `actingweb-property-lookup backfill --apply`. A store with no properties marks itself ready. `with_indexed_properties([])` turns reverse lookup off.
@@ -450,7 +458,7 @@ export INDEXED_PROPERTIES=oauthId,email,externalUserId  # Configure indexed prop
 
 **Operator command** (same environment as the app): `actingweb-property-lookup report | backfill [--apply] | mark-complete [--apply] | unmark [--apply]`.
 
-See `docs/quickstart/configuration.rst` and `docs/migration/v3.16.rst` ("One reverse-lookup mechanism").
+See `docs/quickstart/configuration.rst` and `docs/migration/v4.0.rst` ("One reverse-lookup mechanism").
 
 ## Logging and Request Correlation
 

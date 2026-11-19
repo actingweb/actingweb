@@ -1000,7 +1000,7 @@ class TestGetPeerProxy:
 
 class TestSyncStopsAtAnInFlightClaim:
     """A poll that meets a sequence another delivery is handling stops there
-    (3.16): it neither clears nor records past it, so a failed delivery's
+    (4.0): it neither clears nor records past it, so a failed delivery's
     diff is still on the publisher."""
 
     def test_the_poll_stops_before_the_in_progress_sequence(self) -> None:

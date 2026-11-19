@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 def _client_trust_peer_id(actor: "ActorInterface", client_id: str) -> str:
-    """The peer id of the trust row that authorises ``client_id`` (3.16),
+    """The peer id of the trust row that authorises ``client_id`` (4.0),
     as MCP authentication resolves it (``find_client_trust``); never a peer
     id the caller passed, which could name another row. "" when the client
     has no trust row."""
@@ -77,7 +77,7 @@ def _view_decision(
     *,
     snapshot: GrantSnapshot | None = None,
 ) -> Decision:
-    """The shared access decision for a view's accessor (3.16): an OAuth2/MCP
+    """The shared access decision for a view's accessor (4.0): an OAuth2/MCP
     client is never sent to the access table, a peer is when its grant does
     not mention properties."""
     return decide(
@@ -194,7 +194,7 @@ class AuthenticatedPropertyStore:
             ) from e
 
     def _readable(self, key: str, value: Any) -> Any:
-        """``value`` without the parts the accessor's grant excludes (3.16).
+        """``value`` without the parts the accessor's grant excludes (4.0).
 
         The store hands back what the database holds, an object as JSON
         text: it is parsed to be filtered, and handed back as text again,
@@ -204,7 +204,7 @@ class AuthenticatedPropertyStore:
             return value
         parsed = as_json_object(value)  # once (only text opening [ or {)
         if parsed is TOO_DEEP:
-            return None  # never to a peer, whatever its grant (3.16)
+            return None  # never to a peer, whatever its grant (4.0)
         if decision.snapshot is None:
             return value
         rules = decision.snapshot.rules(PermissionType.PROPERTIES)
@@ -225,7 +225,7 @@ class AuthenticatedPropertyStore:
     def _refuse_excluded_parts(self, key: str, value: Any) -> None:
         """A write or delete that would touch a part the accessor's grant
         excludes (the stored value or the new one holds it) is refused, as
-        over REST; an ``admin`` peer is not (3.16)."""
+        over REST; an ``admin`` peer is not (4.0)."""
         decision = getattr(self, "_last_decision", None)
         if not self._auth_context.accessor_id or decision is None:
             return
@@ -236,7 +236,7 @@ class AuthenticatedPropertyStore:
         if not exclusion_patterns(rules):
             return
         # The stored value comes back as JSON text: parsed, or its excluded
-        # parts went unseen and a write replaced them (3.16).
+        # parts went unseen and a write replaced them (4.0).
         values: list[Any] = []
         for candidate in (self._store.get(key, None), value):
             if isinstance(candidate, str | bytes):
@@ -624,7 +624,7 @@ class AuthenticatedPropertyListStore:
         `handlers/properties.py`: *"On error, exclude all list properties
         for security"*. Drop-all, never partial.
 
-        A name is permitted as the shared decision answers it (3.16, default
+        A name is permitted as the shared decision answers it (4.0, default
         deny): a rule the grant states that does not match denies, and a name
         a grant that does not mention properties leaves undecided follows the
         access table for a peer and is refused for a client, as in
@@ -650,7 +650,7 @@ class AuthenticatedPropertyListStore:
             )
             # A name the grant's rule does not decide (the grant does not
             # mention properties) is the access table's for a peer and
-            # refused for a client (3.16), as a direct read decides it.
+            # refused for a client (4.0), as a direct read decides it.
             undecided = [
                 n for n in names if results.get(n) == PermissionResult.NOT_FOUND
             ]
@@ -792,7 +792,7 @@ class AuthenticatedSubscriptionManager:
         self, target: str, subtarget: str = "", resource: str = ""
     ) -> None:
         """Check if accessor can subscribe to the given target: read access
-        to what it carries, as the route decides it (3.16)."""
+        to what it carries, as the route decides it (4.0)."""
         if not self._auth_context.accessor_id:
             return
 
@@ -840,7 +840,7 @@ class AuthenticatedSubscriptionManager:
         # Create subscription with the accessor as the peer
         return self._manager._core_actor.create_subscription(
             # A client's subscription is kept under its trust's peer id, the
-            # id its diffs are filtered for (3.16).
+            # id its diffs are filtered for (4.0).
             peerid=self._auth_context.permission_id,
             target=target,
             subtarget=subtarget or None,
@@ -854,7 +854,7 @@ class AuthenticatedSubscriptionManager:
         Owner mode (no accessor) sees every row. A peer view sees the rows
         whose peer is the peer itself; a client view the rows whose peer is
         its trust's peer id or its client id (where subscriptions were filed
-        before 3.16), never a peer id a passed trust dict names."""
+        before 4.0), never a peer id a passed trust dict names."""
         if not self._auth_context.accessor_id:
             return subscriptions
         if self._auth_context.is_peer:

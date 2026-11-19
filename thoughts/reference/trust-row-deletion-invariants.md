@@ -34,7 +34,7 @@ runs, and the other numbers were kept so references to them stay valid.
 
 | # | Step | Before the row? | On a fault | Retry reaches it by |
 | --- | --- | --- | --- | --- |
-| 0 | Lifecycle hook `trust_deleted`, outside `Trust.delete`. `TrustManager.delete_relationship` (and the sweep, step 6, which uses it) fires it before step 1. The REST `DELETE /<actor>/trust/<rel>/<peer>` and `sync_peer` fire it through `delete_reciprocal_trust(before_local_delete=)`, after step 1 and the second secret check, before step 2 (3.16): a delete that loses to a re-pair, or finds no row, fires nothing. `sync_peer_async` awaits it before step 1 with the row it read | yes | a `DbError` propagates (503), row stays (on the REST route the peer's side may be gone already: its retry DELETE answers 404, which counts as deleted); any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
+| 0 | Lifecycle hook `trust_deleted`, outside `Trust.delete`. `TrustManager.delete_relationship` (and the sweep, step 6, which uses it) fires it before step 1. The REST `DELETE /<actor>/trust/<rel>/<peer>` and `sync_peer` fire it through `delete_reciprocal_trust(before_local_delete=)`, after step 1 and the second secret check, before step 2 (4.0): a delete that loses to a re-pair, or finds no row, fires nothing. `sync_peer_async` awaits it before step 1 with the row it read | yes | a `DbError` propagates (503), row stays (on the REST route the peer's side may be gone already: its retry DELETE answers 404, which counts as deleted); any other hook exception is logged and the delete goes on | the row; **the hook fires again on a retry** |
 | 1 | Remote DELETE to the peer (peer trusts only) | yes | a refusal or no answer is logged; with `delete_peer`, the call answers False and the row stays. A 404 counts as deleted (the peer has no row) | the row |
 | 2 | Subscriptions, remote-peer store, callback state, peer profile, capabilities, peer permissions | yes | a raised `DbError` stops it, row stays. Their return values are not checked: a store that answers False instead of raising lets the row go with its data left (subscriptions are non-strict: a fault leaves orphans) | the row (when it raised) |
 | 3a | Owner (the client row is in this actor's bucket, and the index names no other actor): `disable_client` (tokens, then index row, then client row; both rows confirmed) | yes | `DbError`, row stays, and the client row stays (a token store that cannot list every token raises before any row goes; an index row confirmed gone with the client row not is a failure) | the row; `client_owned_by` reads the client row and the missing index names nobody else, so the retry takes 3a again |
@@ -66,7 +66,7 @@ has no TTL: after a delete in one worker, another worker can serve its
 cached permissions for a row with the same peer id until it restarts. See
 `thoughts/todo/mcp-cache-lifecycle-and-revocation.md`.
 
-## The conditional delete (3.16)
+## The conditional delete (4.0)
 
 `DELETE /<actor>/trust/<rel>/<peer>` deletes only the row it was authorised
 against: the handler passes that row's secret (the bearer's row for a peer,
@@ -114,7 +114,7 @@ routes) nothing changes: whatever row the peer id names is deleted.
   owner's permission write can clear that write. Both creates are pending
   requests for one peer; an insert-if-absent would close it.
 - **Step 2:** a side store that answers False instead of raising lets the
-  row go with its data left. The stores raise on a fault under the 3.16
+  row go with its data left. The stores raise on a fault under the 4.0
   fault contract; a False is a reported write failure, not checked here.
 - **Step 6, a deterministic error:** any exception counts as a fault, so a
   row that always fails (a bug, a malformed row) answers 503 on every

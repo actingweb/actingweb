@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 WRONG_CREDENTIALS = "Invalid username or password"
 """The text of the 403 for a wrong creator or passphrase on Basic auth; the
-web UI keys its retry text on it (3.16)."""
+web UI keys its retry text on it (4.0)."""
 
-# The access table's pure functions live in access_table.py (3.16); named here
+# The access table's pure functions live in access_table.py (4.0); named here
 # so ``from actingweb.auth import access_table_admits`` keeps working.
 __all__ = [
     "WRONG_CREDENTIALS",

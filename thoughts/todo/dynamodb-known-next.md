@@ -60,6 +60,12 @@ order and `limit=1` cannot work. Fixing it needs a key-format change
 existing diff rows. Until then a large diff backlog is re-read entirely on
 every fetch.
 
+Judged for the release after 3.15.1 and left out (owner, 2026-11-18,
+`thoughts/research/2026-11-18-3-16-release-validation.md`): it needs neither
+the key-prefix scheme nor a major. Diff rows are short-lived (cleared when
+read), so writing zero-padded keys and reading both forms needs no
+conversion of stored rows.
+
 ## 5. Import-time freezing of `Meta.table_name` / host
 
 Every DynamoDB model binds `AWS_DB_PREFIX` / `AWS_DB_HOST` /
@@ -79,7 +85,7 @@ matters.
 
 ## 7. Lookup-table write path amplification
 
-Since 3.16 an indexed property write is one `TransactWriteItems` (the property,
+Since 4.0 an indexed property write is one `TransactWriteItems` (the property,
 its lookup row and the old value's lookup row), which closes the "property
 saved, lookup write failed" window (it raises `DbError` instead) and costs
 about twice the write units of a plain put on indexed names only. What
@@ -93,4 +99,4 @@ often.
 - `thoughts/plans/2026-11-06-subs-list-cache-lifetime.md` — the
   subscription-list memo, which cost one strongly-consistent Query per
   property write for actors with no subscribers, keeps an empty list too
-  since 3.16. Its fetch is still one of item 2's relaxation candidates.
+  since 4.0. Its fetch is still one of item 2's relaxation candidates.

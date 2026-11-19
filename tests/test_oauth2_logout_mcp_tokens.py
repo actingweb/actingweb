@@ -477,7 +477,7 @@ def test_an_mcp_logout_leaves_the_spa_session_alone(
 ) -> None:
     """An MCP login is an AI agent's, an SPA session the user's: an MCP
     logout ends only the MCP chain, ignores SPA refresh tokens sent beside
-    it, and clears no cookie (3.16)."""
+    it, and clears no cookie (4.0)."""
     import json
     import logging
 

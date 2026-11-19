@@ -34,6 +34,7 @@ from typing import Any
 
 import requests
 
+from actingweb import __version__ as LIBRARY_VERSION
 from actingweb.actor import Actor
 from actingweb.attribute import Attributes
 from actingweb.callback_processor import CallbackProcessor
@@ -946,6 +947,11 @@ class Normaliser:
                     out[nk] = self._epoch(v)
                 elif nk == "aw_trust_types" and isinstance(v, list):
                     out[nk] = [t for t in v if t in WIRE_TRUST_TYPES]
+                elif nk == "version" and v == LIBRARY_VERSION:
+                    # The library's own version (an actor's /meta, the MCP
+                    # serverInfo): a release bump is not a wire change. Any
+                    # other value under this key is recorded as it is.
+                    out[nk] = "<library-version>"
                 else:
                     out[nk] = self.walk(v, nk)
             return out

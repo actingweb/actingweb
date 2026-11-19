@@ -74,7 +74,7 @@ class RootHandler(base_handler.BaseHandler):
             "id": myself.id,
             "creator": myself.creator,
         }
-        # The passphrase to the creator and the trustee only (3.16,
+        # The passphrase to the creator and the trustee only (4.0,
         # specification 1.5): a peer, an admin one included, could keep
         # trustee access with it after its trust was deleted.
         acl = getattr(auth_result.auth_obj, "acl", None)

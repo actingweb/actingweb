@@ -156,7 +156,7 @@ class TestBucketPrefixIsolation:
     ):
         """Both buckets write the colliding key; the first writer keeps it.
 
-        Since 3.16 every attribute write is conditioned on the bucket (a
+        Since 4.0 every attribute write is conditioned on the bucket (a
         peer id may contain ":", so one peer's replica write could replace
         another peer's row): the second writer gets
         ``AttributeKeyCollision`` and the row stays the first bucket's, on

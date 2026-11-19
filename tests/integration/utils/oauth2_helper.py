@@ -220,7 +220,7 @@ def create_owner_client(
     trust_type: str = "mcp_client",
     scope: str = "mcp",
 ) -> OAuth2TestHelper:
-    """An actor and an OAuth2 client its owner created for it (3.16: an
+    """An actor and an OAuth2 client its owner created for it (4.0: an
     anonymously registered client may not use ``client_credentials``), with
     a ``client_credentials`` token bound to that actor.
 

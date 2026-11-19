@@ -923,7 +923,7 @@ class TestReceiver:
             "spanned": True,
             "bytes": 9,
         }
-        # Since 3.16 a reference makes the replica out of step: the
+        # Since 4.0 a reference makes the replica out of step: the
         # subscription's replica is rebuilt from a baseline.
         with caplog.at_level(logging.WARNING, logger="actingweb.remote_storage"):
             result = rps.apply_callback_data({NAME: ref})

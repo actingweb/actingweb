@@ -1,4 +1,4 @@
-"""Resumable deletion over HTTP and under ``with_unique_creator()`` (3.16).
+"""Resumable deletion over HTTP and under ``with_unique_creator()`` (4.0).
 
 A ``DELETE /<id>`` whose wipe stopped part-way answers 503 and is finished by
 its retry; a re-sign-up after a stalled wipe finishes it and creates the new

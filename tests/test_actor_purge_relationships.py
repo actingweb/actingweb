@@ -1,4 +1,4 @@
-"""``Actor.purge_relationships`` and ``notify_peers=False`` (3.16).
+"""``Actor.purge_relationships`` and ``notify_peers=False`` (4.0).
 
 An actor nobody vouched for may hold relationships whose peer URLs were chosen
 by whoever created it, so adopting it must not call them.

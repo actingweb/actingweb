@@ -86,7 +86,7 @@ class PropertyStore:
 
     def _previous(self, key: str | None) -> Any:
         """What ``key`` holds before a write (all properties for None), read
-        only when a resource-level subscriber needs it (3.16)."""
+        only when a resource-level subscriber needs it (4.0)."""
         if not self._actor or not hasattr(
             self._actor, "previous_for_resource_subscribers"
         ):
@@ -106,7 +106,7 @@ class PropertyStore:
             return
 
         try:
-            # None is a delete: the encoded ``""`` every writer sends (3.16;
+            # None is a delete: the encoded ``""`` every writer sends (4.0;
             # a raw ``""`` was dropped before it reached a subscriber).
             blob = json.dumps(value if value is not None else "")
             kwargs: dict[str, Any] = {}
@@ -230,7 +230,7 @@ class PropertyStore:
 
     def clear(self) -> None:
         """Clear all properties: one diff carrying every deleted name, then
-        the deletes (3.16, specification 1.5; a diff per name and a second,
+        the deletes (4.0, specification 1.5; a diff per name and a second,
         empty, registration before). Lists are not properties here and stay.
 
         The diff is registered from a snapshot of the names before anything
@@ -639,7 +639,7 @@ class NotifyingListProperty:
         ListProperty.repair_keys(). Registers a "metadata" diff, as
         compact() does, since a removed duplicate changes the list."""
         report = self._list_prop.repair_keys()
-        # Items may be gone: a reference, so subscribers rebuild (3.16; a
+        # Items may be gone: a reference, so subscribers rebuild (4.0; a
         # plain metadata diff left them holding the removed duplicates).
         self._register_diff("metadata", spanned_bytes=0)
         return report

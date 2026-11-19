@@ -521,13 +521,13 @@ class Properties:
         names = list(db.get_prefix(actor_id=aux, prefix="list:", keys_only=True))
         if not names:
             return  # the common case: no spanned or keyed item, no extra read
-        # An actor id with "$" is refused since 3.16, but a consumer could
+        # An actor id with "$" is refused since 4.0, but a consumer could
         # have created "{id}$aux" before then: that partition is another
         # actor's own properties, never this actor's side partition.
         if get_actor(self.config).get(actor_id=aux) is not None:
             logger.error(
                 "Not sweeping partition %r after deleting actor %s: an actor "
-                "with that id exists (created before 3.16 refused '$' in "
+                "with that id exists (created before 4.0 refused '$' in "
                 "actor ids). Any spanned-item rows of %s are left for "
                 "actingweb-verify-orphans to report.",
                 aux,

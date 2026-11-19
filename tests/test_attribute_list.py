@@ -3,7 +3,7 @@
 in-memory attribute backend of ``tests/mcp_token_double.py``.
 
 Old-layout rows (``list:{name}:meta`` / ``list:{name}:{index}``) are planted
-the way pre-3.16 code wrote them: the item itself as the attribute's data,
+the way pre-4.0 code wrote them: the item itself as the attribute's data,
 and a metadata object with ``length``.
 """
 
@@ -440,7 +440,7 @@ class TestConversion:
         assert _rows(store) == before
 
     def test_rows_above_the_recorded_length_are_leftovers(self, env):
-        """A crashed pre-3.16 append wrote its row before the length: the old
+        """A crashed pre-4.0 append wrote its row before the length: the old
         readers ignore it, the conversion ignores it and sweeps it."""
         config, store = env
         _plant_old(store, "notes", _OLD_ITEMS, length=2)
@@ -477,7 +477,7 @@ class TestConversion:
 
     def test_a_stale_instance_meets_a_pre_316_write_after_the_conversion(self, env):
         """An instance that read the old layout must not re-convert a list
-        another converter finished, after a pre-3.16 writer wrote to it."""
+        another converter finished, after a pre-4.0 writer wrote to it."""
         config, store = env
         _plant_old(store, "notes", _OLD_ITEMS)
         stale = _lst(config)
@@ -540,7 +540,7 @@ def _converted(config: Any, store: MemoryStore) -> None:
 
 
 _OLD_WRITERS = {
-    # What pre-3.16 code writes beside a converted list.
+    # What pre-4.0 code writes beside a converted list.
     "append": lambda rows: rows.update(
         {
             "list:notes:0": {"data": "late"},

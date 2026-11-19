@@ -1086,7 +1086,7 @@ def test_wg19_trust_hooks(wire_pair):
 
 def test_a_wildcard_hook_receives_the_path_it_always_has(wire_pair):
     """Not a recording: what a ``*`` property hook receives as ``path`` on
-    each route, as before 3.16 (a consumer's guard reads the name from it;
+    each route, as before 4.0 (a consumer's guard reads the name from it;
     the plan keeps it, so a later edit cannot "clean up" the doubled name
     unnoticed)."""
     s = _world(wire_pair, subscribe=False)

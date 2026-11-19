@@ -133,7 +133,7 @@ def test_purge_fault_does_not_fail_the_grant(env: Any) -> None:
 
 
 def test_a_redirect_uri_with_a_user_name_is_refused(env: Any) -> None:
-    """3.16 (verification 2026-11-10, Issue 5): ``https://claude.ai@evil.test``
+    """4.0 (verification 2026-11-10, Issue 5): ``https://claude.ai@evil.test``
     reads as claude.ai on a confirmation page while the code goes to evil.test."""
     server, _ = env
     for uri in ("https://claude.ai@evil.test/cb", "https://u:p@evil.test/cb"):

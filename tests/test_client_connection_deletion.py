@@ -1,4 +1,4 @@
-"""Deleting a connection to an OAuth2 client ends that connection only (3.16).
+"""Deleting a connection to an OAuth2 client ends that connection only (4.0).
 
 Audit 2026-11-04 (thoughts/research/2026-11-04-client-deletion-lifecycle-audit.md):
 ``Trust.delete`` on any actor's client row deleted the client itself, and

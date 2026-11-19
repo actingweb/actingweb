@@ -7,6 +7,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from .constants import REFRESH_TOKEN_GRACE_DEFAULT
+from .migration_guide import guide_section
 from .property_list_span import (
     default_limits,
     validate_limit_pair,
@@ -49,28 +50,27 @@ def _validated_host_setting(name: str, value: Any, env_var: str) -> str:
 
 
 LEGACY_LOOKUP_REMOVED = (
-    "{what}: the legacy property-index reverse lookup was removed in 3.16; "
+    "{what}: the legacy property-index reverse lookup was removed in 4.0; "
     "reverse lookup always uses the lookup table. Remove the setting, run "
     "'actingweb-property-lookup backfill --apply' if the lookup table was "
-    "never populated, and see docs/migration/v3.16.rst "
-    '"One reverse-lookup mechanism".'
+    "never populated, and see " + guide_section("One reverse-lookup mechanism") + "."
 )
 
 
 FANOUT_REMOVED = (
     "{what}: FanOutManager and its settings (max_payload_for_high_granularity, "
     "circuit_breaker_threshold, circuit_breaker_cooldown) were removed in "
-    "3.16; they were never on the publish path. Callbacks are sent by the "
+    "4.0; they were never on the publish path. Callbacks are sent by the "
     "library's sender, bounded by max_concurrent_callbacks. Remove the "
-    'setting or import, and see docs/migration/v3.16.rst "Callback delivery".'
+    "setting or import, and see " + guide_section("Callback delivery") + "."
 )
 
 
 CALLBACK_OAUTH_REMOVED = (
     "actingweb.handlers.callback_oauth: CallbackOauthHandler was removed in "
-    "3.16; neither integration routed it. The OAuth2 callback is served at "
+    "4.0; neither integration routed it. The OAuth2 callback is served at "
     "/oauth/callback by integrate_flask and integrate_fastapi: remove the "
-    'import, and see docs/migration/v3.16.rst "Removed: CallbackOauthHandler".'
+    "import, and see " + guide_section("Removed: CallbackOauthHandler") + "."
 )
 
 
@@ -89,7 +89,7 @@ def _handle_removed_lookup_switch(what: str, enabled: bool) -> None:
 
     warnings.warn(
         f"{what} is ignored: the lookup table is the only reverse-lookup "
-        "mechanism since 3.16. Remove the setting.",
+        "mechanism since 4.0. Remove the setting.",
         DeprecationWarning,
         stacklevel=3,
     )
@@ -148,9 +148,9 @@ class Config:
         # Property lookup configuration (backward compatible defaults)
         #########
         self.indexed_properties: list[str] = ["oauthId", "email", "externalUserId"]
-        # Reverse lookup always goes through the lookup table (since 3.16 the
-        # legacy GSI and the use_lookup_table switch are gone; see
-        # docs/migration/v3.16.rst "One reverse-lookup mechanism").
+        # Reverse lookup always goes through the lookup table (since 4.0 the
+        # legacy GSI and the use_lookup_table switch are gone; see the
+        # migration guide, "One reverse-lookup mechanism").
         #########
         # Peer profile caching configuration
         #########
@@ -353,8 +353,8 @@ class Config:
             ("admin", "trust", "", "a"),
             # A peer reads, clears and ends its own subscription (owner: the
             # caller is the peer the path names). Creating one is its
-            # relationship's rows' (3.16: this row never admitted creation).
-            # Listing its own (GET subscriptions/<id>), as before 3.16.
+            # relationship's rows' (4.0: this row never admitted creation).
+            # Listing its own (GET subscriptions/<id>), as before 4.0.
             ("owner", "subscriptions/<id>", "GET", "a"),
             ("owner", "subscriptions/<id>/<subid>", "GET,PUT,DELETE", "a"),
             # Owner can create subscriptions
@@ -448,7 +448,7 @@ class Config:
         # ActingWeb settings for this app
         #########
         # This app follows the actingweb specification specified
-        # The specification version this library conforms to (3.16: it
+        # The specification version this library conforms to (4.0: it
         # announced 1.0).
         self.aw_version = "1.5"
 
@@ -554,7 +554,7 @@ class Config:
         ``onewaytrust``, ``callbackcompression``, ``proxy``,
         ``subscriptionbatch`` and the subscription health tags are never
         advertised (no route or no support; ``subscriptionbatch`` was
-        advertised until 3.16 and is defined nowhere).
+        advertised until 4.0 and is defined nowhere).
         """
         options = [
             "callbacks",
@@ -575,7 +575,7 @@ class Config:
             options.append("trustpermissions")
         if getattr(self, "mcp", False):
             options.append("mcp")
-        # Both endpoints are always served (3.16; they were advertised only
+        # Both endpoints are always served (4.0; they were advertised only
         # with peer permission caching): permissioncallback receives
         # permission change notifications at /callbacks/permissions/{peer_id},
         # permissionquery answers GET /{actor_id}/permissions/{peer_id}.
@@ -590,5 +590,5 @@ class Config:
         return ",".join(self._supported_options())
 
     def update_supported_options(self) -> None:
-        """No-op since 3.16: ``aw_supported`` is computed from the
+        """No-op since 4.0: ``aw_supported`` is computed from the
         configuration on every read. Kept for callers of the old method."""

@@ -19,6 +19,8 @@ the ``actingweb-unique-creators`` command; each of them imports them from here.
 
 import hashlib
 
+from ..migration_guide import guide_section
+
 EXEMPT_CREATORS = frozenset({"trustee", "creator", ""})
 DUP_MARKER = "#dup-"
 RESERVED_PREFIX = "#"
@@ -39,7 +41,7 @@ def missing_enforcement_message(what: str) -> str:
         f"Creator uniqueness is on but {what}, so the actor write was "
         "refused. Run `actingweb-unique-creators enable --apply`, or call "
         "`ActingWebApp.check_ready()` before creating actors; see "
-        "docs/migration/v3.16.rst, 'Creator uniqueness'."
+        f"{guide_section('Creator uniqueness')}."
     )
 
 

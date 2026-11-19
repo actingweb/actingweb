@@ -1,6 +1,6 @@
 """Guard: no broad ``except`` in the library folds a database fault by accident.
 
-The fault contract (3.16) makes a backend fault raise ``DbError`` and has the
+The fault contract (4.0) makes a backend fault raise ``DbError`` and has the
 integrations answer it with 503. A broad handler (``except:``,
 ``except Exception``, ``except BaseException`` or a tuple containing one)
 catches ``DbError`` too and can turn it into absence, success or "allowed".

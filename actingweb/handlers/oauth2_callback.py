@@ -207,6 +207,63 @@ class OAuth2CallbackHandler(BaseHandler):
         self.response.set_redirect(deep_url)
         return {"redirect_required": True, "redirect_url": deep_url}
 
+    def _decided_client_trust_type(
+        self,
+        actor_interface: Any,
+        trust_type: str,
+        *,
+        email: str | None,
+        provider: str | None,
+    ) -> str | None:
+        """The trust type a sign-in that names ``trust_type`` in its state
+        gets, or None (no trust is created; the sign-in itself goes on).
+
+        Re-checked against the client list (a state built before a list
+        change, or by hand, creates no trust the list does not offer), then
+        the application's ``oauth2_trust_requested`` hooks decide, as on the
+        OAuth2 server's paths (4.0): a hook that declines, raises or names
+        another type means no trust. There is no confirmation page on this
+        path, so ``confirmed`` is False and no other level can be shown.
+        """
+        from ..permission_integration import client_trust_type_acceptable
+
+        if not client_trust_type_acceptable(self.config, trust_type):
+            logger.warning(
+                f"Sign-in asked for trust_type {trust_type!r}, which is not "
+                "offered to clients; no trust created"
+            )
+            return None
+        hooks = self.hooks or getattr(self.config, "_hooks", None)
+        if hooks is None:
+            return trust_type
+        decided = hooks.decide_oauth2_trust(
+            actor_interface,
+            trust_type,
+            self.config,
+            client_id=None,
+            client_name=None,
+            redirect_uri=None,
+            provider=provider,
+            email=email,
+            confirmed=False,
+        )
+        if not decided:
+            logger.warning(
+                f"oauth2_trust_requested declined trust_type {trust_type!r} on "
+                "sign-in; no trust created"
+            )
+            return None
+        if str(decided) != trust_type:
+            # No page shows the user another level here, so another answer
+            # declines, as at the OAuth2 server's Approve (owner, 2026-11-18).
+            logger.warning(
+                f"oauth2_trust_requested answered {decided!r} for trust_type "
+                f"{trust_type!r} on sign-in, which shows no confirmation; "
+                "no trust created"
+            )
+            return None
+        return trust_type
+
     def get(self) -> dict[str, Any]:
         """
         Handle GET request to /oauth/callback from OAuth2 provider.
@@ -662,61 +719,59 @@ class OAuth2CallbackHandler(BaseHandler):
             f"About to check trust_type for relationship creation: trust_type='{trust_type}'"
         )
         if trust_type:
-            # Re-checked here: a state built before a list change, or by hand,
-            # creates no trust the client list does not offer (3.16).
-            from ..permission_integration import client_trust_type_acceptable
+            from actingweb.interface.actor_interface import ActorInterface
 
-            if not client_trust_type_acceptable(self.config, str(trust_type)):
-                logger.warning(
-                    f"SPA sign-in asked for trust_type {trust_type!r}, which is not "
-                    "offered to clients; no trust created"
-                )
-                trust_type = None
-        if trust_type:
-            logger.info(
-                f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'"
+            registry = getattr(self.config, "service_registry", None)
+            actor_interface = ActorInterface(
+                core_actor=actor_instance, service_registry=registry
             )
-            try:
-                from actingweb.interface.actor_interface import ActorInterface
-
-                registry = getattr(self.config, "service_registry", None)
-                actor_interface = ActorInterface(
-                    core_actor=actor_instance, service_registry=registry
+            trust_type = self._decided_client_trust_type(
+                actor_interface,
+                str(trust_type),
+                email=identifier,
+                provider=state_extras.get("provider")
+                or getattr(self.config, "oauth2_provider", None),
+            )
+            if trust_type:
+                logger.info(
+                    f"Creating trust relationship for trust_type='{trust_type}' and identifier='{identifier}'"
                 )
+                try:
+                    # Prepare OAuth tokens for secure storage
+                    oauth_tokens = {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "expires_at": int(time.time()) + expires_in
+                        if expires_in
+                        else 0,
+                        "token_type": token_data.get("token_type", "Bearer"),
+                    }
 
-                # Prepare OAuth tokens for secure storage
-                oauth_tokens = {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "expires_at": int(time.time()) + expires_in if expires_in else 0,
-                    "token_type": token_data.get("token_type", "Bearer"),
-                }
-
-                # Create trust relationship with automatic approval and client metadata
-                trust_created = create_oauth2_trust_relationship(
-                    actor_interface,
-                    identifier,
-                    trust_type,
-                    oauth_tokens,
-                    client_name=client_name,
-                    client_version=client_version,
-                    client_platform=client_platform,
-                )
-
-                if trust_created:
-                    logger.info(
-                        f"Successfully created trust relationship: {identifier} -> {trust_type}"
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to create trust relationship for {identifier} with type {trust_type}"
+                    # Create trust relationship with automatic approval and client metadata
+                    trust_created = create_oauth2_trust_relationship(
+                        actor_interface,
+                        identifier,
+                        trust_type,
+                        oauth_tokens,
+                        client_name=client_name,
+                        client_version=client_version,
+                        client_platform=client_platform,
                     )
 
-            except DbError:
-                raise
-            except Exception as e:
-                logger.error(f"Error creating OAuth2 trust relationship: {e}")
-                # Don't fail the OAuth flow - just log the error
+                    if trust_created:
+                        logger.info(
+                            f"Successfully created trust relationship: {identifier} -> {trust_type}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to create trust relationship for {identifier} with type {trust_type}"
+                        )
+
+                except DbError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error creating OAuth2 trust relationship: {e}")
+                    # Don't fail the OAuth flow - just log the error
 
         # Set up successful response
         # Use return_path from state for SPA mode (defaults to /app), /www or /app for traditional mode
@@ -1310,8 +1365,17 @@ class OAuth2CallbackHandler(BaseHandler):
             spa_access_token, actor_id_str, identifier, chain_id=chain_id
         )
 
-        spa_refresh_token = session_manager.create_refresh_token(
-            actor_id_str, identifier, chain_id=chain_id
+        # A refresh token only where this redirect hands one out (the
+        # ``hybrid`` cookie): fetching the pending session never returns
+        # one, so with ``json`` or ``cookie`` delivery it would be a live
+        # token nobody holds (4.0).
+        token_delivery = state_extras.get("token_delivery", "json")
+        spa_refresh_token = (
+            session_manager.create_refresh_token(
+                actor_id_str, identifier, chain_id=chain_id
+            )
+            if token_delivery == "hybrid"
+            else None
         )
 
         # Build return path
@@ -1326,7 +1390,6 @@ class OAuth2CallbackHandler(BaseHandler):
         pending_session_id = session_manager.store_session(
             token_data={
                 "access_token": spa_access_token,
-                "refresh_token": spa_refresh_token,
                 "actor_id": actor_id_str,
                 "email": identifier,
                 "expires_at": int(time.time()) + 3600,
@@ -1340,8 +1403,7 @@ class OAuth2CallbackHandler(BaseHandler):
         )
 
         # Set HttpOnly cookie for refresh token (hybrid mode)
-        token_delivery = state_extras.get("token_delivery", "json")
-        if token_delivery == "hybrid" and self.response:
+        if spa_refresh_token and self.response:
             from .oauth2_spa import set_refresh_cookie
 
             set_refresh_cookie(
@@ -1481,7 +1543,7 @@ class OAuth2AppleCallbackHandler(OAuth2CallbackHandler):
         """Complete an LLM-triggered (MCP) Apple flow via the MCP OAuth2 server."""
         if not code:
             return self.error_response(400, "Missing authorization code")
-        # The same completion as the GET callback (3.16): the browser's nonce
+        # The same completion as the GET callback (4.0): the browser's nonce
         # cookie, the decision hook, and the confirmation page when the
         # sign-in is not bound to the browser that showed the form.
         from .oauth2_endpoints import FORM_NONCE_COOKIE, OAuth2EndpointsHandler

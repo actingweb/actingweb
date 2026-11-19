@@ -29,7 +29,7 @@ _revocation_pool_lock = threading.Lock()
 
 def _forget_revocation_pool() -> None:
     """In a forked child the parent's pool threads do not exist: start a
-    new pool on first use (3.16)."""
+    new pool on first use (4.0)."""
     global _revocation_pool, _revocation_pool_lock
     _revocation_pool = None
     _revocation_pool_lock = threading.Lock()
@@ -40,7 +40,7 @@ if hasattr(os, "register_at_fork"):
 
 
 def _revocation_executor() -> ThreadPoolExecutor:
-    """The threads ``sync_peer_async`` deletes a revoked trust on (3.16):
+    """The threads ``sync_peer_async`` deletes a revoked trust on (4.0):
     apart from the event loop's default executor, which the ``trust_deleted``
     hooks it waits on may need."""
     global _revocation_pool
@@ -184,7 +184,7 @@ def _subtarget_value(response: Any, proxy: Any, subtarget: str) -> Any:
     stores as nothing); a body that is not JSON is the property's text only
     when the publisher itself answered (no redirect followed) as
     ``text/plain`` (specification 1.5) or ``application/json`` (a publisher
-    before 3.16), otherwise it is a failed fetch (None: a login page behind
+    before 4.0), otherwise it is a failed fetch (None: a login page behind
     a proxy is not the value); anything else as parsed."""
     if response != {}:
         return response
@@ -210,7 +210,7 @@ def rebuilds_for(config: Any, target: str | None) -> bool:
     do: a replica to replace (``auto_storage``), or a data hook that hears
     the baseline (one for the target, or ``"*"``). The behind poll, an owed
     rebuild on a poll and an owed rebuild on a callback all ask this, so a
-    rebuild one of them owes is run by one that tells (3.16)."""
+    rebuild one of them owes is run by one that tells (4.0)."""
     if config.auto_storage:
         return True
     hooks = getattr(config, "subscription_data_hooks", None) or {}
@@ -220,7 +220,7 @@ def rebuilds_for(config: Any, target: str | None) -> bool:
 def _publisher_sequence(response: dict[str, Any]) -> int:
     """The sequence a publisher's ``/subscriptions`` answer carries, or 0
     when it is not an integer (``null``, text, a boolean, ``NaN``): such an
-    answer is neither recorded nor compared (3.16)."""
+    answer is neither recorded nor compared (4.0)."""
     sequence = response.get("sequence", 0)
     if not isinstance(sequence, int) or isinstance(sequence, bool):
         return 0
@@ -240,7 +240,7 @@ def sweep_after_baseline(
     owed: list[str],
 ) -> None:
     """Delete from a replica what a baseline no longer carries, in the
-    subscription's scope (3.16): at target level every replica name it lacks
+    subscription's scope (4.0): at target level every replica name it lacks
     (properties only, and only when no subscription to another target of the
     peer stores into the same bucket), at subtarget level the subtarget, and
     each list recorded as out of step that it lacks. A skipped apply (a
@@ -278,7 +278,7 @@ def sweep_after_baseline(
 
 def _baseline_failed(response: Any, proxy: Any) -> bool:
     """Whether a target-level baseline fetch failed, decided from the wire
-    (the status and a redirect), not from the body (3.16: a body with a
+    (the status and a redirect), not from the body (4.0: a body with a
     property named ``error`` was read as a failed fetch). A proxy whose
     status is not a number (a test double) is judged by the body as before.
     """
@@ -341,13 +341,13 @@ class SubscriptionSyncResult:
     # picks the rest up.
     in_flight: bool = False
     # A rebuild that settled: the baseline it applied, for a caller that
-    # tells the application's hooks (3.16, verification B1).
+    # tells the application's hooks (4.0, verification B1).
     baseline: Any = None
     # The subscription's target and subtarget, set with ``baseline``.
     target: str | None = None
     subtarget: str | None = None
     # True when the rebuild stored nothing because another subscription's
-    # replica covers this one: a poll does not tell ``baseline`` (3.16).
+    # replica covers this one: a poll does not tell ``baseline`` (4.0).
     baseline_skipped: bool = False
 
 
@@ -446,7 +446,7 @@ class SubscriptionManager:
         return [sub for sub in self.all_subscriptions if not sub.is_callback]
 
     def get_subscriptions_by_peer(self) -> dict[str, PeerSubscriptions]:
-        """Every subscription of the actor, grouped by peer id (3.16).
+        """Every subscription of the actor, grouped by peer id (4.0).
 
         One subscription read for the whole map. A peer with no subscription
         has no key. A read fault raises ``DbError``, as the other accessors
@@ -558,7 +558,7 @@ class SubscriptionManager:
         )
         if subtarget and transformed_data == {subtarget: ""}:
             # Not there yet: at a first subscription nothing is stored to
-            # delete, so no baseline, as before 3.16.
+            # delete, so no baseline, as before 4.0.
             transformed_data = None
 
         if (
@@ -733,7 +733,7 @@ class SubscriptionManager:
         subscriber at resource level is sent it. A subscriber above it
         applies what it is sent as the subtarget's whole value, so for
         ``target="properties"`` it is sent the subtarget's value as stored
-        when this is called (3.16; less what its grant excludes): write the
+        when this is called (4.0; less what its grant excludes): write the
         property first, then notify. The store is read only when such a
         subscriber exists; a subtarget it does not hold (a list's name
         included) sends ``{resource: data}``, as before. For another target
@@ -1120,7 +1120,7 @@ class SubscriptionManager:
             True if suspended, False otherwise
 
         Raises:
-            DbError: the suspension could not be read (3.16; it answered
+            DbError: the suspension could not be read (4.0; it answered
                 False before). In a background job, catch it and retry; do
                 not treat it as "not suspended".
         """
@@ -1163,7 +1163,7 @@ class SubscriptionManager:
     @staticmethod
     def _probed_secret(proxy: Any) -> str | None:
         """The secret of the trust row the revocation probe was sent with:
-        the row the cleanup may delete (3.16)."""
+        the row the cleanup may delete (4.0)."""
         secret = str((getattr(proxy, "trust", None) or {}).get("secret") or "")
         return secret or None
 
@@ -1220,7 +1220,7 @@ class SubscriptionManager:
         """The configuration a poll or a rebuild runs with: the one passed,
         else the application's (``with_subscription_processing()``), else
         the defaults. A poll called without one used the defaults
-        (``auto_storage`` on) whatever the application configured (3.16)."""
+        (``auto_storage`` on) whatever the application configured (4.0)."""
         from ..subscription_config import SubscriptionProcessingConfig
 
         if config is not None:
@@ -1252,7 +1252,7 @@ class SubscriptionManager:
     ) -> None:
         """A poll that replaced the replica from a baseline tells the
         application's data hooks once, with the baseline, the sequence
-        recorded and ``"resync"`` (3.16). Called where the poll returns, on
+        recorded and ``"resync"`` (4.0). Called where the poll returns, on
         the caller's thread and loop: a coroutine hook of the async poll is
         scheduled there, as for a polled diff. Not the legacy
         ``subscription`` callback hook, which no poll path tells."""
@@ -1369,7 +1369,7 @@ class SubscriptionManager:
         if self._rebuild_owed_and_due(
             peer_id, subscription_id, config, target=sub.target
         ):
-            # An owed rebuild waits for no further traffic (3.16): a sync runs
+            # An owed rebuild waits for no further traffic (4.0): a sync runs
             # it instead of applying retained diffs to a stale replica.
             return self.rebuild_subscription(peer_id, subscription_id, config=config)
 
@@ -1479,7 +1479,7 @@ class SubscriptionManager:
                 )
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
-                # value, 3.16)
+                # value, 4.0)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -1609,7 +1609,7 @@ class SubscriptionManager:
                     )
                     cb.out_of_step = applied.out_of_step
             # The application's data hooks, as a pushed callback runs them
-            # (3.16: a poll, a gap resync's included, ran none).
+            # (4.0: a poll, a gap resync's included, ran none).
             if not (
                 sub.target == "properties"
                 and not sub.subtarget
@@ -1638,7 +1638,7 @@ class SubscriptionManager:
             for diff in diffs:
                 if diff.get("type") == "resync" and rebuilds_for(config, sub.target):
                     # A resync marker (a ``none`` subscription's resume, or
-                    # a client's): handled as a resync, by a rebuild (3.16).
+                    # a client's): handled as a resync, by a rebuild (4.0).
                     marker_seen = True
                     break
                 seq = diff.get("sequence", 0)
@@ -1665,13 +1665,13 @@ class SubscriptionManager:
                     # Owed from before, and nothing a poll can tell would
                     # hear it (no replica, no data hook): left owed for the
                     # next callback, which runs it for the legacy hook, or
-                    # drops it when nobody hears (3.16).
+                    # drops it when nobody hears (4.0).
                     result = ProcessResult.PROCESSED
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
                     # the rest of its batch: stop, the rebuild replaces it.
                     # Its baseline is told: the diffs after this one were
-                    # never run, and the rebuild clears them (3.16).
+                    # never run, and the rebuild clears them (4.0).
                     rebuild_needed = True
                     break
 
@@ -1685,7 +1685,7 @@ class SubscriptionManager:
             for diff in diffs:
                 if diff.get("type") == "resync" and rebuilds_for(config, sub.target):
                     # A resync marker (a ``none`` subscription's resume, or
-                    # a client's): handled as a resync, by a rebuild (3.16).
+                    # a client's): handled as a resync, by a rebuild (4.0).
                     marker_seen = True
                     break
                 seq = diff.get("sequence", 0)
@@ -1743,7 +1743,7 @@ class SubscriptionManager:
             )
 
             # Through the shared fetch: a subtarget's list, value, gone and
-            # failure are told apart as everywhere else (3.16).
+            # failure are told apart as everywhere else (4.0).
             transformed_data = self._fetch_and_transform_baseline(
                 peer_id=peer_id,
                 target=sub.target,
@@ -2202,7 +2202,7 @@ class SubscriptionManager:
                     )
                 finally:
                     # The deletes went to storage, not through the core
-                    # actor: its memo would keep the deleted rows (3.16).
+                    # actor: its memo would keep the deleted rows (4.0).
                     self._core_actor.subs_list = None
             elif state == "unknown":
                 logger.warning(
@@ -2217,7 +2217,7 @@ class SubscriptionManager:
                 try:
                     # trust_deleted fires through TrustManager.fire_deleted,
                     # with the row the delete read, after the delete found it
-                    # and before anything local goes (3.16): a row already
+                    # and before anything local goes (4.0): a row already
                     # gone fires nothing (it fired with {} and "friend").
                     from .actor_interface import ActorInterface
 
@@ -2229,7 +2229,7 @@ class SubscriptionManager:
 
                     # Delete local trust relationship without notifying peer
                     # (already revoked): only the row the probe used, so a
-                    # re-pair meanwhile keeps its row (3.16).
+                    # re-pair meanwhile keeps its row (4.0).
                     deleted = self._core_actor.delete_reciprocal_trust(
                         peerid=peer_id,
                         delete_peer=False,
@@ -2515,7 +2515,7 @@ class SubscriptionManager:
                 )
             if transformed_data is not None if sub.subtarget else transformed_data:
                 # Store baseline data (a single property's falsy value is a
-                # value, 3.16)
+                # value, 4.0)
                 from ..remote_storage import RemotePeerStore
                 from .actor_interface import ActorInterface
 
@@ -2642,7 +2642,7 @@ class SubscriptionManager:
                     )
                     cb.out_of_step = applied.out_of_step
             # The application's data hooks, as a pushed callback runs them
-            # (3.16: a poll, a gap resync's included, ran none).
+            # (4.0: a poll, a gap resync's included, ran none).
             if not (
                 sub.target == "properties"
                 and not sub.subtarget
@@ -2670,7 +2670,7 @@ class SubscriptionManager:
             for diff in diffs:
                 if diff.get("type") == "resync" and rebuilds_for(config, sub.target):
                     # A resync marker (a ``none`` subscription's resume, or
-                    # a client's): handled as a resync, by a rebuild (3.16).
+                    # a client's): handled as a resync, by a rebuild (4.0).
                     marker_seen = True
                     break
                 seq = diff.get("sequence", 0)
@@ -2697,13 +2697,13 @@ class SubscriptionManager:
                     # Owed from before, and nothing a poll can tell would
                     # hear it (no replica, no data hook): left owed for the
                     # next callback, which runs it for the legacy hook, or
-                    # drops it when nobody hears (3.16).
+                    # drops it when nobody hears (4.0).
                     result = ProcessResult.PROCESSED
                 if result == ProcessResult.REBUILD:
                     # The processor advanced through this diff and dropped
                     # the rest of its batch: stop, the rebuild replaces it.
                     # Its baseline is told: the diffs after this one were
-                    # never run, and the rebuild clears them (3.16).
+                    # never run, and the rebuild clears them (4.0).
                     rebuild_needed = True
                     break
 
@@ -2716,7 +2716,7 @@ class SubscriptionManager:
             for diff in diffs:
                 if diff.get("type") == "resync" and rebuilds_for(config, sub.target):
                     # A resync marker (a ``none`` subscription's resume, or
-                    # a client's): handled as a resync, by a rebuild (3.16).
+                    # a client's): handled as a resync, by a rebuild (4.0).
                     marker_seen = True
                     break
                 seq = diff.get("sequence", 0)
@@ -2929,7 +2929,7 @@ class SubscriptionManager:
         (fetch the baseline, apply, sweep, record the sequence, clear the
         publisher's diffs up to it). The marker is cleared only by a rebuild
         that succeeded; a failed fetch leaves it queued and the rebuild owed,
-        so the next poll tries again (3.16, specification 1.5)."""
+        so the next poll tries again (4.0, specification 1.5)."""
         from ..callback_processor import CallbackProcessor
         from .actor_interface import ActorInterface
 
@@ -3277,7 +3277,7 @@ class SubscriptionManager:
 
         if target == "properties" and subtarget and not resource:
             # A single property's baseline, told apart by facts on the wire
-            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # (4.0): 404 is gone; any other non-2xx, or no answer, a failed
             # fetch; a 2xx body is the value (the spec's properties are
             # untyped: an empty body or ``{}`` is empty, text is text), and
             # an array is a list's items only when the spec's metadata route
@@ -3327,7 +3327,7 @@ class SubscriptionManager:
             and getattr(proxy, "last_response_redirected", False) is not True
         ):
             # A resource that is gone is an empty value, not a failed fetch
-            # (3.16): the replica deletes that path.
+            # (4.0): the replica deletes that path.
             return ""
         if _baseline_failed(baseline_response, proxy):
             logger.warning(
@@ -3336,7 +3336,7 @@ class SubscriptionManager:
             )
             return None
         if not baseline_response:
-            # An empty baseline is empty, not a failed fetch (3.16: both were
+            # An empty baseline is empty, not a failed fetch (4.0: both were
             # None, so a publisher with nothing left could never be rebuilt).
             baseline_response = {}
 
@@ -3395,7 +3395,7 @@ class SubscriptionManager:
 
         if target == "properties" and subtarget and not resource:
             # A single property's baseline, told apart by facts on the wire
-            # (3.16): 404 is gone; any other non-2xx, or no answer, a failed
+            # (4.0): 404 is gone; any other non-2xx, or no answer, a failed
             # fetch; a 2xx body is the value (the spec's properties are
             # untyped: an empty body or ``{}`` is empty, text is text), and
             # an array is a list's items only when the spec's metadata route
@@ -3447,7 +3447,7 @@ class SubscriptionManager:
             and getattr(proxy, "last_response_redirected", False) is not True
         ):
             # A resource that is gone is an empty value, not a failed fetch
-            # (3.16): the replica deletes that path.
+            # (4.0): the replica deletes that path.
             return ""
         if _baseline_failed(baseline_response, proxy):
             logger.warning(
@@ -3456,7 +3456,7 @@ class SubscriptionManager:
             )
             return None
         if not baseline_response:
-            # An empty baseline is empty, not a failed fetch (3.16: both were
+            # An empty baseline is empty, not a failed fetch (4.0: both were
             # None, so a publisher with nothing left could never be rebuilt).
             baseline_response = {}
 
@@ -3920,7 +3920,7 @@ class SubscriptionManager:
                     )
                 finally:
                     # As in the sync clean-up: the memo would keep the
-                    # deleted rows (3.16).
+                    # deleted rows (4.0).
                     self._core_actor.subs_list = None
             elif state == "unknown":
                 logger.warning(
@@ -3935,7 +3935,7 @@ class SubscriptionManager:
                 try:
                     # trust_deleted fires as in the sync twin: through
                     # TrustManager, with the row the delete read, after the
-                    # delete found it and before anything local goes (3.16; a
+                    # delete found it and before anything local goes (4.0; a
                     # row already gone fires nothing). The delete runs on a
                     # thread of its own executor, not the default one, which
                     # a coroutine hook awaited on this loop may need (its

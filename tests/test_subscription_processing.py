@@ -88,9 +88,9 @@ class TestModuleExports:
         import pytest
 
         for name in ("FanOutManager", "FanOutResult"):
-            with pytest.raises(ImportError, match="removed in 3.16"):
+            with pytest.raises(ImportError, match="removed in 4.0"):
                 getattr(importlib.import_module("actingweb.interface"), name)
-        with pytest.raises(ImportError, match="v3.16"):
+        with pytest.raises(ImportError, match="v4.0"):
             importlib.import_module("actingweb.fanout")
 
     def test_the_removed_callback_oauth_module_raises_its_pointer(self) -> None:
@@ -98,8 +98,11 @@ class TestModuleExports:
 
         import pytest
 
-        with pytest.raises(ImportError, match=r"docs/migration/v3\.16\.rst"):
+        from actingweb.migration_guide import GUIDE_URL
+
+        with pytest.raises(ImportError) as raised:
             importlib.import_module("actingweb.handlers.callback_oauth")
+        assert GUIDE_URL in str(raised.value)
         # The package no longer lists it.
         assert (
             "callback_oauth"

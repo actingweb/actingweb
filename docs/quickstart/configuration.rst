@@ -33,7 +33,7 @@ Core Identity
   startup.
 - ``proto``: URL scheme (``https://`` recommended).
 - ``version``: The application's version, served at ``/meta/version`` and in
-  the ``/meta`` object (``with_app_version("2.3.1")``, 3.16). Unset, it is the
+  the ``/meta`` object (``with_app_version("2.3.1")``, 4.0). Unset, it is the
   ActingWeb library's version, as before; the specification defines it as the
   application's, so an application should set its own.
 
@@ -43,12 +43,12 @@ Runtime Switches
 - ``ui``: Enable ``/<actor_id>/www`` web UI (``with_web_ui()``). Also affects browser redirects.
 - ``devtest``: Enable development endpoints; MUST be ``False`` in production.
 - ``www_auth``: ``basic`` or ``oauth``; set by ``with_oauth()``.
-- ``unique_creator``: One actor per creator, enforced by the database (``with_unique_creator()``; **default ``True``** since 3.16, ``with_unique_creator(False)`` opts out). DynamoDB writes a ``<prefix>_creators`` record in the same transaction as each actor create and creator change, and releases it after a delete; PostgreSQL enforces the partial unique index ``ux_actors_creator``. ``trustee``, ``creator`` and the empty creator stay shared. A second actor for a creator raises ``CreatorTaken`` (409; the factory answers 403). A deployment with existing actors runs ``actingweb-unique-creators report``, ``resolve --apply`` and ``enable --apply`` before the deploy, and a fresh one runs ``enable --apply`` after its first start: the application refuses to start until the database enforces it (``ActingWebApp.check_ready()``). Code that builds ``Config()`` and creates actors without ``integrate_*`` must call ``check_ready()`` too. Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement) for a non-exempt creator, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command. See :doc:`../migration/v3.16` ("Creator uniqueness").
-- ``force_email_prop_as_creator``: A vouched actor's ``creator`` equals its stored ``_internal`` email (``with_email_as_creator()``; default ``True`` on a bare ``Config()``, ``False`` on ``ActingWebApp`` until the builder is called). Since 3.16 a write of that email to another address renames the creator in the same atomic operation, and a load is one read of the actor row; a write of an address another actor holds raises ``CreatorTaken``. A deployment with actors runs ``actingweb-unique-creators creator-to-email --apply`` before the first start, and again after the deploy: the application refuses to start until it has (``EmailAsCreatorNotReady``; an empty store marks itself ready). Not the ``email`` property, which has not been the source since 2017. See :doc:`../migration/v3.16` ("The creator follows the stored email").
-- ``open_factory``: Whether the actor factory (``POST /``) accepts requests (``with_open_factory()``; default ``True``). ``False`` closes the factory for an OAuth-only deployment: ``POST /`` answers 403 (the JSON error body, or the error page for a form), ``trustee_root`` instantiation and the form fallback are closed with it, and so is the existing-creator form redirect (which goes to ``/login`` and names no actor id since 3.16). Sign-in through OAuth is then the only way to get an actor. A deviation from the protocol's mandatory factory; a basic-auth deployment that needs the factory form login keeps it open. A value assigned on the Config survives until ``with_open_factory()`` is called, after which the builder's value wins. "Factory" here means the actor factory (``POST /``), not the authenticator factory functions. See :doc:`../reference/security`.
+- ``unique_creator``: One actor per creator, enforced by the database (``with_unique_creator()``; **default ``True``** since 4.0, ``with_unique_creator(False)`` opts out). DynamoDB writes a ``<prefix>_creators`` record in the same transaction as each actor create and creator change, and releases it after a delete; PostgreSQL enforces the partial unique index ``ux_actors_creator``. ``trustee``, ``creator`` and the empty creator stay shared. A second actor for a creator raises ``CreatorTaken`` (409; the factory answers 403). A deployment with existing actors runs ``actingweb-unique-creators report``, ``resolve --apply`` and ``enable --apply`` before the deploy, and a fresh one runs ``enable --apply`` after its first start: the application refuses to start until the database enforces it (``ActingWebApp.check_ready()``). Code that builds ``Config()`` and creates actors without ``integrate_*`` must call ``check_ready()`` too. Without it, with uniqueness on and ``enable --apply`` not yet run, every actor create and creator change (a rename, a holder replacement) for a non-exempt creator, including the OAuth2 system actor bootstrap, raises ``DbError`` (``database error during actor create``, or ``actor modify`` and ``actor replace holder`` for the changes; 503 through the integrations, and retrying does not clear it) on both backends. Run ``actingweb-unique-creators enable --apply`` first, or call ``check_ready()``, which names the command. See :doc:`../migration/v4.0` ("Creator uniqueness").
+- ``force_email_prop_as_creator``: A vouched actor's ``creator`` equals its stored ``_internal`` email (``with_email_as_creator()``; default ``True`` on a bare ``Config()``, ``False`` on ``ActingWebApp`` until the builder is called). Since 4.0 a write of that email to another address renames the creator in the same atomic operation, and a load is one read of the actor row; a write of an address another actor holds raises ``CreatorTaken``. A deployment with actors runs ``actingweb-unique-creators creator-to-email --apply`` before the first start, and again after the deploy: the application refuses to start until it has (``EmailAsCreatorNotReady``; an empty store marks itself ready). Not the ``email`` property, which has not been the source since 2017. See :doc:`../migration/v4.0` ("The creator follows the stored email").
+- ``open_factory``: Whether the actor factory (``POST /``) accepts requests (``with_open_factory()``; default ``True``). ``False`` closes the factory for an OAuth-only deployment: ``POST /`` answers 403 (the JSON error body, or the error page for a form), ``trustee_root`` instantiation and the form fallback are closed with it, and so is the existing-creator form redirect (which goes to ``/login`` and names no actor id since 4.0). Sign-in through OAuth is then the only way to get an actor. A deviation from the protocol's mandatory factory; a basic-auth deployment that needs the factory form login keeps it open. A value assigned on the Config survives until ``with_open_factory()`` is called, after which the builder's value wins. "Factory" here means the actor factory (``POST /``), not the authenticator factory functions. See :doc:`../reference/security`.
 - ``mcp``: Include MCP capability; toggle via ``with_mcp()``.
 - ``sync_subscription_callbacks``: Wait for subscription callbacks on a running event loop too (``with_sync_callbacks()``). **Required for Lambda/serverless deployments** where tasks may be lost when the function freezes. Affects both diff callbacks and resync callbacks. Off the loop a write always waits; on a running loop the setting blocks the loop while callbacks are sent, so leave it off there. See :doc:`deployment` for details.
-- ``max_concurrent_callbacks``, ``callback_delivery_budget_seconds``, ``serialize_own_host_callbacks`` (``with_subscription_processing()``, 3.16): one write's callbacks to subscribers on other hosts are sent at most ``max_concurrent_callbacks`` at a time (default 4), subscribers on the publisher's own host one at a time unless ``serialize_own_host_callbacks=False``, and ``callback_delivery_budget_seconds`` (off by default) caps the time one request spends delivering them. ``with_callback_delivery()`` sets these three without turning on incoming subscription processing. A FastAPI deployment whose subscribers call it back through another origin sizes ``with_thread_pool_workers`` to at least the simultaneous writes times one plus the bound. ``max_payload_for_high_granularity``, ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` are removed and raise ``RuntimeError``. See :doc:`deployment`, "Callback Delivery by Deployment Shape".
+- ``max_concurrent_callbacks``, ``callback_delivery_budget_seconds``, ``serialize_own_host_callbacks`` (``with_subscription_processing()``, 4.0): one write's callbacks to subscribers on other hosts are sent at most ``max_concurrent_callbacks`` at a time (default 4), subscribers on the publisher's own host one at a time unless ``serialize_own_host_callbacks=False``, and ``callback_delivery_budget_seconds`` (off by default) caps the time one request spends delivering them. ``with_callback_delivery()`` sets these three without turning on incoming subscription processing. A FastAPI deployment whose subscribers call it back through another origin sizes ``with_thread_pool_workers`` to at least the simultaneous writes times one plus the bound. ``max_payload_for_high_granularity``, ``circuit_breaker_threshold`` and ``circuit_breaker_cooldown`` are removed and raise ``RuntimeError``. See :doc:`deployment`, "Callback Delivery by Deployment Shape".
 - ``list_item_span_threshold`` and ``list_item_max_bytes``: Property-list item size limits, in bytes of the item's encoded JSON (``with_list_item_limits(span_threshold=..., max_bytes=...)``). ``list_item_max_bytes`` is the largest item the library stores: a larger one raises ``ListItemTooLargeError`` before anything is written, and the REST handlers answer 413. ``list_item_span_threshold`` is the largest item one row holds on a backend with a row cap; an item over it is refused there as well, since the backend would reject the row. The defaults depend on the backend:
 
   .. list-table::
@@ -113,7 +113,7 @@ Configured by ``with_oauth(...)``. Common fields:
 
 - ``provider``: Provider name (``"google"`` or ``"github"``). Multiple calls with different providers configure multiple providers simultaneously.
 - ``client_id``, ``client_secret``: Provider credentials.
-- ``redirect_uri``: Defaults to ``{proto}{fqdn}/oauth/callback``, the path that handles the callback on both integrations (3.16; the default was ``{proto}{fqdn}/oauth``, which does not).
+- ``redirect_uri``: Defaults to ``{proto}{fqdn}/oauth/callback``, the path that handles the callback on both integrations (4.0; the default was ``{proto}{fqdn}/oauth``, which does not).
 - ``auth_uri``, ``token_uri``: Authorization and token endpoints.
 - ``scope``: Provider-specific scopes.
 
@@ -239,7 +239,7 @@ Other DynamoDB environment variables:
 Production (AWS DynamoDB)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``. By default (uniqueness on) the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well; a creator rename also writes the attributes table in the same transaction, so that table needs ``ConditionCheckItem``, ``PutItem`` and ``DeleteItem`` too; an application that opts out with ``with_unique_creator(False)`` needs neither (see :doc:`../migration/v3.16`, "Creator uniqueness"). With reverse lookup on (any indexed property), ``ConditionCheckItem`` is needed on the properties and actor tables whatever the uniqueness setting: an unchanged indexed write that claims a free lookup row checks both in the same transaction; and ``BatchGetItem`` is needed on ``<prefix>_property_lookup_v2``, which the startup check reads at every start (a role without it does not start). The transactions themselves need no action of their own: IAM has no ``TransactWriteItems`` action, a transaction is authorised through the item actions above and ``ConditionCheckItem``.
+- Configure IAM with least-privilege on the app's tables: ``dynamodb:GetItem``, ``PutItem``, ``UpdateItem``, ``DeleteItem``, ``Query``, ``Scan``, and ``BatchWriteItem`` on the properties table (the library deletes property rows in batches; this is not new in 4.0, the list did not name it). By default (uniqueness on) the tables include ``<prefix>_creators``, and the actor table needs ``ConditionCheckItem`` as well; a creator rename also writes the attributes table in the same transaction, so that table needs ``ConditionCheckItem``, ``PutItem`` and ``DeleteItem`` too; an application that opts out with ``with_unique_creator(False)`` needs neither (see :doc:`../migration/v4.0`, "Creator uniqueness"). With reverse lookup on (any indexed property), ``ConditionCheckItem`` is needed on the properties and actor tables whatever the uniqueness setting: an unchanged indexed write that claims a free lookup row checks both in the same transaction; and ``BatchGetItem`` is needed on ``<prefix>_property_lookup_v2``, which the startup check reads at every start (a role without it does not start). The transactions themselves need no action of their own: IAM has no ``TransactWriteItems`` action, a transaction is authorised through the item actions above and ``ConditionCheckItem``.
   With auto-creation enabled (the default) the role also needs
   ``dynamodb:CreateTable`` and ``dynamodb:DescribeTable``; with
   ``AWS_DB_AUTO_CREATE_TABLES=false`` both can be dropped (the uniqueness check reads one consistent item and needs no ``DescribeTable``).
@@ -452,7 +452,7 @@ ActingWeb supports efficient reverse lookups (find actor by property value) usin
 **How it works**
 
 Reverse lookup always goes through a dedicated lookup table (the only
-mechanism since 3.16). On DynamoDB, lookup rows are keyed by a SHA-256 digest
+mechanism since 4.0). On DynamoDB, lookup rows are keyed by a SHA-256 digest
 of the (property name, value) pair — no value-size limit, uniform partition
 distribution, and no plaintext values in the lookup table. On PostgreSQL the
 ``property_lookup`` table is keyed by ``(property_name, value)``.
@@ -499,8 +499,8 @@ environment variable, which beats the library default.
 .. note::
 
    ``USE_PROPERTY_LOOKUP_TABLE=false``, ``Config(use_lookup_table=False)`` and
-   ``with_legacy_property_index()`` were removed in 3.16 and fail at
-   configure time with a pointer to :doc:`../migration/v3.16` ("One
+   ``with_legacy_property_index()`` were removed in 4.0 and fail at
+   configure time with a pointer to :doc:`../migration/v4.0` ("One
    reverse-lookup mechanism"). ``USE_PROPERTY_LOOKUP_TABLE=true`` is ignored
    with a ``DeprecationWarning``.
 
@@ -616,7 +616,7 @@ copied into a store by a tool, not written through the library, needs
 An application that never uses reverse lookup can call
 ``with_indexed_properties([])`` instead; nothing is read at startup.
 
-See :doc:`../migration/v3.16` ("One reverse-lookup mechanism") for the full
+See :doc:`../migration/v4.0` ("One reverse-lookup mechanism") for the full
 upgrade path, including dropping the old ``property-index`` GSI and the v1
 lookup table.
 
@@ -994,7 +994,7 @@ the peer's property rules removes from the peer's replica what this actor may no
 longer read. This is useful when you're caching remote peer data via subscription
 callbacks and want to ensure that revoked data is cleaned up.
 
-**How it works (3.16):**
+**How it works (4.0):**
 
 1. When a permission callback arrives whose property rules differ from the stored
    copy, the library evaluates the **new grant as stored**, with the publisher's own
@@ -1020,7 +1020,7 @@ the replica's ``profile_private`` (a list or a scalar) is deleted, and
 - When this actor also subscribes to another target of the same peer (its data is
   stored in the same replica), only the lists matching a pattern the grant dropped,
   and that the new grant no longer lets this actor read, are deleted (as before
-  3.16), and a change that drops no pattern deletes nothing (``not_evaluated``
+  4.0), and a change that drops no pattern deletes nothing (``not_evaluated``
   says why): the property grant does not decide the other target's names, and the
   replica does not record which subscription stored a key.
 - A grant the library cannot evaluate deletes nothing (``not_evaluated`` names the
@@ -1059,7 +1059,7 @@ When handling permission callbacks, the hook data includes a ``permission_change
 
 ``permission_changes`` carries ``is_initial``, ``granted_patterns``,
 ``revoked_patterns`` (patterns that disappeared from the grant) and
-``has_revocations``. Since 3.16 it also carries ``deleted_names`` (the replica names
+``has_revocations``. Since 4.0 it also carries ``deleted_names`` (the replica names
 deleted or rewritten, empty unless ``auto_delete_on_revocation`` is on; a deletion
 caused by an exclusion or a dropped ``read`` is listed here, never in
 ``revoked_patterns``) and ``not_evaluated`` (why the grant could not be evaluated,
@@ -1121,7 +1121,7 @@ Permission Callbacks
 
 When a peer modifies permissions granted to your actor, they can send a permission
 callback to notify you immediately. This requires the ``permissioncallback`` option
-to be advertised in the peer's ``/meta/actingweb/supported`` endpoint. Since 3.16
+to be advertised in the peer's ``/meta/actingweb/supported`` endpoint. Since 4.0
 an ActingWeb actor advertises ``permissioncallback`` and ``permissionquery``
 whenever it serves the endpoints, which is always, not only with caching on.
 

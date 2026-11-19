@@ -133,7 +133,7 @@ Each rule is a tuple of ``(path, methods, access)`` where:
 relationship, an application's ``acl_rules`` first, then the built-in rows,
 and the first row whose path is a prefix of the request's and whose methods
 include **the HTTP method the request performs** admits it: a GET row never
-admits a PUT or DELETE, nor a ``GET ?_method=PUT|DELETE`` (since 3.16). The
+admits a PUT or DELETE, nor a ``GET ?_method=PUT|DELETE`` (since 4.0). The
 ``<id>``, ``<subid>`` and ``<type>`` in a path are literal templates, not
 compared with the caller. Instead, on every path that names a peer
 (``subscriptions/<id>…``, ``permissions/<id>``, ``trust/<type>/<id>``), a
@@ -344,9 +344,9 @@ pattern means:
 * Matching is linear in the pattern and the target: a pattern of many ``*``
   cannot make the evaluator hang.
 
-Before 3.16 a backslash in a permission pattern was a plain character, and the
+Before 4.0 a backslash in a permission pattern was a plain character, and the
 callbacks and peer-permission filters used ``fnmatch`` (character classes,
-platform case folding). See :doc:`../migration/v3.16` ("Permission pattern
+platform case folding). See :doc:`../migration/v4.0` ("Permission pattern
 escapes").
 
 Path Patterns
@@ -706,7 +706,7 @@ The PUT endpoint now accepts permission updates alongside traditional trust rela
 
 ``approved`` accepts ``true`` only (a JSON boolean, or the string ``"true"``
 a form sends); ``false``, ``null`` or any other value answers 400 with nothing
-changed (3.16; ``false`` was read as absent and answered 204). A trust is not
+changed (4.0; ``false`` was read as absent and answered 204). A trust is not
 un-approved by a PUT: delete it. The answers to a trust request carry
 ``approved``, ``peer_approved`` and ``verified`` as JSON booleans, as a GET
 of the row does (they were the strings ``"true"`` and ``"false"``). Both
@@ -781,7 +781,7 @@ Create or update permission overrides for a trust relationship:
    }
 
 Only the permission categories and ``notes`` are taken from the body
-(3.16). ``actor_id`` and ``peer_id`` come from the path; a new override's
+(4.0). ``actor_id`` and ``peer_id`` come from the path; a new override's
 ``trust_type`` is the path's type (checked against the trust row), an
 update keeps the stored one, and ``created_by`` is set by the API; an update
 ignores these fields when a body names them (and logs them). A category is an object (``properties`` may also be

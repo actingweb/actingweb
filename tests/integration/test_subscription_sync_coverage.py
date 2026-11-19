@@ -380,7 +380,7 @@ class TestSyncSubscriptionBaseline:
             actor=actor_interface, peer_id=self.actor_b["id"], validate_peer_id=False
         )
 
-        # B's REST item adds were queued as list diffs (3.16,
+        # B's REST item adds were queued as list diffs (4.0,
         # attribute-list-v2-port Phase 4): the sync applies the four diffs
         # (the empty list created, three appends), not a baseline, and A's
         # replica holds the list. A's subscription moved four sequences on.

@@ -235,7 +235,7 @@ def spa_cors_headers(
 
 
 #: Re-exported from :mod:`actingweb.constants` (the hybrid refresh cookie's
-#: path before 3.16).
+#: path before 4.0).
 LEGACY_REFRESH_COOKIE_PATH = _LEGACY_REFRESH_COOKIE_PATH
 
 
@@ -531,7 +531,7 @@ class OAuth2SPAHandler(BaseHandler):
         # trust_type: None = user login, "mcp_client" etc = MCP authorization
         trust_type = params.get("trust_type")  # Default None for user login
         # It is the level for an MCP client: the client list decides
-        # (3.16; any registered type, admin included, was taken).
+        # (4.0; any registered type, admin included, was taken).
         if trust_type:
             from ..permission_integration import client_trust_type_acceptable
 

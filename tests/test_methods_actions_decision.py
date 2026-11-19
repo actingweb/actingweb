@@ -1,4 +1,4 @@
-"""Methods and actions follow the one access decision (3.16, plan Phase 2).
+"""Methods and actions follow the one access decision (4.0, plan Phase 2).
 
 A stated rule (even the consumer's empty ``"methods": []``) answers and
 denies what it does not cover; a grant that does not mention the category

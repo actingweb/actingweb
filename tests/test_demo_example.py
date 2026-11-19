@@ -123,7 +123,7 @@ def test_demo_example_registers_all_shared_hook_categories():
     hooks = module.aw_app.hooks
 
     assert hooks._subscription_hooks, "subscription hook not registered"
-    # 3.16: the canonical approval hook (trust_approved is its deprecated
+    # 4.0: the canonical approval hook (trust_approved is its deprecated
     # stand-in and runs only when no canonical hook is registered).
     assert hooks._lifecycle_hooks.get("trust_fully_approved_local"), (
         "trust hook not registered"
@@ -317,7 +317,7 @@ def test_demo_qa_mode_refuses_to_be_imported_by_a_wsgi_server(
 
 
 def test_the_demo_approval_hook_runs_on_an_approval() -> None:
-    """3.16: every approving route (the web UI goes through the REST PUT)
+    """4.0: every approving route (the web UI goes through the REST PUT)
     runs the demo's hook, once, through ``TrustManager.fire_approved``."""
     from actingweb.interface.trust_manager import TrustManager
 
@@ -433,7 +433,7 @@ def test_demo_webhooks_refuse_an_authenticated_caller_without_the_secret(monkeyp
 def test_the_demo_trust_templates_render() -> None:
     """The demo ships its own trust list and dashboard: they show what both
     sides of a trust have done, the notice, and a link to the new-trust
-    form, as the library's templates do (3.16)."""
+    form, as the library's templates do (4.0)."""
     from jinja2 import Environment, FileSystemLoader
 
     env = Environment(

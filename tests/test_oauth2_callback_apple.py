@@ -297,13 +297,12 @@ class TestAppleWebFlow:
         assert webobj.response.redirect is not None
         assert "test.example.com/spa/callback" in webobj.response.redirect
         assert "session=" in webobj.response.redirect
-        # The login pair shares one chain, so either token ends the session.
+        # The access token is on the login chain; with the default ``json``
+        # delivery the redirect mints no refresh token (4.0: fetching the
+        # pending session never returned one).
         mgr = self.session_mgr
-        assert (
-            mgr.store_access_token.call_args.kwargs["chain_id"]
-            == mgr.create_refresh_token.call_args.kwargs["chain_id"]
-            == "login-chain"
-        )
+        assert mgr.store_access_token.call_args.kwargs["chain_id"] == "login-chain"
+        mgr.create_refresh_token.assert_not_called()
 
     def test_first_sign_in_user_payload_normalized_in_hook(
         self, ec_pem: str, rsa_key

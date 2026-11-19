@@ -12,7 +12,7 @@ from tests._grant_fakes import StubEvaluator
 
 def _per_path(decide):
     """``evaluate_property_access`` from a per-path decision (the stub
-    evaluator routes the filter's rule checks to it, 3.16)."""
+    evaluator routes the filter's rule checks to it, 4.0)."""
 
     def one(actor_id, peer_id, property_path, operation):
         return decide(property_path)
@@ -149,7 +149,7 @@ class TestSubscriptionPermissionFiltering:
             assert result == blob
 
             # A subtarget's diff is decided at the subtarget's path; its
-            # children are dropped only where the grant excludes them (3.16)
+            # children are dropped only where the grant excludes them (4.0)
             mock_evaluator.evaluate_property_access.assert_called_once_with(
                 "test-actor-id", "peer-123", "data_public", "read"
             )
@@ -300,7 +300,7 @@ class TestCallbackSubscriptionFiltering:
     ) -> None:
         """A subscription to another target is delivered as stored while the
         peer may still have it, and not at all once the grant no longer
-        admits it (3.16: the creation check is asked again at delivery)."""
+        admits it (4.0: the creation check is asked again at delivery)."""
         actor = Actor(config=self.mock_config)
         actor.id = "test-actor-id"
 

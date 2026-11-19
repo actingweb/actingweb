@@ -1,4 +1,4 @@
-"""The MCP path builds its actor per request (3.16).
+"""The MCP path builds its actor per request (4.0).
 
 ``thoughts/plans/2026-11-06-subs-list-cache-lifetime.md``, Phase 1. These
 tests drive ``authenticate_and_get_actor_cached`` against real storage (the
@@ -135,7 +135,7 @@ class TestWarmRequests:
     ) -> None:
         cfg.force_email_prop_as_creator = flag
         # A vouched email that differs, written past the store (no link):
-        # before 3.16 a load under the flag read _internal and renamed the
+        # before 4.0 a load under the flag read _internal and renamed the
         # creator; now no load does.
         get_attribute(cfg).set_attr(aid(actor), "_internal", "email", uuid_email())
         token = _token()

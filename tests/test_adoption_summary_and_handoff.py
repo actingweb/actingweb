@@ -435,7 +435,7 @@ class TestK4Folds:
 
 class TestTheEmailWriteRenames:
     """Under the flag the creator follows the stored email where it is
-    written (3.16), for a vouched actor only; a load reads no email."""
+    written (4.0), for a vouched actor only; a load reads no email."""
 
     def test_an_unvouched_actors_email_does_not_rename_it(self) -> None:
         config = make_config()

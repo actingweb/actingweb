@@ -44,7 +44,7 @@ async def test_async_trust_request_logs_no_secret(
     }
     dbtrust = mock.Mock()
     dbtrust.create.return_value = True
-    # No row for the peer yet (3.16: a peer with a row re-pairs instead),
+    # No row for the peer yet (4.0: a peer with a row re-pairs instead),
     # then the row just created.
     # The existence check, the created row, then the failed attempt's
     # cleanup reading the row back (it removes only its own attempt).

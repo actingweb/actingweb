@@ -263,7 +263,7 @@ class TestAcceptance3InfrastructureFailureIsNotDeleted:
         from actingweb.db.exceptions import DbError
 
         with mock.patch.object(Attribute, "get", side_effect=RuntimeError("throttled")):
-            # Only an explicit strict=False read folds it (3.16)...
+            # Only an explicit strict=False read folds it (4.0)...
             assert (
                 DbAttribute.get_attr(actor_id="a", bucket="b", name="c", strict=False)
                 is None
@@ -289,7 +289,7 @@ class TestAcceptance3InfrastructureFailureIsNotDeleted:
 
     @pytest.mark.skipif(not _is_dynamodb(), reason="DynamoDB accessor")
     def test_failed_actor_read_raises_and_folds_only_when_asked(self, caplog):
-        """Since 3.16 a fault raises DbError (the integrations answer 503); a
+        """Since 4.0 a fault raises DbError (the integrations answer 503); a
         ``strict=False`` read still answers None and leaves an ERROR trace."""
         from actingweb.db.dynamodb.actor import Actor as ActorModel
         from actingweb.db.dynamodb.actor import DbActor

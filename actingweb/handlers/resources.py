@@ -10,7 +10,7 @@ from ..permission_evaluator import PermissionType, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
 
-# A resource route's operation for the grant (3.16).
+# A resource route's operation for the grant (4.0).
 _OPERATION = {"GET": "read", "PUT": "write", "POST": "write", "DELETE": "delete"}
 
 
@@ -19,7 +19,7 @@ class ResourcesHandler(base_handler.BaseHandler):
         self, actor_id: str, auth_result: Any, name: str, method: str
     ) -> bool:
         """A peer's ``/resources/<name>`` request is decided by its grant for
-        the ``resources`` category (3.16, spec: one grant for REST and MCP
+        the ``resources`` category (4.0, spec: one grant for REST and MCP
         resources): GET is ``read``, PUT and POST ``write``, DELETE
         ``delete``; a grant that does not mention resources leaves it to the
         access table with the request's method. A caller that is not a peer

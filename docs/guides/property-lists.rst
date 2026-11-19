@@ -71,7 +71,7 @@ When to Use
 Attribute Lists
 ---------------
 
-``actor.attribute_lists(bucket)`` (3.16) returns an ``AttributeListStore``
+``actor.attribute_lists(bucket)`` (4.0) returns an ``AttributeListStore``
 over one of the actor's attribute buckets. Its lists, from ``.get(name)``
 or attribute access, are ``ListAttribute`` instances with the
 ``ListProperty`` interface: the list operations above, handles,
@@ -104,10 +104,10 @@ Both use one format (``actingweb.list_core.ListCore``): an attribute list is
 stored as ``list:<name>-meta`` and one ``list:<name>-#<rank>`` row per item
 in its bucket, with an item over the span threshold in the side bucket
 ``<bucket>$aux``. ``get_metadata()["length"]`` is advisory, as for a v2
-property list. An attribute list written before 3.16 (``list:<name>:meta``,
+property list. An attribute list written before 4.0 (``list:<name>:meta``,
 ``list:<name>:<i>``) is read in place and converted on its first change; a
-pre-3.16 process reads a converted list as empty (see
-:doc:`../migration/v3.16`, "Attribute lists and list diffs"). A list holding
+pre-4.0 process reads a converted list as empty (see
+:doc:`../migration/v4.0`, "Attribute lists and list diffs"). A list holding
 rows of both layouts raises ``ListLayoutConflictError`` on every access until
 it is resolved (see :doc:`troubleshooting`). The replicas of peers' lists in
 ``remote:<peer_id>`` use the same layout (:doc:`subscriptions`).
@@ -784,9 +784,9 @@ the items it deletes; an actor delete removes its whole side partition. Anything
 the opt-in, age-gated sweep, and the default ``verify()`` does not count
 leaked bodies.
 
-**Rolling deploys.** A pre-3.16 process reads a spanned item as the
+**Rolling deploys.** A pre-4.0 process reads a spanned item as the
 envelope dict, and its ``clear()``/``delete()`` leave the bodies behind for
-the aged sweep. Deploy 3.16 everywhere before raising a client's size
+the aged sweep. Deploy 4.0 everywhere before raising a client's size
 limit. ``downgrade_to_v1`` refuses a list holding spanned items.
 
 Idempotent appends
@@ -911,7 +911,7 @@ and a repeat with the key finishes it.
 **Limits.** v2 lists only (``ValueError`` naming ``migrate_to_v2()`` on
 v1). ``extend()``, ``insert()`` and the REST handlers take no keys. The
 first keyed item, like a spanned one, makes the list unreadable to readers
-older than 3.16 and blocks ``downgrade_to_v1``: deploy 3.16 everywhere
+older than 4.0 and blocks ``downgrade_to_v1``: deploy 4.0 everywhere
 first.
 
 REST API
@@ -934,7 +934,7 @@ List properties integrate with the standard ``/properties`` endpoints:
   GET /{actor_id}/properties/{list_name}
   # Returns: [item1, item2, ...]
 
-**Items by path** (3.16; the form the specification defines)::
+**Items by path** (4.0; the form the specification defines)::
 
   GET    /{actor_id}/properties/{list_name}/2      # item 2; 404 out of range
   PUT    /{actor_id}/properties/{list_name}/2      # replace item 2, 204
@@ -949,7 +949,7 @@ integer (``0``, ``7``; not ``-1``, ``01`` or ``+1``) and the first segment
 is an existing list. Any other segment keeps its meaning: ``items`` and
 ``metadata`` are the routes below, and under a name that is not a list a
 numeric segment is a nested key (``PUT /properties/obj/0`` writes key
-``"0"`` of the object ``obj``). Before 3.16 ``GET
+``"0"`` of the object ``obj``). Before 4.0 ``GET
 /properties/{list_name}/0`` answered the whole list and ``POST
 /properties/{list_name}`` answered 400.
 
@@ -1101,7 +1101,7 @@ deleted. Delete a list with its own DELETE.
 
 A write that would put a property where a list of that name exists, or a
 list where a property exists, answers 409 and writes nothing for that name
-(3.16; it was 400 or 500 depending on the route). In a ``POST`` of several
+(4.0; it was 400 or 500 depending on the route). In a ``POST`` of several
 keys, the keys applied before the colliding one stay written and reach the
 subscribers::
 
@@ -1121,7 +1121,7 @@ library the same condition raises ``ListNameTakenError``, a ``ValueError``.
   {"description": "...", "explanation": "..."}
 
 **What subscribers receive.** Each list edit above, and each list form in
-the web UI, registers a list diff on the list's own subtarget (3.16; the
+the web UI, registers a list diff on the list's own subtarget (4.0; the
 HTTP responses are unchanged): ``append`` from the ``/items`` ``add``
 action and from ``POST /properties/{list_name}``, ``update`` from ``PUT
 ?index=N``, ``PUT /properties/{list_name}/{n}`` and the ``update`` action
@@ -1196,7 +1196,7 @@ before it rebalances; ``repair_keys()`` without rebalancing). The script's
 ``--repair`` uses ``repair_keys()`` for a list whose only repairable
 finding is duplicate keyed items.
 
-``--attributes`` (3.16) adds each actor's attribute lists to the sweep: the
+``--attributes`` (4.0) adds each actor's attribute lists to the sweep: the
 replica buckets ``remote:<peer_id>`` of its trusted peers, plus each bucket
 named with ``--bucket`` (repeatable). Lists are found by a skip-scan, never
 a whole-bucket read::
@@ -1205,7 +1205,7 @@ a whole-bucket read::
   actingweb-verify-property-lists --attributes --repair
   actingweb-verify-property-lists --attributes --repair --delete-damaged-replicas
 
-A dry run writes nothing and reports a list still in the pre-3.16 attribute
+A dry run writes nothing and reports a list still in the pre-4.0 attribute
 layout. ``--repair`` converts a healthy one, as its first change would, and
 applies ``repair_keys()``/``compact()`` as for property lists. A list with
 rows of both layouts, or an old-layout list that is damaged, stays

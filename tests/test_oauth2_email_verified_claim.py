@@ -120,7 +120,7 @@ class TestIdentity:
     def test_an_unverified_google_address_is_not_the_identity(
         self, config: Any
     ) -> None:
-        """The regression: before 3.16 it was."""
+        """The regression: before 4.0 it was."""
         auth = self._auth(config, GoogleOAuth2Provider(config))
         identifier = auth.get_email_from_user_info(
             {"email": "victim@example.com", "verified_email": False, "sub": "g1"}

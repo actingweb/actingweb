@@ -1,5 +1,5 @@
 """Auth and sign-in wrappers no longer fold a fault into 401 or a failed
-login (3.16 iteration, Issues C-G of
+login (4.0 iteration, Issues C-G of
 ``thoughts/verifications/2026-10-29-db-fault-semantics-and-creator-uniqueness.md``).
 """
 

@@ -1,4 +1,4 @@
-"""DynamoDB list ``fetch`` with an empty ``actor_id`` answers ``[]`` (3.16).
+"""DynamoDB list ``fetch`` with an empty ``actor_id`` answers ``[]`` (4.0).
 
 The protocol and PostgreSQL answer an empty list; DynamoDB answered ``None``.
 """

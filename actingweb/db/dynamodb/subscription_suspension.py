@@ -68,7 +68,7 @@ class DbSubscriptionSuspension:
         except DbError:
             raise
         except Exception as e:
-            # "Could not tell" is not "not suspended" (3.16).
+            # "Could not tell" is not "not suspended" (4.0).
             raise DbError("subscription suspension read", self._actor_id) from e
 
     def _is_suspended_read(self, target: str, subtarget: str | None) -> bool:
@@ -150,7 +150,7 @@ class DbSubscriptionSuspension:
         """Delete all suspensions for this actor (actor deletion, purge, a
         create under an explicit id). A missing table holds none: ``True``,
         so a deployment that never created it can still delete and create
-        actors (3.16)."""
+        actors (4.0)."""
         try:
             for item in SubscriptionSuspension.query(self._actor_id):
                 item.delete()

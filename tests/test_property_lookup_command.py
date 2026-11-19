@@ -60,7 +60,7 @@ class Store:
         return actor_id
 
     def seed(self, actor_id: str, name: str, value: str) -> None:
-        """A property row with no lookup row, as pre-3.16 data looks."""
+        """A property row with no lookup row, as pre-4.0 data looks."""
         if BACKEND == "postgresql":
             from actingweb.db.postgresql.connection import get_connection
 
@@ -763,7 +763,7 @@ class TestShim:
 
 class TestBackfillStaleOwner:
     """A lookup row whose owner no longer holds the value is taken over
-    (3.16, owner-decided plan D14), not reported as a collision forever."""
+    (4.0, owner-decided plan D14), not reported as a collision forever."""
 
     def test_apply_takes_a_stale_row_over_and_marks_the_name(
         self, store: Store, capsys: pytest.CaptureFixture[str]

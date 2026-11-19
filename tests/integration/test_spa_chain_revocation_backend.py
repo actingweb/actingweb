@@ -141,7 +141,7 @@ class TestSpaChainRevocationOnBackend:
 
 @pytest.mark.xdist_group(name="spa_chain_revocation_backend")
 class TestChainRevokedMarkerOnBackend:
-    """The marker a revocation writes before its sweep (3.16)."""
+    """The marker a revocation writes before its sweep (4.0)."""
 
     def test_the_marker_is_readable_with_a_ttl_and_reaped_after_it(
         self, mgr: OAuth2SessionManager

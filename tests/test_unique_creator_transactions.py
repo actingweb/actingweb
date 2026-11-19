@@ -1,4 +1,4 @@
-"""DynamoDB's creator transactions: bounded retries on a conflict (3.16, PR 2).
+"""DynamoDB's creator transactions: bounded retries on a conflict (4.0, PR 2).
 
 DynamoDB Local never raises ``TransactionConflict``, so the retry is pinned
 with a mocked transaction.

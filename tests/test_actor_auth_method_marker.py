@@ -1,4 +1,4 @@
-"""``auth_method`` is recorded on every creation path (3.16).
+"""``auth_method`` is recorded on every creation path (4.0).
 
 Runs against DynamoDB Local like the rest of the unit suite.
 """

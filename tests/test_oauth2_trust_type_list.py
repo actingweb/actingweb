@@ -1,4 +1,4 @@
-"""The levels an OAuth2/MCP client may be given (3.16, plan Phase 3).
+"""The levels an OAuth2/MCP client may be given (4.0, plan Phase 3).
 
 The application's list answers; with none (or ``{"allowed": None}``) every
 registered type except ``admin`` is acceptable; an unknown type never is.

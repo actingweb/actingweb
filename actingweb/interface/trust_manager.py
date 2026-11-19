@@ -240,7 +240,7 @@ class TrustManager:
         )
 
     def fire_approved(self, peer_id: str, before: Any, after: Any) -> None:
-        """The one approval hook path (3.16): ``trust_fully_approved_local``
+        """The one approval hook path (4.0): ``trust_fully_approved_local``
         once, when the row went from not fully approved (``before``) to
         approved by both sides (``after``), with ``trust_data`` = the row. A
         repeat approval fires nothing. ``trust_approved`` (deprecated;
@@ -271,7 +271,7 @@ class TrustManager:
         initiated_by_peer: bool,
         loop: "asyncio.AbstractEventLoop | None" = None,
     ) -> None:
-        """The one deletion hook path (3.16): ``trust_deleted`` before the
+        """The one deletion hook path (4.0): ``trust_deleted`` before the
         delete, with ``peer_id``, ``relationship``, ``trust_data`` (the row,
         so the hook can still read the peer's cached profile) and
         ``initiated_by_peer``. ``loop``: the event loop of an async caller
@@ -524,7 +524,7 @@ class TrustManager:
                 f"was not removed (it is not applied): {e}"
             )
             # Unknown when the read itself faulted: the caller treats it as
-            # an override it could not remove (3.16: it read as none).
+            # an override it could not remove (4.0: it read as none).
             return stale_type or _UNKNOWN_OVERRIDE
         if not removed:
             logger.error(
@@ -692,11 +692,11 @@ class TrustManager:
                         if client_name and normalized_desc == default_desc:
                             modify_kwargs["desc"] = f"OAuth2 client: {client_name}"
                     # A client's row follows the level the user approved at
-                    # this authorisation, up or down (3.16; it kept the
+                    # this authorisation, up or down (4.0; it kept the
                     # first one forever). An override written for another
                     # type is never applied (the evaluator), so it is
                     # removed as cleanup after the write, with no rollback.
-                    # The row as just read (3.16: an earlier read could
+                    # The row as just read (4.0: an earlier read could
                     # miss an overlapping authorisation's write).
                     old_type = str(stored_row.get("relationship") or "")
                     type_changes = bool(
@@ -708,7 +708,7 @@ class TrustManager:
                         # An override already inert (it names a type other
                         # than the row's) goes first: once the row took its
                         # type again it would apply. When it cannot go and
-                        # this approval is its type, no code (3.16).
+                        # this approval is its type, no code (4.0).
                         leftover = self._clean_client_override(peer_id, old_type)
                         if type_changes and leftover in (
                             trust_type,
@@ -735,7 +735,7 @@ class TrustManager:
                             self._evict_retyped(peer_id, trust_type)
                     else:
                         # The row went between the read and the write: no
-                        # trust stands, so no code is issued (3.16).
+                        # trust stands, so no code is issued (4.0).
                         logger.warning(
                             f"OAuth trust for {peer_id} was deleted while being updated"
                         )
@@ -1066,13 +1066,13 @@ class TrustManager:
 
         Raises:
             ValueError: ``approved``, ``verified`` or ``peer_approved`` is
-                not a bool, ``"true"`` or ``"false"`` (3.16).
+                not a bool, ``"true"`` or ``"false"`` (4.0).
         """
         from ..trust import as_flag
 
         # Flags given as text are flags, and must meet the approval gate
         # below; anything but a bool, "true" or "false" raises ValueError
-        # (3.16), before anything is read or written.
+        # (4.0), before anything is read or written.
         for flag in ("approved", "verified", "peer_approved"):
             if flag in kwargs:
                 kwargs[flag] = as_flag(kwargs[flag])
@@ -1100,7 +1100,7 @@ class TrustManager:
                 and not row.get("verified")
                 and not self._core_actor.reverify_pending_trust(peer_id)
             ):
-                # As every approval route (3.16): an unverified request is
+                # As every approval route (4.0): an unverified request is
                 # approved only after its verification repeats and passes.
                 logger.warning(
                     f"Refused to approve the trust with {peer_id}: the request "

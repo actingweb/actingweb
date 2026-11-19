@@ -89,6 +89,11 @@ or attribute access, are ``ListAttribute`` instances with the
    store.exists("drafts")   # True
    store.list_all()         # ["drafts"]
 
+As on ``actor.property_lists``, ``list_all()``, ``list_all_with_rows()`` and
+``list_prefix_with_rows()`` raise ``DbError`` on a store fault rather than
+answering an empty result (``list_all()`` accepts ``strict=`` and ignores
+it).
+
 Choose by who may see the data:
 
 - A **property list** is served under ``/properties``, governed by grants,
@@ -599,13 +604,11 @@ lists. That is worth reading twice, because it is the way a switch from
 ``names`` simply stops seeing every list outside the prefix, and nothing
 raises.
 
-The two also differ on errors, deliberately.
-``list_all_with_rows()`` returns ``([], {})`` if the read fails;
-``list_prefix_with_rows()`` raises ``DbError``. For a scoped read an
-empty result is a perfectly ordinary answer, so swallowing a failure
-would present a throttled query as "you have no memories". An empty
-prefix raises ``ValueError`` rather than silently becoming the
-whole-partition read.
+Both raise ``DbError`` if the read fails (``list_all_with_rows()``
+since 4.0; it returned ``([], {})``). An empty result is a perfectly
+ordinary answer, so swallowing a failure would present a throttled query
+as "you have no memories". An empty prefix raises ``ValueError`` rather
+than silently becoming the whole-partition read.
 
 When the scoped read actually pays
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -670,7 +673,7 @@ character costs up to six bytes as ``\uXXXX``):
      - ``list_item_max_bytes``
    * - DynamoDB (400 KB rows)
      - 390,000
-     - 4 MiB
+     - 2 MiB (4.0; 4 MiB in 4.0.0rc1)
    * - PostgreSQL (no row cap)
      - ``None`` (never spans)
      - ``None`` (no ceiling)
@@ -707,8 +710,10 @@ containing ``$`` (or longer than 251 characters).
 **What it costs.** A read that returns a spanned item pays one extra paged
 read of its bodies, in order, per spanned item: on DynamoDB about 144
 eventually consistent read units (288 strongly consistent) over 2 pages for
-a 1 MiB item, about 528 (1,056) over 6 pages for 4 MiB. Writing one costs
-its body rows plus the head (about 4,300 write units at 4 MiB); an update
+a 1 MiB item, about 528 (1,056) over 6 pages for 4 MiB, so a 2 MiB item
+(the default ceiling) costs roughly half the 4 MiB figure. Writing one costs
+its body rows plus the head (about 4,300 write units at 4 MiB, roughly half
+that at 2 MiB); an update
 of a spanned item costs about twice that, since it writes the new
 generation and deletes the old. A lost compare-and-swap wastes the new
 generation's writes. Enumerating body rows (``verify(spans=True)``,
@@ -1141,8 +1146,8 @@ append, the ``/items`` ``add`` and ``update`` actions, and the bulk update)
 answers 413 when an item's
 encoded size is over the configured limit. Nothing is written::
 
-  {"error": "list_item_too_large", "list": "notes", "bytes": 4194306,
-   "limit": 4194304, "detail": "...",
+  {"error": "list_item_too_large", "list": "notes", "bytes": 2097154,
+   "limit": 2097152, "detail": "...",
    "remedy": "split the item or raise list_item_max_bytes"}
 
 See `Items larger than one row`_ below.

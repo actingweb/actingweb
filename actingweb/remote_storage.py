@@ -284,10 +284,10 @@ class RemotePeerStore:
         self._get_list_store().get(name).delete()
 
     def list_all_lists(self, *, strict: bool = False) -> list[str]:
-        """List all stored lists for this peer (``strict``: a read fault
-        raises ``DbError`` instead of answering ``[]``)."""
-        store = self._get_list_store()
-        return store.list_all(strict=True) if strict else store.list_all()
+        """List all stored lists for this peer. A read fault raises
+        ``DbError`` (4.0); ``strict`` is accepted and ignored."""
+        del strict  # accepted for callers written before 4.0
+        return self._get_list_store().list_all()
 
     def list_scalar_names(self) -> list[str]:
         """The names of the replica's scalars, read without their values and

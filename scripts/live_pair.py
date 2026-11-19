@@ -27,8 +27,8 @@ Usage (DynamoDB Local on :8001; each side its own table prefix)::
     # the previous release, in its own virtualenv
     AWS_DB_PREFIX=pair_old_ python scripts/live_pair.py serve \\
         --label v3.15.1 --port 5701 --capture /tmp/pair/old.jsonl
-    # this tree (first run: it creates the tables and stops; run
-    # `actingweb-unique-creators enable --apply`; start again)
+    # this tree (on an empty prefix the first start enables creator
+    # uniqueness itself)
     AWS_DB_PREFIX=pair_new_ python scripts/live_pair.py serve \\
         --label release --port 5702 --capture /tmp/pair/new.jsonl
     python scripts/live_pair.py drive --old http://127.0.0.1:5701 \\

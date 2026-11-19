@@ -612,8 +612,9 @@ SECURITY
   both run the rule and fire ``actor_adopted`` twice (a replacement reuses a
   successor the other already created, which narrows the race to two adjacent
   statements; with it on the database refuses the second, see CHANGED); and ``devtest`` must be
-  off in production, since it lets a caller rewrite ``_internal``. Close the
-  factory with ``with_open_factory(False)`` for an OAuth-only deployment.
+  off in production, since it lets a caller rewrite ``_internal``. With a
+  sign-in provider configured the factory is closed by default (see
+  CHANGED); ``with_open_factory(True)`` opens it.
   An actor about to be cleaned in place (no marker, or an unvouched one)
   whose deletion status cannot be read answers 503 too and is left as it
   is, so a half-wiped actor is never cleaned and kept tombstoned. The clean
@@ -1047,6 +1048,62 @@ CHANGED
 
 - **``with_mcp()`` changes only the options it names.** A second call
   without ``server_name`` or ``instructions`` reset them to their defaults.
+
+- **Breaking: the actor factory is closed when a sign-in provider is
+  configured.** An application that called any provider builder
+  (``with_oauth``, ``with_github``, ``with_apple_sign_in``,
+  ``with_google_native``, whatever its credentials) and not
+  ``with_open_factory`` now answers ``POST /`` with 403, its default
+  ``GET /`` page offers no form, and one start-up WARNING says so. The
+  setting is resolved when read, so a provider builder called after the
+  ``Config`` was built still closes it. Without a provider (a basic-auth
+  deployment) the factory stays open. **Check:** an application whose peers
+  create trustees through its factory (the peer logs a WARNING on the 403),
+  whose users create actors with the form, or whose tests post to ``/``
+  with a provider configured, calls ``with_open_factory(True)``.
+
+- **Breaking: ``list_all_with_rows()`` and ``AttributeListStore.list_all()``
+  raise on a store fault.** ``PropertyListStore.list_all_with_rows()``,
+  ``AttributeListStore.list_all_with_rows()``, ``AttributeListStore.list_all()``
+  and ``RemotePeerStore.list_all_lists()`` answered ``[]`` or ``([], {})``,
+  which read a fault as "no lists"; they raise ``DbError`` (503 through the
+  integrations), as ``list_all()`` and ``list_prefix_with_rows()`` already
+  did. ``strict=`` is still accepted and ignored. **Check:** a caller that
+  relied on the empty answer catches ``DbError``.
+
+- **Behavior change: a store with no user actors enables creator
+  uniqueness at the first start.** The first start of a fresh deployment no
+  longer stops with ``UniqueCreatorNotReady`` until
+  ``actingweb-unique-creators enable --apply`` has run: on DynamoDB it
+  creates the creators table if needed, records the system actors, writes
+  the backfill-complete item and scans again (an actor an older process
+  created meanwhile is recorded, or the start is refused); on PostgreSQL it
+  builds ``ux_actors_creator`` on the empty table (never dropping an
+  index; a concurrent first start that built it first counts as done). One
+  WARNING names the store it wrote to. On DynamoDB this needs
+  ``AWS_DB_PREFIX`` set explicitly: on the default prefix the start is
+  refused as before, naming the prefix and the command, so a wrong prefix
+  with table auto-creation cannot start an empty store. A role that may not
+  create the index, or a build that fails, refuses with the command. A
+  store with user actors and no enforcement is refused as before. While an
+  empty store enables itself, no process of an older version may create
+  actors in it.
+
+- **Behavior change: start-up checks retry a fault.** Each check of
+  ``check_ready()`` that faults is tried three times in all (back-off from
+  one budget of about two seconds shared by the whole check; once a check
+  has ended unavailable, the others get one attempt) before the start is
+  refused. A "not ready" answer, a missing table or a denied permission, is
+  not retried. ``StoreNotReady.unavailable`` is True when the store did not
+  answer, False when it answered "not ready"; a refusal for more than one
+  reason is ``unavailable`` only if every reason is. A function platform can
+  retry the initialisation on ``unavailable``; it is not permission to serve.
+
+- **Behavior change: the default ceiling on a property-list item is 2 MiB**
+  where the backend has a row cap (DynamoDB; 4 MiB in 4.0.0rc1). Raising it
+  later strands nothing, lowering it later would leave stored items over
+  it. **Check:** an application that stores items between 2 and 4 MiB sets
+  ``with_list_item_limits(max_bytes=...)`` in every process.
 
 - **Breaking: a custom actor backend implements ``rename_creator``.**
   ``DbActor.rename_creator(actor_id, *, expected, creator, internal=(),
@@ -2218,9 +2275,10 @@ CHANGED
   ``with_unique_creator(False)`` as the opt-out. A deployment with duplicate creators refuses to
   start with ``UniqueCreatorNotReady`` until ``actingweb-unique-creators``
   ``report``, ``resolve --apply`` and ``enable --apply`` have run, or it opts
-  out. A fresh deployment under ``integrate_*`` starts once (which creates
-  the tables and stops), runs ``enable --apply``, and starts again; with no actors yet the refusal
-  says exactly that. With it on, a held creator at ``POST /`` answers 403, ``PUT /trust/trustee``
+  out. A store with no user actors enables enforcement at the first start:
+  on DynamoDB when ``AWS_DB_PREFIX`` is set explicitly (on the default
+  prefix the start is refused and names the command), on PostgreSQL with a
+  role that may create the index (otherwise the refusal names the command). With it on, a held creator at ``POST /`` answers 403, ``PUT /trust/trustee``
   409, a store whose enforcement cannot be read 503, and DynamoDB actor
   creates, deletes and creator changes cost about 4-6 write units (the
   application's role needs ``ConditionCheckItem`` on the actor table).
@@ -2519,6 +2577,46 @@ CHANGED
 ADDED
 ~~~~~
 
+- **``actingweb-check-ready``**: what the start-up check would say about the
+  store, without starting the application. Each gate (reverse lookup,
+  creator uniqueness, attribute lists, email as creator) is reported as
+  ready, ready at first start (an empty store) or refused with its fix
+  line, from the configuration it prints as assumed (``--properties``,
+  ``--no-unique-creator``, ``--email-as-creator`` for what the application
+  sets in its builder). It writes nothing and creates no table. Exit 0, 1
+  (a gate refuses) or 2 (the store could not be read).
+
+- **``ActorInterface.is_vouched()``**: whether a provider, the operator or
+  the application vouched for the actor's current creator. A marker being
+  present is not the test (``factory`` and ``email_unverified`` do not
+  vouch; a creator renamed since reads unvouched); raises ``DbError`` when
+  the marker could not be read.
+
+- **``DbErrorAfterWrite``** (``actingweb.db.exceptions``, a ``DbError``): a
+  property or list write was stored and the fault came after it, while its
+  diff was registered for subscribers. A repeat of a plain set is safe; a
+  repeat of an unkeyed append adds a second item (``append_once`` does
+  not). Over HTTP it answers 503 with the code ``stored_not_notified`` and
+  no ``Retry-After``. A plain ``DbError`` still means nothing was written,
+  or that the caller cannot tell.
+
+- **A stored-format rule for later 4.x versions, and
+  ``ListItemNewerFormatError``.** A list item's envelope may carry
+  ``need`` (the features a later version stored it with) and a list's meta
+  row its ``format``; this version implements no ``need`` and formats 1
+  and 2 only. An item or list a later version stored is not corruption: it
+  raises ``ListItemNewerFormatError`` (``from actingweb import
+  ListItemNewerFormatError``; not a ``ListCorruptionError``), and no read,
+  write, compaction, sweep, migration or repair of this version removes or
+  rewrites any row of it; deleting the whole list is the escape for a newer
+  item. Over HTTP it answers 409 with the code ``list_item_newer_format``
+  and no stored text. ``actingweb-verify-property-lists`` reports such
+  lists on lines of their own (exit 3 when nothing else is wrong) and,
+  with ``--spans``, side-partition rows named for a list with no meta row;
+  ``actingweb-migrate-property-lists`` skips and reports them. A list
+  sweep, clear or delete leaves side-partition rows whose name this version
+  does not recognise. Every shape 4.0.0rc1 writes is read by 4.0.0 final.
+
 - **``with_mcp(require_auth_for_initialize=True)``**: an unauthenticated
   ``initialize`` answers 401 with the ``WWW-Authenticate`` challenge (503
   when the token store is down), so a client starts its OAuth flow at the
@@ -2755,19 +2853,17 @@ ADDED
   stored email or ``trustee`` (``Actor.creator_change_pinned``), as the
   endpoint does. Returns ``False`` when the creator did not change.
 
-- **``with_open_factory(enable=False)`` closes the actor factory.** The
-  factory (``POST /``) creates an actor for any address from unauthenticated
-  input, which is the only way to squat one. An OAuth-only deployment can now
-  answer it with a 403 (the house JSON body, or the error page for a form)
-  instead; the existing-creator form redirect is closed with it (and no
-  longer names the actor on an open factory either, see CHANGED). ``Config`` gains
-  ``open_factory`` (default ``True``); a value assigned on the ``Config``
-  survives until ``with_open_factory`` is called, after which the builder's
-  value wins. This deviates from the protocol's mandatory factory, so the
-  factory stays open unless you call it. A closed factory still renders the
-  ``GET /`` page and its form, whose submit gets the 403; replace the
-  template if that page should not offer one. **Behavior change:** none
-  unless you call it.
+- **``with_open_factory(enable=...)`` opens or closes the actor factory.**
+  The factory (``POST /``) creates an actor for any address from
+  unauthenticated input, which is the only way to squat one. Closed, it
+  answers 403 (the house JSON body naming ``with_open_factory(True)``, or
+  the error page for a form), the existing-creator form redirect is closed
+  with it (and no longer names the actor on an open factory either, see
+  CHANGED), and the default ``GET /`` page offers no form. ``Config`` gains
+  ``open_factory``: unset, it is closed when a sign-in provider builder was
+  called and open otherwise (see CHANGED); a value assigned on the
+  ``Config`` survives until ``with_open_factory`` is called, after which the
+  builder's value wins.
 
 - **``actor_adopted`` lifecycle hook.** Fires once on the surviving actor
   after an unvouched actor was replaced or cleaned, with
@@ -2865,7 +2961,7 @@ ADDED
 - **``ActingWebApp.with_list_item_limits(span_threshold=..., max_bytes=...)``**
   and the ``Config`` settings ``list_item_span_threshold`` and
   ``list_item_max_bytes``. Defaults follow the backend: DynamoDB 390,000
-  bytes and 4 MiB; PostgreSQL neither (unchanged behaviour there). An
+  bytes and 2 MiB; PostgreSQL neither (unchanged behaviour there). An
   omitted argument keeps the default and an explicit ``None`` turns the
   limit off; out-of-range values raise ``ValueError`` wherever they are
   set, and so does a ``max_bytes`` above 9,999 times ``span_threshold``
@@ -3057,6 +3153,11 @@ FIXED
   one actor, or accept the collisions with ``mark-complete --force`` after
   review. A collision still leaves the name unmarked, so the start is
   refused until one of them is done.
+
+- **A peer factory's 403 was not reported.** ``get_peer_trustee`` read the
+  peer's response with ``if response:``, which is false for any 4xx, so a
+  refused trustee creation kept an earlier call's status. The status is
+  recorded, and a 401 or 403 is logged at WARNING naming the factory.
 
 - **``/oauth/logout``'s 503 carried no error code.** A logout whose token
   revocation hit a store fault answered 503 with no ``X-ActingWeb-Error``

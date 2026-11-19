@@ -1819,6 +1819,8 @@ def _winner_is_marked(winner: actor_module.Actor) -> bool:
 def is_vouched_actor(actor_instance: actor_module.Actor) -> bool:
     """Whether some party vouched for this actor's creator address.
 
+    Internal; applications call ``ActorInterface.is_vouched()``.
+
     Vouched means ``auth_method`` is a non-empty string outside
     :data:`UNVOUCHED_AUTH_METHODS` **and** ``email_verified`` is not
     ``"false"`` (a pre-4.0 free-text actor carries ``"<provider>_oauth2"`` for
@@ -1845,6 +1847,10 @@ VOUCHED_CREATOR_PENDING = "vouched_creator_pending"
 
 def is_vouched_store(store: "InternalStore", creator: str | None = None) -> bool:
     """:func:`is_vouched_actor` for an actor's ``_internal`` store.
+
+    Internal: an application calls ``ActorInterface.is_vouched()``, which
+    reads the store afresh and raises when it could not be read (this
+    function reads an unloaded store as unvouched).
 
     With ``creator`` (the actor's current creator, or the address a sign-in
     is resolving) the vouch must also be for that address: the recorded
@@ -3215,9 +3221,7 @@ def _adopt_actor(
         details=(
             f"trusts={_n(removed_trusts)} subscriptions={_n(subscription_peers)} "
             f"tokens={tokens_revoked} clients={len(client_ids)} "
-            f"properties={_n(property_names)} "
-            f"peers={[t['peerid'] for t in (removed_trusts or [])][:10]} "
-            f"siblings={swept_ids}"
+            f"properties={_n(property_names)} siblings={len(swept_ids)}"
         ),
     )
     if result is not None:

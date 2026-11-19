@@ -778,7 +778,7 @@ class TestListItemLimits:
     def test_omitted_arguments_keep_backend_defaults(self):
         dynamo = self._app("dynamodb").with_list_item_limits()
         assert dynamo.get_config().list_item_span_threshold == 390_000
-        assert dynamo.get_config().list_item_max_bytes == 4 * 2**20
+        assert dynamo.get_config().list_item_max_bytes == 2 * 2**20
         pg = self._app("postgresql").with_list_item_limits()
         assert pg.get_config().list_item_span_threshold is None
         assert pg.get_config().list_item_max_bytes is None
@@ -807,7 +807,7 @@ class TestListItemLimits:
         with pytest.raises(ValueError, match="at least"):
             app.with_list_item_limits(max_bytes=100_000)
         # Nothing was stored by the refused call.
-        assert app.get_config().list_item_max_bytes == 4 * 2**20
+        assert app.get_config().list_item_max_bytes == 2 * 2**20
         # Lowering both together is fine.
         app.with_list_item_limits(span_threshold=50_000, max_bytes=100_000)
         assert app.get_config().list_item_max_bytes == 100_000

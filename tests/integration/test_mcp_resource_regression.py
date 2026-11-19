@@ -87,6 +87,9 @@ def regression_test_app(docker_services, setup_database, worker_info):  # pylint
             redirect_uri=f"http://127.0.0.1:{test_app_port}/oauth/callback",
         )
         .with_mcp(enable=True)
+        # The tests create their actor with POST /: with a provider the
+        # factory is closed by default (4.0).
+        .with_open_factory(True)
     )
 
     # Register custom resources to test the three bug fixes

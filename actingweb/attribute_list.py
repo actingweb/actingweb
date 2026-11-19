@@ -784,6 +784,9 @@ class ListAttribute(ListCore):
         included), leaving an empty list in the core's layout."""
         if not self._db:
             raise RuntimeError("No database connection available")
+        # A layout a later version wrote is refused before the old-layout
+        # sweep below can read its rows as residue.
+        self._read_meta_row()
         # The core's clear() sweeps the old layout through _foreign_rows().
         self._layout = "v2"
         super().clear()
@@ -794,6 +797,8 @@ class ListAttribute(ListCore):
         if not self._db:
             raise RuntimeError("No database connection available")
         self._invalidate_cache()
+        # A layout a later version wrote is refused before anything goes.
+        self._read_meta_row()
         self._foreign_rows(sweep=True)
         self._v2_delete()
         self._layout = None

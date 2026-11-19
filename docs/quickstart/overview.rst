@@ -112,10 +112,13 @@ from the first ``201``.
 
 .. note::
 
-   This is the actor factory (``POST /``), open by default as the protocol
-   requires. A deployment where OAuth is the sign-in closes it with
-   ``.with_open_factory(False)``, after which this request answers ``403`` with
-   a body naming the switch. See :doc:`configuration`.
+   This is the actor factory (``POST /``). It is open when no sign-in provider
+   is configured, as here. Since 4.0 it is closed by default once a provider
+   builder (``with_oauth``, ``with_github``, ``with_apple_sign_in``,
+   ``with_google_native``) is called, and this request then answers ``403``
+   with a body naming ``with_open_factory(True)``, which opens it again.
+   ``with_open_factory(False)`` closes it without a provider. See
+   :doc:`configuration`.
 
 4) Explore
 ==========

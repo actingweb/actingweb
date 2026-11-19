@@ -67,6 +67,12 @@ class FlaskIntegration(BaseActingWebIntegration):
         # consumer route calling ActorInterface, answers 503 (409 for
         # CreatorTaken) instead of a 500.
         self.flask_app.register_error_handler(DbError, self._db_error_response)
+        # Data a later library version stored: a fixed 409, never str(e).
+        from ...list_core import ListItemNewerFormatError
+
+        self.flask_app.register_error_handler(
+            ListItemNewerFormatError, self._newer_format_response
+        )
 
     def _db_error_response(self, exc: Exception) -> Response:
         """The app-level answer for a ``DbError`` (see ``_errors.py``).
@@ -88,6 +94,23 @@ class FlaskIntegration(BaseActingWebIntegration):
                 self.aw_app.get_config(),
             ),
         }
+        return Response(
+            _json.dumps(body),
+            status=status,
+            headers=headers,
+            mimetype="application/json",
+        )
+
+    def _newer_format_response(self, exc: Exception) -> Response:
+        """The app-level answer for ``ListItemNewerFormatError``."""
+        import json as _json
+
+        from ._errors import newer_format_answer
+
+        logging.getLogger(__name__).warning(
+            f"Refused data a later library version stored: {exc}"
+        )
+        status, headers, body = newer_format_answer()
         return Response(
             _json.dumps(body),
             status=status,
@@ -952,7 +975,12 @@ class FlaskIntegration(BaseActingWebIntegration):
             return self._create_flask_response(webobj)
         # Simply show the factory template without any authentication
         try:
-            return Response(render_template("aw-root-factory.html"))
+            return Response(
+                render_template(
+                    "aw-root-factory.html",
+                    factory_open=self.aw_app.get_config().open_factory,
+                )
+            )
         except Exception:  # folds DbError: no DB access: template rendering
             # Fallback for when templates are not available
             return Response(
@@ -1001,7 +1029,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                 try:
                     return Response(
                         render_template(
-                            "aw-root-factory.html", error="Email is required"
+                            "aw-root-factory.html",
+                            error="Email is required",
+                            factory_open=self.aw_app.get_config().open_factory,
                         )
                     )
                 except Exception:  # folds DbError: no DB access: template rendering

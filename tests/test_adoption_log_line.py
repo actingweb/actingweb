@@ -16,7 +16,13 @@ from actingweb import oauth2 as oauth2_module
 from actingweb.db.exceptions import DbError
 from actingweb.interface.hooks import HookRegistry
 from actingweb.oauth2 import OAuth2Authenticator, OAuth2Provider
-from tests._adoption_helpers import aid, create_core_actor, make_config, uuid_email
+from tests._adoption_helpers import (
+    aid,
+    create_core_actor,
+    make_config,
+    plant_squat_state,
+    uuid_email,
+)
 
 LINE = re.compile(
     r"ACTOR_ADOPTED: actor=(?P<actor>\S+) mode=(?P<mode>cleaned|replaced) "
@@ -101,7 +107,9 @@ def test_the_line_carries_no_address(
 ) -> None:
     config, auth = env
     creator = uuid_email()
-    create_core_actor(config, creator, auth_method="factory")
+    squat = create_core_actor(config, creator, auth_method="factory")
+    # An OAuth client's trust peer id names its user's address.
+    plant_squat_state(config, squat, peer=f"oauth2_client:{creator}:cid-1")
     caplog.set_level(logging.WARNING, logger="actingweb.oauth2")
     assert auth.lookup_or_create_actor_by_identifier(creator) is not None
     (record,) = _lines(caplog)

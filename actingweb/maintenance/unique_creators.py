@@ -1144,12 +1144,14 @@ def disable(config: Any, *, apply: bool = False) -> str:
 # ---------------------------------------------------------------------------
 
 
-def no_actors(config: Any) -> bool:
-    """Whether the actor table holds no actor of a user (False on a fault or a
-    missing table), to tell a fresh deployment from one with data to resolve.
+def no_actors(config: Any, *, strict: bool = False) -> bool:
+    """Whether the actor table holds no actor of a user, to tell a fresh
+    deployment from one with data to resolve.
 
     The library's own system actors (``_actingweb_*``) exist before the first
-    request and do not count.
+    request and do not count. ``strict`` (the start-up self-enable): the
+    DynamoDB scan is strongly consistent and a fault or missing table raises;
+    otherwise a fault reads False (it only picks the shorter message).
     """
     prefix = "_actingweb_"
     try:
@@ -1164,14 +1166,120 @@ def no_actors(config: Any) -> bool:
                 return cur.fetchone() is None
         from actingweb.db.dynamodb.actor import Actor
 
-        for row in Actor.scan(page_size=25, attributes_to_get=["id"]):
+        for row in Actor.scan(
+            page_size=25, attributes_to_get=["id"], consistent_read=strict
+        ):
             if not str(row.id).startswith(prefix):
                 return False
         return True
     except Exception as e:  # folds DbError: only picks the shorter message
+        if strict:
+            raise
         # Say why the short message is not given: a role without Scan, say.
         logger.info("Could not tell whether the actor table is empty: %s", e)
         return False
+
+
+class EnableRefused(RuntimeError):
+    """The start-up self-enable found the store is not empty after all (an
+    actor created meanwhile that could not be recorded)."""
+
+
+def store_description(config: Any) -> str:
+    """The store a start-up self-enable wrote to, for its log line."""
+    from actingweb.maintenance._common import store_line
+
+    return store_line(config.database)
+
+
+def enable_empty_store(config: Any) -> None:
+    """Enable enforcement on a store with no user actors, from the
+    application's start-up (4.0).
+
+    DynamoDB: create the creators table if absent, record the system
+    actors' creators, write the backfill-complete item, then scan again
+    (strongly consistent): an actor an older process created meanwhile is
+    recorded, or the item is removed again and ``EnableRefused`` raised.
+    PostgreSQL: build ``ux_actors_creator`` on the (empty) table in one
+    transaction with short lock and statement timeouts; a concurrent first
+    start that built it first counts as success. Never drops an index.
+
+    Raises:
+        EnableRefused: the store turned out to hold an actor that could not
+            be recorded.
+        Exception: a fault or a denied permission (the caller refuses the
+            start, naming ``actingweb-unique-creators enable --apply``).
+    """
+    if config.database == "postgresql":
+        _enable_empty_postgresql()
+        return
+    from actingweb.db.dynamodb._backfill_probe import creators_backfill_state
+    from actingweb.db.dynamodb._ensure import ensure_table
+    from actingweb.db.dynamodb.actor import Actor, record_for_actor_as_read
+    from actingweb.db.dynamodb.creator import Creator
+
+    ensure_table(Creator)
+
+    def scan() -> tuple[list[Any], list[Any]]:
+        users: list[Any] = []
+        system: list[Any] = []
+        for row in Actor.scan(consistent_read=True):
+            (system if str(row.id).startswith("_actingweb_") else users).append(row)
+        return users, system
+
+    def record(row: Any) -> bool:
+        creator = normalise_creator(str(row.creator or ""))
+        if is_exempt(creator) or DUP_MARKER in creator:
+            return True
+        if record_for_actor_as_read(creator, row):
+            return True
+        try:
+            return Creator.get(creator, consistent_read=True).actor_id == row.id
+        except Exception:  # folds DbError: not recorded
+            return False
+
+    users, system = scan()
+    if users:
+        raise EnableRefused("the store holds user actors")
+    for row in system:
+        if not record(row):
+            raise EnableRefused(f"the system actor {row.id} could not be recorded")
+    Creator(creator=BACKFILL_KEY).save()
+    # An actor an older process created between the scan and the item is
+    # behind a complete marker unless recorded now.
+    late, _ = scan()
+    for row in late:
+        if not record(row):
+            Creator(creator=BACKFILL_KEY).delete()
+            raise EnableRefused(
+                f"actor {row.id} was created during the enable and could not be "
+                "recorded"
+            )
+    creators_backfill_state()  # remembers "complete" for this process
+
+
+def _enable_empty_postgresql() -> None:
+    from psycopg import sql
+
+    from actingweb.db.postgresql.actor import reset_index_probe
+    from actingweb.db.postgresql.connection import get_connection, get_schema_name
+
+    schema = get_schema_name()
+    statement = sql.SQL(
+        "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} (creator) WHERE "
+        + UNIQUE_INDEX_PREDICATE
+    ).format(sql.Identifier(UNIQUE_INDEX_NAME), sql.Identifier(schema, "actors"))
+    try:
+        with get_connection() as conn:
+            with conn.transaction():
+                conn.execute("SET LOCAL lock_timeout = '5s'")
+                conn.execute("SET LOCAL statement_timeout = '30s'")
+                conn.execute(statement)
+    except Exception:  # folds DbError: re-raised unless the index is valid
+        # Two first starts at once: the other built it first.
+        if postgresql_index_state() != "valid":
+            raise
+    reset_index_probe()
 
 
 def missing_enforcement(config: Any) -> str | None:

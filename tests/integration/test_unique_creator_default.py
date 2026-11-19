@@ -1,8 +1,8 @@
 """Creator uniqueness on by default: the first-run sequence (both backends).
 
-A fresh deployment starts once (the start creates the tables and stops with
-``UniqueCreatorNotReady``), runs ``actingweb-unique-creators enable --apply``
-and starts again. The 403 on a held creator at ``POST /`` is pinned by
+A fresh deployment (no user actors) enables enforcement at its first start
+(4.0; before, it stopped until ``actingweb-unique-creators enable --apply``
+ran). The 403 on a held creator at ``POST /`` is pinned by
 ``test_unique_creator_http.py`` on the same isolated store.
 """
 
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from actingweb.interface import ActingWebApp, UniqueCreatorNotReady
+from actingweb.interface import ActingWebApp
 from actingweb.maintenance import unique_creators
 
 from .conftest import DATABASE_BACKEND
@@ -36,16 +36,11 @@ def test_the_default_is_on() -> None:
     assert _default_app().get_config().unique_creator is True
 
 
-def test_first_start_refuses_then_enable_makes_the_second_start_pass(
-    fresh_store: Any,
-) -> None:
-    with pytest.raises(UniqueCreatorNotReady) as raised:
-        _default_app().check_ready()
-    assert "no actors yet" in str(raised.value)
-    assert "enable --apply" in str(raised.value)
-
-    assert unique_creators.main(["enable", "--apply"]) == 0
-
+def test_the_first_start_on_an_empty_store_passes(fresh_store: Any) -> None:
+    """4.0: the store has no user actors, so the start enables enforcement
+    itself (AWS_DB_PREFIX is set on the isolated store)."""
+    _default_app().check_ready()
+    assert unique_creators.missing_enforcement(fresh_store) is None
     _default_app().check_ready()
 
 

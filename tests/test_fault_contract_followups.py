@@ -80,8 +80,12 @@ class TestRevocationOrder:
             pytest.raises(DbError),
         ):
             store.list_all(strict=True)
-        with seam_fault(config, "attribute", "Attribute", "query"):
-            assert store.list_all() == []  # the other callers keep the fold
+        # 4.0.0rc1 adoption findings (AC-44): the default raises too.
+        with (
+            seam_fault(config, "attribute", "Attribute", "query"),
+            pytest.raises(DbError),
+        ):
+            store.list_all()
 
 
 class TestClearAllStateForPeer:

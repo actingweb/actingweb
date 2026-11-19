@@ -24,7 +24,7 @@ Integration
 Core Actor Routes
 =================
 
-- `/`: Root factory (create actor via web or API). Open by default; answers 403 when the app calls `with_open_factory(False)`
+- `/`: Root factory (create actor via web or API). Open when no sign-in provider is configured; closed by default (4.0) once a provider builder (`with_oauth`, `with_github`, `with_apple_sign_in`, `with_google_native`) is called. Closed, it answers 403 naming `with_open_factory(True)` and `GET /` shows no creation form; `with_open_factory(True)` opens it, `with_open_factory(False)` closes it
 - `/<actor_id>`: Actor root endpoint (see :ref:`actor-root-endpoint`)
 - `/<actor_id>/meta`: Discovery metadata. `/meta` is a JSON object; each scalar path (`/meta/id`, `/meta/version`, `/meta/actingweb/supported`, ...) is `text/plain` (4.0; Flask labelled them `text/html` and FastAPI sent no label)
 - `/<actor_id>/properties`: Get/update/delete properties. A value that is not JSON is read back as `text/plain`, a JSON value as `application/json` (4.0; both were labelled JSON). `PUT /properties` with no name is 405. List items are addressed by path (`/properties/<list>/<n>`, and `POST /properties/<list>` appends); see :doc:`../guides/property-lists`

@@ -365,23 +365,23 @@ Phase 3
 | AC-8 | 1 | `tests/test_db_fault_callers.py::TestListStoreLookups::test_exists_raises_on_a_fault` | Passing |
 | AC-9 | 1 | `tests/test_operator_command_store.py::test_every_command_prints_the_store_first` (parametrised from `pyproject.toml`'s scripts, both backends, `capsys`) | Passing |
 | AC-10 | 1 | `tests/test_operator_command_store.py::test_writing_without_a_prefix_is_refused` (parametrised over every writing mode, `delenv`), `::test_an_empty_prefix_is_unset`, `::test_dry_runs_are_not_refused`, `::test_postgresql_is_not_refused` | Passing |
-| AC-11 | 2 | `tests/test_check_ready_command.py::test_each_gate_is_reported_with_its_fix`, `::test_assumed_configuration_is_printed`, `::test_email_gate_needs_its_flag`, `::test_an_empty_store_is_ready_at_first_start`, `::test_it_writes_nothing_and_creates_no_table`, `::test_a_store_fault_is_exit_2`; `tests/integration/test_check_ready_command.py::test_fresh_and_populated_store` (both backends) | Not run |
+| AC-11 | 2 | `tests/test_check_ready_command.py::test_each_gate_is_reported_with_its_fix`, `::test_assumed_configuration_is_printed`, `::test_email_gate_needs_its_flag`, `::test_an_empty_store_is_ready_at_first_start`, `::test_it_writes_nothing_and_creates_no_table`, `::test_a_store_fault_is_exit_2`; `tests/integration/test_check_ready_command.py::test_fresh_and_populated_store` (both backends) | Passing |
 | AC-12 | 1 | `tests/test_adoption_log_line.py::test_one_line_per_adoption` (parametrised: cleaned, replaced, announced later), `::test_the_line_carries_no_address` | Passing |
-| AC-13 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_dynamodb_empty_store_starts` (real probes, `unique_creator` xdist group) | Not run |
-| AC-14 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_postgresql_empty_store_starts`, `::test_postgresql_without_ddl_refuses_with_the_command`, `::test_two_first_starts_at_once_both_start`; `tests/test_unique_creator_default.py::test_a_failed_index_build_refuses` | Not run |
-| AC-15 | 2 | `tests/test_unique_creator_default.py::test_a_store_with_a_user_actor_still_refuses` | Not run |
-| AC-16 | 2 | `tests/test_startup_check_retry.py::test_a_faulting_check_is_tried_three_times`, `::test_a_check_that_recovers_lets_the_app_start`, `::test_a_not_ready_answer_is_not_retried` (sleep patched) | Not run |
-| AC-17 | 2 | `tests/test_startup_check_retry.py::test_unavailable_is_true_only_for_a_fault`, `::test_a_missing_table_is_not_unavailable`, `::test_a_fault_while_counting_actors_is_unavailable`, `::test_the_combined_refusal` | Not run |
-| AC-18 | 2 | `tests/test_factory_open_switch.py::test_closed_by_default_with_a_provider`, `::test_with_oauth_after_get_config_still_closes`, `::test_an_empty_client_id_still_closes`, `::test_apple_only_closes`, `::test_the_closed_default_is_warned_once`; `tests/integration/test_factory_default.py::test_post_root_is_403_with_oauth_and_no_switch` | Not run |
-| AC-19 | 2 | `tests/test_factory_open_switch.py::test_open_without_a_provider`, `::test_explicit_open_wins`, `::test_a_bare_config_is_open` | Not run |
-| AC-20 | 2 | `tests/test_is_vouched_public.py::test_vouched_and_unvouched_markers`, `::test_a_renamed_creator_is_unvouched`, `::test_a_marker_without_a_bound_address`, `::test_an_unread_marker_raises` (through `backend_fault`) | Not run |
-| AC-21 | 2 | `tests/test_list_prefix_with_rows.py::test_list_all_with_rows_raises_on_a_fault` (replaces `:256`; both stores) | Not run |
-| AC-22 | 2 | `tests/test_db_error_after_write.py::test_a_diff_fault_after_a_property_write`, `::test_a_diff_fault_after_a_list_write`, `::test_clear_faults_before_its_write_is_plain`, `::test_handler_paths_that_fold_keep_folding`, `::test_the_wire_answer_has_its_own_code_and_no_retry_after`, `::test_append_once_repeat_does_not_duplicate` | Not run |
-| AC-25 | 2 | `tests/test_property_list_span_codec.py::test_need_is_checked_before_the_shape`, `::test_a_malformed_need_is_malformed`; `tests/test_property_list_newer_format.py::test_reading_raises_and_is_not_corruption`, `::test_http_answers_409_with_a_fixed_code` (both list kinds) | Not run |
-| AC-26 | 2 | `tests/test_property_list_newer_format.py::test_writes_by_handle_and_position_change_nothing`, `::test_compact_stops_before_its_first_write` | Not run |
-| AC-27 | 2 | `tests/test_property_list_newer_format.py::test_sweep_and_repair_keep_the_head_and_every_side_row` | Not run |
-| AC-28 | 2 | `tests/test_property_list_spans.py::test_unrecognised_side_row_names_survive_sweep_clear_and_delete`, `tests/test_property_list_newer_format.py::test_the_whole_list_can_be_deleted` | Not run |
-| AC-29 | 2 | `tests/test_list_item_limits.py::test_default_ceiling_is_2_mib_with_a_row_cap` (replaces `:95`); `tests/test_actingweb_app.py` `:755`, `:784` updated | Not run |
+| AC-13 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_dynamodb_empty_store_starts` (real probes, `unique_creator` xdist group) | Passing |
+| AC-14 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_postgresql_empty_store_starts`, `::test_postgresql_without_ddl_refuses_with_the_command`, `::test_two_first_starts_at_once_both_start`; `tests/test_unique_creator_default.py::test_a_failed_index_build_refuses` | Passing |
+| AC-15 | 2 | `tests/test_unique_creator_default.py::test_a_store_with_a_user_actor_still_refuses` | Passing |
+| AC-16 | 2 | `tests/test_startup_check_retry.py::test_a_faulting_check_is_tried_three_times`, `::test_a_check_that_recovers_lets_the_app_start`, `::test_a_not_ready_answer_is_not_retried` (sleep patched) | Passing |
+| AC-17 | 2 | `tests/test_startup_check_retry.py::test_unavailable_is_true_only_for_a_fault`, `::test_a_missing_table_is_not_unavailable`, `::test_a_fault_while_counting_actors_is_unavailable`, `::test_the_combined_refusal` | Passing |
+| AC-18 | 2 | `tests/test_factory_open_switch.py::test_closed_by_default_with_a_provider`, `::test_with_oauth_after_get_config_still_closes`, `::test_an_empty_client_id_still_closes`, `::test_apple_only_closes`, `::test_the_closed_default_is_warned_once`; `tests/integration/test_factory_default.py::test_post_root_is_403_with_oauth_and_no_switch` | Passing |
+| AC-19 | 2 | `tests/test_factory_open_switch.py::test_open_without_a_provider`, `::test_explicit_open_wins`, `::test_a_bare_config_is_open` | Passing |
+| AC-20 | 2 | `tests/test_is_vouched_public.py::test_vouched_and_unvouched_markers`, `::test_a_renamed_creator_is_unvouched`, `::test_a_marker_without_a_bound_address`, `::test_an_unread_marker_raises` (through `backend_fault`) | Passing |
+| AC-21 | 2 | `tests/test_list_prefix_with_rows.py::test_list_all_with_rows_raises_on_a_fault` (replaces `:256`; both stores) | Passing |
+| AC-22 | 2 | `tests/test_db_error_after_write.py::test_a_diff_fault_after_a_property_write`, `::test_a_diff_fault_after_a_list_write`, `::test_clear_faults_before_its_write_is_plain`, `::test_handler_paths_that_fold_keep_folding`, `::test_the_wire_answer_has_its_own_code_and_no_retry_after`, `::test_append_once_repeat_does_not_duplicate` | Passing |
+| AC-25 | 2 | `tests/test_property_list_span_codec.py::test_need_is_checked_before_the_shape`, `::test_a_malformed_need_is_malformed`; `tests/test_property_list_newer_format.py::test_reading_raises_and_is_not_corruption`, `::test_http_answers_409_with_a_fixed_code` (both list kinds) | Passing |
+| AC-26 | 2 | `tests/test_property_list_newer_format.py::test_writes_by_handle_and_position_change_nothing`, `::test_compact_stops_before_its_first_write` | Passing |
+| AC-27 | 2 | `tests/test_property_list_newer_format.py::test_sweep_and_repair_keep_the_head_and_every_side_row` | Passing |
+| AC-28 | 2 | `tests/test_property_list_spans.py::test_unrecognised_side_row_names_survive_sweep_clear_and_delete`, `tests/test_property_list_newer_format.py::test_the_whole_list_can_be_deleted` | Passing |
+| AC-29 | 2 | `tests/test_list_item_limits.py::test_default_ceiling_is_2_mib_with_a_row_cap` (replaces `:95`); `tests/test_actingweb_app.py` `:755`, `:784` updated | Passing |
 | AC-30 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_challenged_when_required`, `::test_an_authenticated_initialize_passes`, `::test_a_token_store_fault_is_503` (each over `post` and `post_async`) | Passing |
 | AC-31 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_open_by_default` (both handlers) | Passing |
 | AC-32 | 1 | `tests/integration/test_oauth2_flows.py::test_openid_configuration_serves_the_server_document` (FastAPI); `tests/test_flask_well_known.py::test_openid_configuration` (parametrised: Flask and FastAPI) | Passing |
@@ -395,14 +395,14 @@ Phase 3
 | AC-40 | 1 | manual: `scripts/live_pair.py --same-store` with the marking run (two library versions in one run are outside the suite) | Passing (manual, 2026-11-19: see the Phase 1 notes) |
 | AC-41 | 1 | manual: the same with `backfill --apply` | Passing (manual, 2026-11-19: see the Phase 1 notes) |
 | AC-42 | 3 | manual: `ls thoughts/inbound thoughts/todo` against `INDEX.md` | Not run |
-| AC-43 | 2 | `tests/test_property_list_newer_format.py::test_an_unknown_list_format_is_refused_everywhere` (read, append, clear, lazy migration, sweep), `tests/test_migrate_property_lists.py::test_the_command_skips_and_reports_an_unknown_format` | Not run |
-| AC-44 | 2 | `tests/test_attribute_list_store.py::test_list_all_raises_on_a_fault` | Not run |
-| AC-45 | 2 | `tests/test_verify_property_lists.py::test_side_rows_of_a_list_without_meta_are_reported_not_removed` | Not run |
-| AC-46 | 2 | `tests/test_actor_peer_creation.py::test_a_closed_factory_is_warned` | Not run |
-| AC-47 | 2 | `tests/test_factory_open_switch.py::test_the_default_page_hides_the_form_when_closed` (both integrations) | Not run |
-| AC-48 | 2 | `tests/test_unique_creator_default.py::test_the_default_prefix_does_not_self_enable` | Not run |
+| AC-43 | 2 | `tests/test_property_list_newer_format.py::test_an_unknown_list_format_is_refused_everywhere` (read, append, clear, lazy migration, sweep), `tests/test_migrate_property_lists.py::test_the_command_skips_and_reports_an_unknown_format` | Passing |
+| AC-44 | 2 | `tests/test_attribute_list_store.py::test_list_all_raises_on_a_fault` | Passing |
+| AC-45 | 2 | `tests/test_verify_property_lists.py::test_side_rows_of_a_list_without_meta_are_reported_not_removed` | Passing |
+| AC-46 | 2 | `tests/test_actor_peer_creation.py::test_a_closed_factory_is_warned` | Passing |
+| AC-47 | 2 | `tests/test_factory_open_switch.py::test_the_default_page_hides_the_form_when_closed` (both integrations) | Passing |
+| AC-48 | 2 | `tests/test_unique_creator_default.py::test_the_default_prefix_does_not_self_enable` | Passing |
 | AC-49 | 1 | `tests/test_oauth2_pkce_binding.py::test_the_callback_refuses_a_state_without_a_challenge`, `::test_the_exchange_refuses_a_code_without_a_challenge`, `::test_a_directly_created_code_follows_the_rule` | Passing |
-| AC-50 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_an_actor_created_during_the_enable_is_recorded` | Not run |
+| AC-50 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_an_actor_created_during_the_enable_is_recorded` | Passing |
 | AC-51 | 1 | `tests/test_actingweb_app.py::test_a_second_with_mcp_keeps_earlier_options` | Passing |
 | AC-53 | 1 | `tests/test_property_lookup_command.py::TestBackfill::test_the_summary_counts_what_it_read` (both backends) | Passing |
 | AC-54 | 1 | `tests/test_property_lookup_command.py::TestBackfill::test_a_collision_names_the_actors_and_the_ways_out` (both backends) | Passing |
@@ -661,15 +661,91 @@ its ceiling explicitly.
 
 ### Verification
 
-- [ ] Run the contract's `### Checks` fast tier verbatim
-- [ ] Full tier, both backends, before the phase's commit
-- [ ] `poetry run python tests/integration/verify_groups.py`
-- [ ] Benchmarks alone (`-m benchmark`): the phase touches list storage
-- [ ] Start `examples/demo/` in QA mode on a fresh DynamoDB Local prefix with no enable step: it starts; with OAuth configured and `OPEN_FACTORY` unset, `POST /` answers 403
-- [ ] Each console script with `--help` from a wheel (`poetry build`, a scratch venv): `actingweb-check-ready` is packaged
-- [ ] The consumer's suite against this tree by path (the procedure in `thoughts/research/2026-11-18-3-16-release-validation.md`, "Running Emm's suite against this library"); every name beyond the five known ones is explained by a change here
+- [x] Run the contract's `### Checks` fast tier verbatim
+- [x] Full tier, both backends, before the phase's commit (2026-11-19: DynamoDB 8364 passed; PostgreSQL 8137 passed after the shared-store fix below; docs `-W` clean)
+- [x] `poetry run python tests/integration/verify_groups.py`
+- [x] Benchmarks alone (`-m benchmark`): 26 passed
+- [x] Demo QA mode on a fresh DynamoDB Local prefix with no enable step starts and serves: `tests/integration/test_demo_first_run.py` (rewritten); with OAuth and `OPEN_FACTORY` unset the factory is closed: `tests/test_demo_example.py`
+- [x] Each console script with `--help` from a wheel: all nine, `actingweb-check-ready` included
+- [ ] The consumer's suite against this tree by path: not run here; the consumer runs it against the branch (see notes)
 
-### Implementation Status: Not Started
+### Implementation Notes
+
+- AC-12 follow-up (committed in Phase 1, fixed here): the `ACTOR_ADOPTED:`
+  line printed up to ten trust peer ids, and an OAuth client's peer id is
+  `oauth2_client:<email>:<client>`, so the line could carry an address.
+  It now carries counts only (`trusts=`, `siblings=`); the AC-12 test
+  plants such a trust and asserts no `@`.
+- Red before green was not kept for the storage group: the
+  `ListItemNewerFormatError` sites, the meta-format guard and the two
+  command changes were written before their tests
+  (`tests/test_property_list_newer_format.py`,
+  `tests/test_migrate_property_lists.py`, `tests/test_verify_property_lists.py`).
+  The codec tests (AC-25) were red first. The tests assert on snapshots of
+  every row in both partitions.
+- `NewerFormatError` (codec) is a sibling of `EnvelopeError`, not a
+  subclass: every `except EnvelopeError` means "malformed, removable", so a
+  missed site fails loudly instead of sweeping a newer head. `need` is
+  checked right after the marker, before any field's shape.
+- Decision (taken here, as the smaller rule): a list whose meta `format` is
+  not 1 or 2 is refused by `delete()` too, not only read/write/clear/
+  migrate/sweep: the format check sits where the meta row is parsed, and
+  `delete()`'s foreign-row sweep would otherwise read format 3 as v1 and
+  delete the real rows. The whole-list escape is for a newer *item* in a
+  known layout.
+- The 409 for `ListItemNewerFormatError` is answered by the handlers beside
+  each `ListItemSpanError` site, by `map_db_error`, and by app-level
+  handlers in both integrations (a consumer route), with a fixed body.
+- `actingweb-verify-property-lists` exits 3 when the only finding is
+  newer-format data; AC-45's side-row report runs under `--spans` /
+  `--sweep-spans` (it pays the side-partition read those already pay).
+- `AttributeListStore.list_all_lists()` (via `RemoteStorage`) raises by
+  default too; its callers already re-raise or treat a fault as a fault.
+- `actor.get_peer_trustee()` read `if response:`, which is false for any
+  4xx, so a 403 left the previous call's code; fixed for AC-46. Three other
+  peer calls in `actor.py` share the pattern (todo for Phase 3).
+- Two integration fixtures fixed: `test_mcp_resource_regression.py`'s app
+  (OAuth, posts to `/`) now opens its factory; `test_property_list_collision.py`
+  depended on test order for the creators table (it failed alone on the
+  Phase 1 commit too) and now creates its actor without uniqueness.
+- The demo calls `with_open_factory` only when `OPEN_FACTORY` is set, so it
+  shows the default (closed with OAuth, open in QA mode).
+- Start-up: `_probe()` retries a fault (three attempts, 0.5 s then 1.5 s
+  from a 2 s budget shared by the whole `check_ready()`; one attempt for
+  the remaining checks once a check ended unavailable); `_store_answered()`
+  classifies a missing table or denied permission (DynamoDB codes,
+  `TableDoesNotExist`, psycopg `UndefinedTable`/`InsufficientPrivilege`/
+  `UndefinedColumn`/`InvalidSchemaName`) as an answer, never retried.
+  `unique_creators.no_actors(strict=True)` scans strongly and raises;
+  `enable_empty_store()` is the dedicated path (DynamoDB: `ensure_table`,
+  system actors recorded, marker, second consistent scan with each late
+  actor recorded or the marker removed and the start refused; PostgreSQL:
+  `CREATE UNIQUE INDEX IF NOT EXISTS` in a transaction with 5 s lock and
+  30 s statement timeouts, a lost race reading the index valid counts as
+  done). The start-up integration tests and `check-ready`'s tests were
+  written after the code; the retry unit tests were red first.
+- `actingweb-check-ready` reads the email marker through the static
+  `DbAttribute.get_attr_strict` on DynamoDB (constructing the backend
+  creates a missing table) and treats a missing actor table as an empty
+  store. It is in `test_operator_command_store.py`'s map (read-only).
+- Verification: wheel built, every console script answers `--help` from a
+  scratch venv (Python 3.14); benchmarks alone, 26 passed. The consumer's
+  suite against this tree was not run here: the consumer runs it against
+  the branch itself (its second read, 2026-11-19).
+- Found by the first PostgreSQL Full tier: a unit test with the real
+  uniqueness probe (`tests/test_demo_example.py`) reached the empty-store
+  self-enable on the shared PostgreSQL schema, which is empty early in a
+  run, and built `ux_actors_creator` there, breaking every later test that
+  holds deliberate duplicates. `tests/_lookup_probe.py` now has an autouse
+  guard: outside `tests/integration` the enable step refuses unless a test
+  patches it. The stray index was dropped from the test container.
+- For Phase 3 (todos), the consumer's round-two candidates (2026-11-19),
+  to be verified against the tree when filed: an unserialisable value is
+  reported as a store fault (`DbError("attribute set")`), so a caller that
+  retries on 503 would retry forever; and a public call to record one
+  actor's creator, only if the narrowed enable command does not serve.
+
+### Implementation Status: Complete
 
 ---
 

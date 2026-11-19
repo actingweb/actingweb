@@ -244,16 +244,42 @@ class TestErrorHandling:
         with pytest.raises(DbError):
             list_store.list_prefix_with_rows("memory_")
 
-    def test_list_all_with_rows_still_swallows(self, monkeypatch, store):
-        """The sibling's behaviour is unchanged -- the asymmetry is chosen,
-        not drift."""
+    def test_list_all_with_rows_raises_on_a_fault(self, monkeypatch, store):
+        """AC-21 (4.0): the sibling raises too; ``([], {})`` read a fault
+        as "no lists"."""
         monkeypatch.setattr(
             "actingweb.property.get_property_list",
             lambda config: FakePartitionDb(store, fail=True),
         )
         list_store = PropertyListStore(actor_id=ACTOR, config=object())
 
-        assert list_store.list_all_with_rows() == ([], {})
+        with pytest.raises(DbError):
+            list_store.list_all_with_rows()
+
+    def test_attribute_list_all_with_rows_raises_on_a_fault(self):
+        """AC-21 on the attribute list store."""
+        from typing import Any
+
+        from actingweb.attribute_list_store import AttributeListStore
+        from tests.mcp_token_double import make_config
+        from tests.test_attribute_list import ACTOR as A_ACTOR
+        from tests.test_attribute_list import BUCKET, _lst
+
+        config, _ = make_config()
+        _lst(config, "a").append("x")
+        base = config.DbAttribute.DbAttribute
+
+        class Faulty(base):  # type: ignore[misc,valid-type]
+            def get_attr_range(self, *a: Any, **k: Any) -> Any:
+                raise DbError("throttled")
+
+            def get_last_attr_in_range(self, *a: Any, **k: Any) -> Any:
+                raise DbError("throttled")
+
+        config.DbAttribute.DbAttribute = Faulty  # type: ignore[attr-defined]
+        store = AttributeListStore(actor_id=A_ACTOR, bucket=BUCKET, config=config)
+        with pytest.raises(DbError):
+            store.list_all_with_rows()
 
 
 class TestListAllIsUnchanged:

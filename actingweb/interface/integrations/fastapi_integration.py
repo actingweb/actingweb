@@ -75,6 +75,18 @@ def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
 # Pydantic Models for Type Safety
 
 
+async def _newer_format_handler(request: Request, exc: Exception) -> JSONResponse:
+    """The app-level answer for ``ListItemNewerFormatError``."""
+    from ._errors import newer_format_answer
+
+    del request
+    logging.getLogger(__name__).warning(
+        f"Refused data a later library version stored: {exc}"
+    )
+    status, headers, body = newer_format_answer()
+    return JSONResponse(content=body, status_code=status, headers=headers)
+
+
 def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
     """The app-level answer for a ``DbError`` (see ``_errors.py``).
 
@@ -636,6 +648,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # consumer route calling ActorInterface, answers 503 (409 for
         # CreatorTaken) instead of a 500.
         self.fastapi_app.add_exception_handler(DbError, _db_error_handler(aw_app))
+        # Data a later library version stored: a fixed 409, never str(e).
+        from ...list_core import ListItemNewerFormatError
+
+        self.fastapi_app.add_exception_handler(
+            ListItemNewerFormatError, _newer_format_handler
+        )
 
     async def _run_in_executor_with_context(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -1765,7 +1783,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 context=webobj.response.template_values,
             )
         elif self.templates:
-            return self.templates.TemplateResponse(request, "aw-root-factory.html")
+            return self.templates.TemplateResponse(
+                request,
+                "aw-root-factory.html",
+                context={"factory_open": self.aw_app.get_config().open_factory},
+            )
         else:
             # Fallback for when templates are not available
             return Response(
@@ -1813,7 +1835,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     return self.templates.TemplateResponse(
                         request,
                         "aw-root-factory.html",
-                        context={"error": "Email is required"},
+                        context={
+                            "error": "Email is required",
+                            "factory_open": self.aw_app.get_config().open_factory,
+                        },
                     )
                 else:
                     raise HTTPException(status_code=400, detail="Email is required")

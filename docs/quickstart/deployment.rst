@@ -246,8 +246,12 @@ credentials), in this order, before a deploy:
 
 A fresh PostgreSQL database needs no first start of the application to
 create its tables (the application never creates them; Alembic does):
-``alembic upgrade head``, then ``actingweb-unique-creators enable --apply``,
-then start.
+``alembic upgrade head``, then start. On a store with no actors the first
+start enables creator uniqueness itself (on PostgreSQL it builds
+``ux_actors_creator``, so the application's role must be allowed to create
+an index; on DynamoDB it needs ``AWS_DB_PREFIX`` set explicitly). Where it
+cannot, the start is refused naming ``actingweb-unique-creators enable
+--apply``; run that with the application's environment and start again.
 
 **Where they run, and what they must be told.** The commands are console
 scripts of the package and do not import your application. Run them from any

@@ -16,6 +16,9 @@ def test_actor(test_app):
         aw_type="urn:actingweb:example.com:testapp",
         actor_id=None,
         database=os.environ.get("DATABASE_BACKEND", "dynamodb"),
+        # Name collisions, not creators: without uniqueness the create needs
+        # no creators table, which another test may not have made yet.
+        unique_creator=False,
     )
     actor = ActorInterface.create(
         creator="collision@example.com",

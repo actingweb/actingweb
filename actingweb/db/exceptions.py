@@ -1,5 +1,8 @@
 """Exceptions shared across database backends."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 
 class DbError(Exception):
     """A database backend operation failed unexpectedly.
@@ -15,6 +18,32 @@ class DbError(Exception):
     def __init__(self, op: str, actor_id: str | None = None) -> None:
         actor_part = f" for actor {actor_id}" if actor_id else ""
         super().__init__(f"database error during {op}{actor_part}")
+
+
+class DbErrorAfterWrite(DbError):
+    """A property or list write was stored, and the fault came after it,
+    registering its diff for subscribers (4.0).
+
+    The value is stored; the diff is not registered, so a subscriber's copy
+    stays stale until the next diff or a resync. A repeat of a plain set is
+    safe (it writes the same value and registers the diff); a repeat of an
+    unkeyed append adds a second item, while ``append_once`` does not. A
+    plain ``DbError`` means nothing was written, or that the caller cannot
+    tell. Over HTTP it answers 503 with the code ``stored_not_notified``
+    and no ``Retry-After``.
+    """
+
+
+@contextmanager
+def after_write(op: str, actor_id: str | None = None) -> Iterator[None]:
+    """Raise a ``DbError`` from the block as :class:`DbErrorAfterWrite`:
+    wraps the diff registration that follows a stored write."""
+    try:
+        yield
+    except DbErrorAfterWrite:
+        raise
+    except DbError as e:
+        raise DbErrorAfterWrite(op, actor_id) from e
 
 
 class CreatorTaken(DbError):

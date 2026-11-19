@@ -79,6 +79,7 @@ import time
 from typing import Any
 
 from actingweb.db.exceptions import DbError
+from actingweb.list_core import ListItemNewerFormatError
 from actingweb.maintenance._common import preflight
 
 logging.basicConfig(
@@ -152,7 +153,8 @@ def migrate_actor(
     Returns (lists_checked, lists_migrated_or_would_migrate, lists_errored,
     refusals), where each refusal is a ``(actor_id/list_name, reason)``
     pair -- ``"rename required"`` for a '#'-named list, ``"repair
-    required"`` for one with holes or orphans.
+    required"`` for one with holes or orphans, ``"stored by a later
+    version"`` for a list whose layout a later library version wrote.
     """
     from actingweb.property import PropertyListStore
     from actingweb.property_list import ListProperty
@@ -173,6 +175,16 @@ def migrate_actor(
             # actor's whole property partition per list purely to learn the
             # format -- ~13 partition dumps per actor on a typical one.
             already_v2 = list_prop.storage_format() == 2
+        except ListItemNewerFormatError:
+            # A layout a later version wrote: never rewritten from here.
+            refused.append((f"{actor_id}/{name}", "stored by a later version"))
+            line = (
+                f"actor={actor_id} list={name}: NEWER FORMAT -- stored by a "
+                "later library version; skipped, not migrated or swept"
+            )
+            print(line)
+            logger.warning(line)
+            continue
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: format check failed: {e}")
             errored += 1

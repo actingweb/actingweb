@@ -89,10 +89,12 @@ def _v2_list(store: dict[Any, Any], config: Config, items: list[Any]) -> ListPro
 
 
 class TestBackendDefaults:
-    def test_dynamodb_defaults(self) -> None:
+    def test_default_ceiling_is_2_mib_with_a_row_cap(self) -> None:
+        """AC-29 (4.0): 2 MiB where a row cap exists; raising it later
+        strands nothing, lowering it later would."""
         config = Config(unique_creator=False, database="dynamodb")
         assert config.list_item_span_threshold == SPAN_THRESHOLD_DEFAULT == 390_000
-        assert config.list_item_max_bytes == ITEM_MAX_BYTES_DEFAULT == 4 * 2**20
+        assert config.list_item_max_bytes == ITEM_MAX_BYTES_DEFAULT == 2 * 2**20
 
     def test_postgresql_defaults_are_off(self) -> None:
         config = Config(unique_creator=False, database="postgresql")

@@ -76,7 +76,56 @@ class TestDefaultReadiness:
         ):
             assert needle in message
 
-    def test_a_store_with_no_actors_gets_the_short_form(self) -> None:
+    def test_an_empty_store_enables_itself(self) -> None:
+        """AC-13 (4.0): no user actors, so nothing to resolve; the enable
+        step is patched (the shared unit store holds deliberate duplicates)."""
+        answers = iter(["the DynamoDB table x_creators does not exist", None])
+        with (
+            mock.patch(
+                "actingweb.maintenance.unique_creators.missing_enforcement",
+                side_effect=lambda config: next(answers),
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.no_actors", return_value=True
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.enable_empty_store"
+            ) as enable,
+        ):
+            _check(_app())
+        enable.assert_called_once()
+
+    def test_a_store_with_a_user_actor_still_refuses(self) -> None:
+        """AC-15."""
+        with (
+            mock.patch(
+                "actingweb.maintenance.unique_creators.missing_enforcement",
+                return_value="the DynamoDB table x_creators does not exist",
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.no_actors", return_value=False
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.enable_empty_store"
+            ) as enable,
+        ):
+            with pytest.raises(UniqueCreatorNotReady) as raised:
+                _check(_app())
+        enable.assert_not_called()
+        assert "resolve --apply" in str(raised.value)
+
+    def test_the_default_prefix_does_not_self_enable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-48: a wrong prefix with table auto-creation must not start an
+        empty store."""
+        monkeypatch.delenv("AWS_DB_PREFIX", raising=False)
+        with mock.patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:default",
+                fqdn="x.example.com",
+                database="dynamodb",
+            )
         with (
             mock.patch(
                 "actingweb.maintenance.unique_creators.missing_enforcement",
@@ -85,13 +134,45 @@ class TestDefaultReadiness:
             mock.patch(
                 "actingweb.maintenance.unique_creators.no_actors", return_value=True
             ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.enable_empty_store"
+            ) as enable,
         ):
             with pytest.raises(UniqueCreatorNotReady) as raised:
-                _check(_app())
+                _check(app)
+        enable.assert_not_called()
         message = str(raised.value)
-        assert "no actors yet" in message
+        assert "AWS_DB_PREFIX" in message and "demo_actingweb" in message
         assert "enable --apply" in message
-        assert "resolve --apply" not in message
+
+    def test_a_failed_index_build_refuses(self) -> None:
+        """AC-14: a role that may not create the index, or a build that
+        fails, refuses with the command."""
+        with mock.patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(
+                aw_type="urn:actingweb:test:default",
+                fqdn="x.example.com",
+                database="postgresql",
+            )
+        with (
+            mock.patch(
+                "actingweb.maintenance.unique_creators.missing_enforcement",
+                return_value="the PostgreSQL index ux_actors_creator does not exist",
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.no_actors", return_value=True
+            ),
+            mock.patch(
+                "actingweb.maintenance.unique_creators.enable_empty_store",
+                side_effect=RuntimeError("permission denied for schema public"),
+            ),
+            mock.patch.object(ActingWebApp, "_check_property_lookup_ready"),
+            mock.patch.object(ActingWebApp, "_check_attribute_schema_ready"),
+            mock.patch.object(ActingWebApp, "_check_email_as_creator_ready"),
+        ):
+            with pytest.raises(UniqueCreatorNotReady) as raised:
+                _check(app)
+        assert "actingweb-unique-creators enable --apply" in str(raised.value)
 
 
 @pytest.mark.skipif(

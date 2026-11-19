@@ -583,6 +583,34 @@ class ActorInterface:
         after_rename(store, handle, internal, target)
         return True
 
+    def is_vouched(self) -> bool:
+        """Whether some party vouched for this actor's current creator.
+
+        True when a provider sign-in, the operator
+        (``actingweb-mark-actors-vouched``) or the application (``app``)
+        vouched for the address the actor's creator is now, and its email
+        verification is not pending. A marker being present is not the test:
+        ``factory`` and ``email_unverified`` are markers that do not vouch,
+        and a creator renamed since the vouch (``Actor.modify(creator=...)``)
+        reads unvouched. A marker written before 4.0 recorded the address
+        vouches for whatever the creator is. An unvouched actor is cleaned
+        or replaced at the next sign-in that proves its address.
+
+        Reads the actor's ``_internal`` bucket afresh (one read).
+
+        Raises:
+            DbError: the marker could not be read; a fault never reads as
+                unvouched (or vouched).
+        """
+        from ..attribute import InternalStore
+        from ..db.exceptions import DbError
+        from ..oauth2 import is_vouched_store
+
+        store = InternalStore(actor_id=self.id, config=self._core_actor.config)
+        if not store.loaded:
+            raise DbError("vouch marker read", self.id)
+        return is_vouched_store(store, self.creator or "")
+
     def is_valid(self) -> bool:
         """Check if this actor is valid (has ID and exists)."""
         return self.id is not None and len(self.id) > 0

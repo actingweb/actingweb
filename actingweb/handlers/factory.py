@@ -192,6 +192,8 @@ class RootFactoryHandler(base_handler.BaseHandler):
                 "oauth_providers": oauth_providers,  # List of dicts with name, display_name, url
                 "oauth_enabled": bool(oauth_urls),
                 "base_path": self._base_path(),
+                # A closed factory answers 403: the page offers no form.
+                "factory_open": self.config.open_factory,
             }
         else:
             self.response.set_status(404)
@@ -212,14 +214,15 @@ class RootFactoryHandler(base_handler.BaseHandler):
             }
 
     def post(self):
-        if not getattr(self.config, "open_factory", True):
+        if not self.config.open_factory:
             # The body is not parsed yet: a JSON body (Content-Type) or a
             # client asking for JSON back (Accept) gets the JSON error.
             content_type = self.request.get_header("Content-Type")
             self._refuse(
                 403,
-                "Actor creation is disabled on this server (with_open_factory); "
-                "sign in through OAuth instead",
+                "Actor creation is disabled on this server; sign in through "
+                "OAuth instead (the application opens the factory with "
+                "with_open_factory(True))",
                 as_json="application/json" in content_type or self._wants_json(),
             )
             return

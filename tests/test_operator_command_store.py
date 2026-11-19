@@ -36,6 +36,7 @@ READ_ONLY: dict[str, list[str]] = {
     "actingweb-property-lookup": ["report"],
     "actingweb-deletions": ["report"],
     "actingweb-peer-state": ["report"],
+    "actingweb-check-ready": [],
 }
 
 #: Every writing mode of every command.
@@ -105,8 +106,11 @@ def _run(script: str, argv: list[str]) -> int | None:
 
 def test_every_command_is_covered() -> None:
     assert set(_scripts()) == set(READ_ONLY)
-    # verify-orphans has no writing mode.
-    assert {s for s, _ in WRITING} == set(_scripts()) - {"actingweb-verify-orphans"}
+    # verify-orphans and check-ready have no writing mode.
+    assert {s for s, _ in WRITING} == set(_scripts()) - {
+        "actingweb-verify-orphans",
+        "actingweb-check-ready",
+    }
 
 
 @pytest.mark.parametrize("backend", ["dynamodb", "postgresql"])

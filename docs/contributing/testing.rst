@@ -266,8 +266,10 @@ a passphrase-to-SPA-token exchange endpoint that bypasses the OAuth2 flow.
 Obtaining SPA Tokens via Passphrase
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-(The factory request below needs the default open factory; a harness built
-with ``create_test_app(open_factory=False)`` answers it with ``403``.)
+(The factory request below needs an open factory. The harness opens it by
+default; a harness built with ``create_test_app(open_factory=False)`` answers
+it with ``403``, and so does an application with a sign-in provider that does
+not call ``with_open_factory(True)``.)
 
 Exchange a creator passphrase for SPA tokens:
 

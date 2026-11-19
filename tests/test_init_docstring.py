@@ -33,6 +33,7 @@ def test_init_all_unchanged():
         "ListMetadataContentionError",
         "ListItemTooLargeError",
         "ListItemSpanError",
+        "ListItemNewerFormatError",
         "UNRESOLVED",
         "AppendOnceResult",
     ]

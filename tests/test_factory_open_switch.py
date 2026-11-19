@@ -105,9 +105,10 @@ class TestClosedFactory:
 
 
 class TestOpenFactory:
-    def test_config_without_the_attribute_is_open(self) -> None:
+    def test_a_bare_config_is_open(self) -> None:
+        """AC-19: no provider builder was called."""
         config = make_config()
-        del config.open_factory
+        assert config.open_factory is True
         webobj = _post(config, uuid_email(), as_json=True)
         assert webobj.response.status_code == 201
 
@@ -177,3 +178,113 @@ class TestOpenFactoryNormalisesTheCreator:
 
         assert webobj.response.status_code == 201
         assert Actor(config=config).get_from_creator(address)
+
+
+class TestClosedByDefaultWithAProvider:
+    """AC-18, AC-19, AC-47: a provider builder closes the factory unless the
+    application opens it; the default page then offers no form."""
+
+    def _app(self) -> ActingWebApp:
+        return ActingWebApp(
+            aw_type="urn:actingweb:test:factory-default",
+            database="dynamodb",
+            fqdn="test.example.com",
+        )
+
+    def test_closed_by_default_with_a_provider(self) -> None:
+        app = self._app().with_oauth(client_id="cid", client_secret="sec")
+        config = app.get_config()
+        assert config.open_factory is False
+        webobj = _post(config, uuid_email(), as_json=True)
+        assert webobj.response.status_code == 403
+        assert "with_open_factory(True)" in json.loads(webobj.response.body)["message"]
+
+    def test_with_oauth_after_get_config_still_closes(self) -> None:
+        app = self._app()
+        config = app.get_config()
+        app.with_oauth(client_id="cid", client_secret="sec")
+        assert config.open_factory is False
+
+    def test_an_empty_client_id_still_closes(self) -> None:
+        app = self._app().with_oauth(client_id="", client_secret="")
+        assert app.get_config().open_factory is False
+
+    def test_apple_only_closes(self) -> None:
+        from tests.test_actingweb_app import TestAppleSignIn
+
+        app = self._app().with_apple_sign_in(
+            client_id="com.example.web",
+            audiences=["com.example.web"],
+            team_id="TEAM123456",
+            key_id="KEY1234567",
+            private_key_pem=TestAppleSignIn._ec_pem(),
+        )
+        assert app.get_config().open_factory is False
+
+    def test_github_and_google_native_close(self) -> None:
+        assert self._app().with_github("id", "sec").get_config().open_factory is False
+        assert (
+            self._app()
+            .with_google_native("id.apps.googleusercontent.com")
+            .get_config()
+            .open_factory
+            is False
+        )
+
+    def test_open_without_a_provider(self) -> None:
+        assert self._app().get_config().open_factory is True
+
+    def test_explicit_open_wins(self) -> None:
+        for app in (
+            self._app()
+            .with_oauth(client_id="cid", client_secret="sec")
+            .with_open_factory(True),
+            self._app()
+            .with_open_factory(True)
+            .with_oauth(client_id="cid", client_secret="sec"),
+        ):
+            assert app.get_config().open_factory is True
+
+    def test_the_closed_default_is_warned_once(self, caplog) -> None:
+        import logging
+
+        from fastapi import FastAPI
+
+        app = self._app().with_oauth(client_id="cid", client_secret="sec")
+        with caplog.at_level(logging.WARNING):
+            app.integrate_fastapi(FastAPI())
+        lines = [
+            r for r in caplog.records if "with_open_factory(True)" in r.getMessage()
+        ]
+        assert len(lines) == 1
+        open_app = self._app().with_oauth(client_id="cid", client_secret="sec")
+        open_app.with_open_factory(True)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            open_app.integrate_fastapi(FastAPI())
+        assert not [
+            r for r in caplog.records if "with_open_factory(True)" in r.getMessage()
+        ]
+
+    def test_the_default_page_hides_the_form_when_closed(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from flask import Flask
+
+        for closed in (True, False):
+            app = self._app().with_oauth(client_id="cid", client_secret="sec")
+            if not closed:
+                app.with_open_factory(True)
+            fastapi_app = FastAPI()
+            app.integrate_fastapi(fastapi_app)
+            page = TestClient(fastapi_app).get("/", headers={"Accept": "text/html"})
+            assert ('name="creator"' in page.text) is not closed, page.text[:300]
+
+            app = self._app().with_oauth(client_id="cid", client_secret="sec")
+            if not closed:
+                app.with_open_factory(True)
+            flask_app = Flask(__name__)
+            app.integrate_flask(flask_app)
+            page = flask_app.test_client().get("/", headers={"Accept": "text/html"})
+            text = page.get_data(as_text=True)
+            assert ('name="creator"' in text) is not closed, text[:300]

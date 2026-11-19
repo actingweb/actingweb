@@ -11,14 +11,20 @@ v4.0.0rc1: November 18, 2026
 .. note::
 
    **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
-   here") before upgrading.** An application refuses to start until the
-   steps it needs have run, and names them: ``alembic upgrade head`` on
-   PostgreSQL, ``actingweb-unique-creators enable --apply`` (creator
-   uniqueness is on by default), ``actingweb-property-lookup backfill
-   --apply`` where indexed properties hold data, and ``actingweb-unique-creators
-   creator-to-email --apply`` under ``with_email_as_creator``. Run them from
-   an installation of 4.0 against the production database before the
-   deploy; the guide's "The operator commands" says when each is safe.
+   here") before upgrading.** The first steps: ``alembic upgrade head`` on
+   PostgreSQL; ``actingweb-mark-actors-vouched`` where actors created
+   before 4.0 are to be kept (no start checks it: an unmarked actor is
+   cleaned at its next sign-in); ``actingweb-property-lookup backfill
+   --apply`` where indexed properties hold data;
+   ``actingweb-unique-creators`` ``report``, ``resolve --apply`` and
+   ``enable --apply`` only for a store that already holds actors (creator
+   uniqueness is on by default; an empty store enables itself at the first
+   start); and ``actingweb-unique-creators creator-to-email --apply`` under
+   ``with_email_as_creator``. An application refuses to start until the
+   ones it needs have run, and names them; ``actingweb-check-ready`` shows
+   what the start will say. Run them from an installation of 4.0 against
+   the production database before the deploy; the guide's "The operator
+   commands" says when each is safe.
 
 SECURITY
 ~~~~~~~~
@@ -3755,7 +3761,7 @@ FIXED
   including the meta row of a never-created list; ``extend()`` checks the
   whole batch before its first write. On a v2 list an item over the span
   threshold now spans several rows (see ADDED); an item over
-  ``list_item_max_bytes`` (4 MiB on DynamoDB), or a v1 list item over the
+  ``list_item_max_bytes`` (2 MiB on DynamoDB), or a v1 list item over the
   span threshold, is refused. The REST handlers answer 413 with a
   structured body. **Behavior change:** a caller that caught ``DbError``
   for an oversized item gets ``ListItemTooLargeError`` (a ``ValueError``)

@@ -27,3 +27,12 @@ sequence for all subscribers, applied no permission filter, read the wrong
 option tag, and downgraded to a URL a 4.0 subscriber does not fetch. A design
 here starts from the sender (units per subscriber, the per-write bound) and
 keeps the per-subscription sequence and the grant filter.
+
+## Added 2026-11-19 (a consumer's A11)
+
+Treat `callback_delivery_budget_seconds` as a deadline for the whole
+request, not only for its callbacks, and send a permission notice the budget
+cut later instead of dropping it to the next change. No peer, subscription
+or replica in the asking consumer's production yet, so there is nothing to
+test it against (`thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md`).
+

@@ -2053,7 +2053,7 @@ class Actor:
                     headers=headers,
                     timeout=(5, 10),
                 )
-                if response:
+                if response is not None:  # a 4xx Response is falsy
                     self.last_response_code = response.status_code
                     self.last_response_message = (
                         response.content.decode("utf-8", "ignore")

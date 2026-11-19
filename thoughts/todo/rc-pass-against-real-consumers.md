@@ -11,12 +11,16 @@ because only that proves the wheel (the skill is not in it, the console
 scripts and the packaged templates are):
 
 1. **`actingwebdemo` to the rc.** In its worktree: the submodule to the
-   `v4.0.0rc1` tag, `poetry lock`, its tests (after the README's
-   `actingweb-unique-creators enable --apply` on a fresh store), then the
-   owner's `deploy.yml` dispatch with `pypi_index: testpypi`. Its adoption
-   work first: a fresh-store step in its CI, ruff `^0.15` or a `vendor/`
-   exclude, and `dynamodb:BatchGetItem` and `dynamodb:ConditionCheckItem` on
-   its function role. The data steps run before the merge that deploys; the
+   `v4.0.0rc1` tag, `poetry lock`, its tests, then the owner's
+   `deploy.yml` dispatch with `pypi_index: testpypi`. Its adoption work
+   first: ruff `^0.15` or a `vendor/` exclude, `dynamodb:BatchGetItem` and
+   `dynamodb:ConditionCheckItem` on its function role, and `AWS_DB_PREFIX`
+   set explicitly for every operator command (4.0 refuses a write on an
+   unset prefix). No fresh-store step is needed any more: an empty store
+   with an explicit prefix enables creator uniqueness at its first start
+   (`2026-11-19-emm-4-0-adoption-findings`). Its factory is closed by
+   default once OAuth is configured; set `OPEN_FACTORY=true` if the deployed
+   demo should keep the form. The data steps run before the merge that deploys; the
    order is the runbook in
    `thoughts/research/2026-11-18-3-16-release-validation.md`
    ("`actingwebdemo` against this branch"). The public demo runs 3.15.1

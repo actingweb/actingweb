@@ -98,3 +98,11 @@ purge is the only reaper. Same trigger, same fix: scope by config.
   plan; "What We're NOT Doing" is the long form of why these were cut.
 - `thoughts/research/2026-07-30-mcp-trust-cache-crosses-clients.md` — C6, C7 and
   the `_mcp_client_info_cache` analysis.
+
+## Added 2026-11-19 (a consumer's A12)
+
+One actor load per MCP session instead of one point read per request.
+Caching the actor across requests touches deletion and revocation freshness
+(above); waits for the consumer's measured cold-start and per-call numbers
+(`thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md`).
+

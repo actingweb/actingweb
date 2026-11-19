@@ -37,35 +37,22 @@ codes) went into `thoughts/plans/2026-09-25-mcp-oauth-hardening-and-credential-e
   `client_secret_post`), so nothing is broken; supporting CIMD would put
   claude.ai on its recommended path and stop it adding a registration per
   connect.
-- **A confidential client that sends no PKCE challenge gets an unbound
-  code.** Since 3.15 the built-in authorize pages bind a challenge when one
-  is sent and require one from a public client, but a confidential client
-  may still omit it (`oauth2_server/oauth2_server.py`, the PKCE block in
-  `handle_authorization_request`). Its code is guarded by its client secret,
-  as before. Requiring PKCE for every client (OAuth 2.1) would break any
-  confidential client that does not send one; check the connectors first.
-- **`/.well-known/openid-configuration` answers 404.** The integrations
-  register `oauth-authorization-server` and `oauth-protected-resource[/mcp]`
-  only (the `.well-known` routes in `interface/integrations/flask_integration.py`
-  and `fastapi_integration.py`). ChatGPT probes it several times per
-  connect and moves on. Either serve the same document there or leave it and
-  say so in `docs/guides/oauth2-setup.rst`.
+- **A PKCE refusal answers 400, not a redirect.** Since 4.0 every client
+  must send a challenge; an authorisation request without one is refused
+  with 400 `invalid_request` on the authorise page, as every authorise
+  refusal is (`handlers/oauth2_endpoints.py`). RFC 6749 4.1.2.1 sends the
+  error to a validated `redirect_uri` instead; changing that changes every
+  authorise refusal, so it is its own item.
 
 ## MCP handler
 
-- **`resources/templates/list` is method-not-found** (`handlers/mcp.py`, the method dispatch in `post`)
-  while `resources/list` returns a templated URI
-  (`actingweb://activity/recent?days={days}` in the consumer). Either
-  implement the method or return templates only from it.
-- **Shared registrations flip the Connections card name.** claude.ai and
-  Claude Code on one account use one client id, and the ChatGPT desktop
-  app's Codex uses the Codex CLI's. `_update_trust_with_client_info`
-  (`handlers/mcp.py`) skips the write only when nothing changed,
-  so two clients alternating on one trust row rewrite `client_name` each
-  time. Keep the first name seen, or record every name seen. (3.15 closed
-  the cross-user variant, where an unauthenticated `initialize` named
-  another user's row, and sanitises the name; last-writer-wins within one
-  user's row is what remains.)
+- **`resources/list` still lists templated resources.** 4.0 added
+  `resources/templates/list` and kept the templated resources in
+  `resources/list` too, because no connector has been seen calling the
+  templates method and a client that calls only `resources/list` must lose
+  nothing. The strict split (templates only from the templates method) waits
+  for the connectors to be seen calling it.
+
 - **No post-authentication hook carries the actor to app code.** The
   consumer's middleware validates the bearer a second time
   (`handlers/mcp.py`, `authenticate_and_get_actor_cached`, is where the

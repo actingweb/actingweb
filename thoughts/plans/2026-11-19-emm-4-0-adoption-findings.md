@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 approved: 2026-11-19 by Greger Wedel
 ---
 
@@ -391,10 +391,10 @@ Phase 3
 | AC-36 | 1 | `tests/test_oauth2_public_clients.py::test_discovery_does_not_offer_client_credentials`, `::test_an_owner_created_client_still_uses_the_grant` | Passing |
 | AC-37 | 1 | `tests/test_oauth2_pkce_binding.py::test_a_confidential_client_without_a_challenge_gets_400`; `tests/integration/test_oauth2_flows.py:310` updated | Passing |
 | AC-38 | 1 | `tests/test_oauth2_pkce_binding.py::test_the_opt_out_restores_the_confidential_exception`, `::test_the_opt_out_keeps_binding_a_challenge_that_is_sent`, `::test_the_opt_out_accepts_a_public_clients_code_without_a_challenge` | Passing |
-| AC-39 | 3 | the Full tier's docs build; manual: read each guide item against Phase 3's list, and the sweep greps of Phase 3's Verification return only intended hits (prose has no assertion) | Not run |
+| AC-39 | 3 | the Full tier's docs build; manual: read each guide item against Phase 3's list, and the sweep greps of Phase 3's Verification return only intended hits (prose has no assertion) | Passing (docs build `-W` clean; the stale-phrase grep reviewed hit by hit, 2026-11-19) |
 | AC-40 | 1 | manual: `scripts/live_pair.py --same-store` with the marking run (two library versions in one run are outside the suite) | Passing (manual, 2026-11-19: see the Phase 1 notes) |
 | AC-41 | 1 | manual: the same with `backfill --apply` | Passing (manual, 2026-11-19: see the Phase 1 notes) |
-| AC-42 | 3 | manual: `ls thoughts/inbound thoughts/todo` against `INDEX.md` | Not run |
+| AC-42 | 3 | manual: `ls thoughts/inbound thoughts/todo` against `INDEX.md` | Passing (`thoughts/inbound/` holds only README.md; every todo has an INDEX row and every row a file, checked by script) |
 | AC-43 | 2 | `tests/test_property_list_newer_format.py::test_an_unknown_list_format_is_refused_everywhere` (read, append, clear, lazy migration, sweep), `tests/test_migrate_property_lists.py::test_the_command_skips_and_reports_an_unknown_format` | Passing |
 | AC-44 | 2 | `tests/test_attribute_list_store.py::test_list_all_raises_on_a_fault` | Passing |
 | AC-45 | 2 | `tests/test_verify_property_lists.py::test_side_rows_of_a_list_without_meta_are_reported_not_removed` | Passing |
@@ -702,8 +702,9 @@ its ceiling explicitly.
 - `AttributeListStore.list_all_lists()` (via `RemoteStorage`) raises by
   default too; its callers already re-raise or treat a fault as a fault.
 - `actor.get_peer_trustee()` read `if response:`, which is false for any
-  4xx, so a 403 left the previous call's code; fixed for AC-46. Three other
-  peer calls in `actor.py` share the pattern (todo for Phase 3).
+  4xx, so a 403 left the previous call's code; fixed for AC-46. The one
+  other site, the trust `PUT` later in the same method, was fixed in
+  Phase 3.
 - Two integration fixtures fixed: `test_mcp_resource_regression.py`'s app
   (OAuth, posts to `/`) now opens its factory; `test_property_list_collision.py`
   depended on test order for the creators table (it failed alone on the
@@ -779,11 +780,43 @@ None: the phase is prose.
 
 ### Verification
 
-- [ ] The Full tier's docs build (`-W`); fast tier (a docs-only phase)
-- [ ] `grep -rn "stops with\|open by default\|4 MiB\|(\[\], {})\|required for public clients" docs actingweb examples CLAUDE.md CHANGELOG.rst`: every hit is intended
-- [ ] `ls thoughts/inbound` shows only `README.md`; every new todo has its row
+- [x] The Full tier's docs build (`-W`); fast tier (a docs-only phase)
+- [x] `grep -rn "stops with\|open by default\|4 MiB\|(\[\], {})\|required for public clients" docs actingweb examples CLAUDE.md CHANGELOG.rst`: every hit is intended
+- [x] `ls thoughts/inbound` shows only `README.md`; every new todo has its row
 
-### Implementation Status: Not Started
+### Implementation Notes
+
+- The migration guide and deployment page changes were drafted by a
+  subagent from this plan, the changelog entries and the session's facts,
+  and reviewed here. It added items 33 to 36 to "One line each", a
+  `DbErrorAfterWrite` clause, an `A fresh store` target, and for the
+  pre-upgrade step "close the factory" said to refuse `POST /` in front of
+  a 3.15.1 application (3.15.1 has no `with_open_factory`).
+- The stale-phrase sweep of Phase 2 (getting-started, the quickstarts,
+  configuration, security, routing, local-dev-setup, testing, property
+  lists, authenticated views, authentication, the demo README, the example
+  docstrings, `CLAUDE.md`) was drafted the same way.
+- Found while closing: the refusal for an empty DynamoDB store on an unset
+  prefix named `enable --apply` as an alternative, which refuses on an
+  unset prefix too; it now says to set `AWS_DB_PREFIX`. One rc1 changelog
+  line still said 4 MiB; rewritten.
+- Todos: new `bounded-list-read.md`,
+  `list-items-conditional-create-ttl-and-retained-bodies.md`,
+  `consumer-test-fault-injection.md`, `marking-and-adoption-followups.md`,
+  `attribute-conditional-delete-on-dict-values.md`,
+  `startup-check-served-503-mode.md`, and, from the consumer's second read,
+  `unserialisable-value-reads-as-a-store-fault.md` (verified in the tree).
+  The key-prefix design decision went into the existing
+  `prop-list-key-prefix-scheme.md` rather than a new file. The consumer's
+  other round-two candidate (a public call to record one actor's creator)
+  is not filed: it was conditional on the enable command not serving, and
+  the empty-store self-enable plus `enable --apply` cover it so far.
+  `flask-spa-session-route.md` deleted (done in Phase 1).
+- Phase 3 checks: fast tier and docs `-W`; its code delta (the trust
+  `PUT` status in `get_peer_trustee`, one refusal message) is covered by
+  unit tests, so the full tier was not repeated for it.
+
+### Implementation Status: Complete
 
 ---
 
@@ -851,3 +884,33 @@ None: the phase is prose.
 - Whether any route stores a raw `list:` row past `encode_item` (devtest, replica writes into attribute lists), which would let a peer plant a `need`.
 - Whether the MCP trust cache is refreshed after the client-info write.
 - An in-flight `CREATE INDEX CONCURRENTLY` reading as INVALID to a second instance is general PostgreSQL behaviour, not shown in the tree.
+
+## Implementation Summary
+
+**Completed:** 2026-11-19
+**All phases:** Complete
+**Test status:** All passing (Full tier on both backends at the Phase 2
+commit; fast tier and docs `-W` at Phase 3)
+
+### Deviations from Plan
+- The PKCE client-evidence gate before AC-37 was dropped (owner): the spec
+  sets the default, `require_pkce=False` covers a consumer that has not
+  checked, and the per-client check is the consumer's (guide).
+- `fix/4.0.0-ci-coverage-on-3-14` was merged into this branch (owner).
+- AC-53 and AC-54 were added from the consumer's second read (PostgreSQL
+  backfill counts; collision output). A collision still blocks the marker
+  (owner).
+- `complete_client_authorization` needs the client's challenge too.
+- A list whose meta `format` is not 1 or 2 is refused by `delete()` as
+  well (decision taken in Phase 2, recorded there).
+- Red before green was not kept for the storage guard, the start-up
+  integration tests and `check-ready` (Phase 2 notes).
+- The consumer's suite against this tree was not run here.
+
+### Learnings
+- A test fixture with real probes on a shared store reaches any new
+  "fix it at start-up" path; the unit stores now refuse the self-enable.
+- `requests.Response` is falsy for any 4xx; `if response:` hides statuses.
+- An exact-body assertion and an `__all__` snapshot are where an added
+  field or export shows up first.
+

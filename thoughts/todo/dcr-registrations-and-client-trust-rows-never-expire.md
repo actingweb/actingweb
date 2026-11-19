@@ -56,3 +56,13 @@ warning) for the rest. The trust row goes with its registration
 audit, `thoughts/research/2026-09-25-mcp-oauth-hardening-and-credential-exposure.md`
 (report 3, item 5). Reported by the `actingweb_mcp` project on 2026-09-21
 out of its `thoughts/plans/2026-09-17-claude-connector-directory-submission.md`.
+
+## Measured (2026-11-19)
+
+A consumer's production store held 295 dynamic registrations, 260 of them
+with no user row behind them (never authorised). Those are the first class
+a sweep can remove: a registration that never completed an authorisation
+holds no token and no approval. Reported by the consumer's read of
+4.0.0rc1 (`thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md`, A4);
+the retention decision still comes first.
+

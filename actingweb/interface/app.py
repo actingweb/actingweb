@@ -1969,8 +1969,9 @@ class ActingWebApp:
                 "are no actors yet, but AWS_DB_PREFIX is not set (the tables "
                 f"resolve to the prefix {prefix!r}), so this start does not "
                 "enable it on a store it may have named by mistake. Set "
-                f"AWS_DB_PREFIX, or run {command} with the application's "
-                "environment, and start again, or opt out with "
+                "AWS_DB_PREFIX explicitly (to the default too, if that is "
+                "this deployment's prefix) and start again; the command "
+                f"{command} needs it set as well. Or opt out with "
                 f"with_unique_creator(False) ({guide_section('Creator uniqueness')})."
             )
         try:

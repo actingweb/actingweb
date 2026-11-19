@@ -151,6 +151,22 @@ undelivered resync is sent again on the next resume. Set the budget under the
 limit, not as a tuning knob: lower, it cuts deliveries that would have
 succeeded.
 
+**List items behind a response limit.** The same gateway usually caps the
+response size too (6 MB is a common figure). A property-list item is stored
+JSON-encoded, and a JSON response encodes it again: every quote and
+backslash in the stored text is escaped once more, so an item made mostly
+of quotes or backslashes can more than double on the way out. The default
+ceiling of 2 MiB (``list_item_max_bytes`` on DynamoDB) is therefore no
+guarantee that a response fits, least of all one that carries several
+items. Set the ceiling to what the response limit allows:
+
+.. code-block:: python
+
+    app.with_list_item_limits(max_bytes=...)  # what the response limit allows
+
+and set the same value in every process that writes lists (a bare
+``Config()`` takes the backend's defaults).
+
 **An event loop without** ``with_sync_callbacks()``. The write does not wait;
 the sends are tasks the library keeps until done, and the delivery budget
 does not apply to them (it protects a response that, here, was already
@@ -236,13 +252,27 @@ credentials), in this order, before a deploy:
    tables the commands below read, including the
    ``property_lookup_backfill`` table step 4 writes its markers to.
 2. ``actingweb-mark-actors-vouched`` (with ``--email-as-creator`` under
-   ``with_email_as_creator``), if legacy actors are to be vouched.
+   ``with_email_as_creator``), if legacy actors are to be vouched: the new
+   version cleans an unmarked actor at its next sign-in.
 3. ``actingweb-unique-creators report``, ``resolve --apply`` and
-   ``enable --apply`` (creator uniqueness, on by default).
+   ``enable --apply`` (creator uniqueness, on by default), on a store that
+   holds actors: the start refuses one whose creators are not enforced.
 4. ``actingweb-property-lookup backfill --apply`` (reverse lookup, when
-   properties are indexed).
+   properties are indexed): the start refuses an indexed name that holds
+   data and was never backfilled. A collision (two actors holding one
+   value) leaves the name unmarked; remove the duplicate actors first.
 5. ``actingweb-unique-creators creator-to-email`` and then its ``--apply``
-   (under ``with_email_as_creator``).
+   (under ``with_email_as_creator``): the start refuses until the sweep
+   has completed.
+
+   **5a.** ``actingweb-mark-actors-vouched`` again, if step 2 applied (with
+   the same options), as
+   the last write before the deploy: it marks the actors the old version
+   created since step 2.
+
+   **5b.** ``actingweb-check-ready`` (with the flags below), which reports
+   what the start-up check will say, gate by gate, and writes nothing.
+   Deploy when it exits 0.
 
 A fresh PostgreSQL database needs no first start of the application to
 create its tables (the application never creates them; Alembic does):
@@ -270,7 +300,10 @@ the application sets in its builder they cannot see, so pass it:
   under ``with_email_as_creator``;
 - ``--no-unique-creator`` to ``actingweb-deletions`` and to
   ``python -m actingweb.db.verify_tables``, for an application that calls
-  ``with_unique_creator(False)``.
+  ``with_unique_creator(False)``;
+- to ``actingweb-check-ready``, all three that apply: ``--properties a,b``,
+  ``--no-unique-creator`` and ``--email-as-creator``. It prints what it
+  assumed.
 
 **The store comes first.** Every command prints the store it will read
 before its first read, on stdout (a production ``LOG_LEVEL=WARNING`` does
@@ -295,7 +328,12 @@ also describes each table a command touches, and creates one that is
 missing, as it does for the application.
 
 **After the deploy.** Processes of the old version can leave work behind
-during the rollout. Once every instance runs the new version:
+during the rollout. Once every instance runs the new version, first run
+``actingweb-mark-actors-vouched`` once more (if step 2 applied, with the
+same options): it marks
+the actors an old process created during the rollout. A window of a few
+seconds remains; an actor signed in through it is cleaned, which costs its
+user one reconnect. Then:
 
 1. ``actingweb-unique-creators enable --apply`` again, then ``report``; if
    it lists anything, ``resolve --apply`` and ``enable --apply`` once more.

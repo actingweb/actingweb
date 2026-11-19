@@ -43,6 +43,26 @@ application is in. Each part opens with a line that says when to skip it:
 The upgrade, in order
 ---------------------
 
+.. note::
+
+   **Installing the release candidate** (this note goes at 4.0.0). 4.0.0rc1
+   is published on TestPyPI, not PyPI. With Poetry, add TestPyPI as a second
+   source that only a pinned package uses, and pin the package to it:
+
+   .. code-block:: toml
+
+      [[tool.poetry.source]]
+      name = "testpypi"
+      url = "https://test.pypi.org/simple/"
+      priority = "explicit"
+
+      [tool.poetry.dependencies]
+      actingweb = {version = "4.0.0rc1", source = "testpypi"}
+
+   Every other package still resolves from PyPI. With pip:
+   ``pip install --index-url https://test.pypi.org/simple/ --extra-index-url
+   https://pypi.org/simple/ actingweb==4.0.0rc1``.
+
 **Dependencies.** Raise a pin on ``pyjwt`` in the application's own
 requirements to 2.15 or later (below 3), or the install does not resolve:
 4.0 requires ``pyjwt>=2.15,<3``. A deployment that resolves its own
@@ -69,27 +89,54 @@ serves:
 5. If actors were created before 4.0 through the factory, the email form,
    ``Actor.create`` or an MCP connector, and you know they are legitimate:
    ``actingweb-mark-actors-vouched --dry-run``, then without
-   ``--dry-run`` (`Marking actors you trust before the first sign-in`_).
+   ``--dry-run`` (`Marking actors you trust before the first sign-in`_),
+   because 4.0 cleans an unmarked actor at its next sign-in. Before step 7,
+   stop new duplicates (3.15.1 has no switch for the factory: refuse
+   ``POST /`` in front of the application, or at a proxy, where users sign
+   in through a provider) and remove the duplicate actors there are: two
+   actors holding one indexed value stop the backfill from marking that
+   name (`One reverse-lookup mechanism`_, "Collisions").
 6. ``actingweb-unique-creators report``; if it lists anything, read what
    ``resolve`` (the dry run) would keep and rename, choose another actor
    with ``--keep <id>`` where it chooses wrong, then ``resolve --apply``;
-   then ``enable --apply`` (`Step 0`_). Skip this step if the application
-   calls ``with_unique_creator(False)``. ``resolve --apply`` renames
-   duplicate actors, and 3.15.1 keeps them renamed (`Rolling back to
-   3.15.1`_).
+   then ``enable --apply`` (`Step 0`_), because the start refuses a store
+   with actors whose creators are not yet enforced. A store with no user
+   actors needs none of this: the first start enables it (`What stops a
+   start`_). Skip this step if the application calls
+   ``with_unique_creator(False)``. ``resolve --apply`` renames duplicate
+   actors, and 3.15.1 keeps them renamed (`Rolling back to 3.15.1`_).
 7. ``actingweb-property-lookup report``, then ``backfill --apply`` (`One
-   reverse-lookup mechanism`_), unless reverse lookup is off
-   (``with_indexed_properties([])``).
+   reverse-lookup mechanism`_), because the start refuses an indexed name
+   that holds data and was never backfilled; skip it when reverse lookup is
+   off (``with_indexed_properties([])``).
 8. With ``with_email_as_creator``: ``actingweb-unique-creators
    creator-to-email``, then ``creator-to-email --apply`` (`The creator
-   follows the stored email`_).
+   follows the stored email`_), because the start refuses until the sweep
+   has completed.
+
+   **8a.** Run ``actingweb-mark-actors-vouched`` again (if step 5 applied;
+   with ``--email-as-creator`` under ``with_email_as_creator``) as the last
+   write before the deploy: it marks the actors 3.15.1 created
+   since step 5.
+
+   **8b.** ``actingweb-check-ready``, with the flags for what the
+   application sets in its builder (``--properties a,b``,
+   ``--no-unique-creator``, ``--email-as-creator``), says what the start
+   will say: each gate ready, ready at first start, or refused with its
+   fix. It reads only. Deploy when it exits 0.
 
 **The upgrade.** Deploy 4.0 to every instance. Finish a rolling deploy
 before clients write list items larger than one row, call ``append_once``,
 or change attribute lists: until then a 3.15.1 process reads what those
 write as something else (`Other versions beside this one`_).
 
-**After the upgrade**, once every instance runs 4.0:
+**After the upgrade**, once every instance runs 4.0, first run
+``actingweb-mark-actors-vouched`` once more (if step 5 applied, with the
+same options): it marks
+the actors a 3.15.1 process created during the rollout before their first
+sign-in on 4.0. A window of a few seconds remains between the last 3.15.1
+create and this run; an actor signed in through it is cleaned, which costs
+its user one reconnect of their connectors. Then:
 
 9. ``actingweb-unique-creators enable --apply`` again, then ``report``;
    if it lists anything, ``resolve --apply`` and ``enable --apply``. With
@@ -122,9 +169,12 @@ process that uses neither calls it itself. Each refusal names its fix.
    * - ``UniqueCreatorNotReady``
      - Creator uniqueness (the default) is not yet enforced on the store,
        or the store cannot be read to check.
-     - Checklist step 6, or ``with_unique_creator(False)``. A fresh
-       DynamoDB store: start once (it creates the tables and stops), run
-       ``actingweb-unique-creators enable --apply``, start again.
+     - Checklist step 6, or ``with_unique_creator(False)``. A store with no
+       user actors enables itself at the first start; on DynamoDB set
+       ``AWS_DB_PREFIX`` explicitly for that, and where the enable fails
+       (a role that may not create the index or the table) run
+       ``actingweb-unique-creators enable --apply`` with a role that may
+       (`A fresh store`_).
    * - ``PropertyLookupNotReady``
      - Properties hold data under an indexed name whose lookup rows were
        never backfilled.
@@ -147,17 +197,30 @@ process that uses neither calls it itself. Each refusal names its fix.
      - Remove the import (`Callback delivery`_, `Removed:
        CallbackOauthHandler`_).
 
-**A fresh store** (a new deployment, a CI job, a test script). On DynamoDB
-with table auto-creation on, start once (it creates the tables and stops
-with ``UniqueCreatorNotReady``, saying in one line that there are no actors
-yet), run ``actingweb-unique-creators enable --apply``, and start again.
-``enable`` does not create the actor table itself, so that a wrong prefix
-cannot read as an empty store: import or start the application once first.
-With auto-creation off (``AWS_DB_AUTO_CREATE_TABLES=false``), create the
-tables first (`Creator uniqueness`_ says how ``<prefix>_creators`` is
-created), then ``enable --apply``, then start. On PostgreSQL ``alembic
-upgrade head`` creates the tables: Alembic, then ``enable --apply``, then
-start.
+.. _A fresh store:
+
+**A fresh store** (a new deployment, a CI job, a test script). A store with
+no user actors enables creator uniqueness at the first start, and one
+WARNING names the store it wrote to; reverse lookup and the email marker
+mark themselves the same way. On DynamoDB the start creates
+``<prefix>_creators`` if needed (with table auto-creation on; with
+``AWS_DB_AUTO_CREATE_TABLES=false`` create the tables first, `Creator
+uniqueness`_ says how), records the system actors, writes the
+backfill-complete item and scans again. This needs ``AWS_DB_PREFIX`` set
+explicitly (even to the default ``demo_actingweb``): with it unset the
+start is refused, naming the prefix the tables resolve to, so a wrong
+prefix with table auto-creation cannot start an empty store. Set the
+variable and start again; the command cannot help there, since it refuses
+to write on an unset prefix too. On PostgreSQL ``alembic upgrade head``
+creates the tables, and the first start builds ``ux_actors_creator`` on
+the empty table. On either backend an enable that fails (a role that may
+not create the index or the table, a fault) refuses the start, naming
+``actingweb-unique-creators enable --apply``: run it with a role that may,
+and start again. **While an empty store enables
+itself, no process of an older version may create actors in it**: the
+second scan records an actor created meanwhile or refuses the start, but
+an older process writes no creator record of its own. ``actingweb-check-ready``
+reports such a store as "ready at first start".
 
 .. _v40-operator-commands:
 
@@ -188,13 +251,16 @@ tested*, run the command in a quiet period.
      - Builds an index ``CONCURRENTLY`` on a table with rows: run it outside
        a busy period. Ends at revision ``a7b8c9d0e1f2``.
    * - ``actingweb-mark-actors-vouched``
-     - Before the deploy, before the first 4.0 sign-in (step 5)
-     - Not tested
+     - Before the deploy, before the first 4.0 sign-in (step 5), again as
+       the last write before it (8a), and once more straight after it
+     - Tested on DynamoDB over a short overlap (below); PostgreSQL not
+       tested
      - Stores with actors created before 4.0 outside the provider buttons
      - One write per actor; ``--rate-limit`` paces it, ``--start-after``
        resumes. Logs each actor it marks and the last one handled.
    * - ``actingweb-unique-creators``: ``report``, ``resolve``, ``enable``
-     - Before the deploy (step 6) and after it (step 9)
+     - Before the deploy (step 6) and after it (step 9); a store with no
+       user actors enables itself at the first start
      - Safe (`Creator uniqueness`_)
      - Every application unless ``with_unique_creator(False)``
      - One scan of the actor table; PostgreSQL builds its index
@@ -209,12 +275,22 @@ tested*, run the command in a quiet period.
        complete ``--apply`` with nothing held.
    * - ``actingweb-property-lookup``: ``report``, ``backfill``
      - Before the deploy (step 7)
-     - Not tested
+     - Tested on DynamoDB over a short overlap (below); PostgreSQL not
+       tested
      - Applications with indexed properties (the default names are
        indexed)
      - One scan of the properties table; ``--checkpoint-file`` resumes.
        On PostgreSQL an unindexable value is reported ``UNINDEXABLE`` and
-       the command exits 1.
+       the command exits 1. A collision is printed with both actors and
+       leaves its name unmarked.
+   * - ``actingweb-check-ready``
+     - Before the deploy (8b), and whenever a start is refused
+     - Safe: it reads only
+     - Every application
+     - Reads the store as the start-up check does; writes nothing and
+       creates no table. Prints each gate as ``ready``, ``ready at first
+       start`` or ``REFUSED`` with its fix; exits 0, 1 (a gate refuses) or
+       2 (the store could not be read).
    * - ``actingweb-verify-property-lists --attributes``
      - After the deploy (step 10)
      - Not applicable: after every instance runs 4.0
@@ -231,6 +307,34 @@ tested*, run the command in a quiet period.
      - Not applicable: only after every instance runs 4.0
      - Applications with peers
      - Reads every trust's stored peer state; then restart the processes.
+
+**What "tested on DynamoDB" covers.** On DynamoDB Local, with
+``INDEXED_PROPERTIES=email``, an application on 3.15.1 (from PyPI, under
+Python 3.11) served a loop on one table prefix (create an actor, read it
+with its credentials, write an indexed property) while this release ran
+the command against the same prefix:
+
+- ``actingweb-mark-actors-vouched`` (writing): exit 0 in about 0.5 s; the
+  3.15.1 side kept answering (24 actors created during the run, no failed
+  request); every actor was readable by both versions afterwards, and
+  every reverse lookup of a value 3.15.1 wrote found its actor.
+- ``actingweb-property-lookup backfill --apply``: exit 0 in about 1.9 s,
+  the name marked backfill-complete; 29 actors created during the run, no
+  failed request, every actor readable by both versions, every lookup
+  found.
+
+Both commands are short, so the overlap was a few rounds of the loop, not
+a long run under load. PostgreSQL was not tested.
+
+**Every command prints the store first, and refuses to write on an unset
+prefix.** It prints the backend and, on DynamoDB, the prefix, endpoint
+and region (on PostgreSQL the host, database, schema and prefix) on stdout
+before its first read. On DynamoDB a writing mode (``--apply``,
+``--migrate``, ``--repair``, ``--downgrade``, and
+``actingweb-mark-actors-vouched`` without ``--dry-run``) refuses with exit
+status 2 when ``AWS_DB_PREFIX`` is unset or empty: set it explicitly, even
+to the default ``demo_actingweb``. A script that runs these commands sets
+it too.
 
 A script that reads the exit code of ``actingweb-migrate-property-lists`` or
 ``actingweb-verify-property-lists`` treats 2 as "the actor list could not
@@ -279,7 +383,7 @@ served.
 Other versions beside this one
 ==============================
 
-Three cases, kept apart.
+Four cases, kept apart.
 
 **Your own instances during a deploy.** Until every instance runs 4.0, a
 3.15.1 instance reads a spanned list item as an envelope dict, a list that
@@ -321,6 +425,28 @@ ActingWeb before 3.15, is held to specification 1.5
 (:doc:`../protocol/actingweb-spec`); the release does not decide anything
 by the protocol version a peer announces. This case has not been tested.
 
+**The release candidate and later 4.x.** Every stored shape 4.0.0rc1
+writes is read by 4.0.0 without an operator step. That covers:
+
+- property and attribute list rows in both layouts' v2 form: the meta row
+  with ``format`` 2, the rank-keyed heads, the storage envelopes with
+  ``key``, ``tok``, ``span`` and ``v``, and the side-partition rows (in
+  ``{actor_id}$aux``) for spanned bodies, ``list:{name}-$span-...``, and
+  for keys, ``list:{name}-$key-...``;
+- the reverse-lookup rows (``property_lookup_v2`` on DynamoDB,
+  ``property_lookup`` on PostgreSQL) and their markers;
+- the DynamoDB ``creators`` records and their backfill-complete item;
+- the readiness markers the start-up check reads.
+
+Two rules keep a later 4.x readable by 4.0.0, or refused without damage.
+A later version that changes how an item is stored names the change in
+the envelope's ``need``; one that changes a list's layout raises the meta
+row's ``format``. 4.0.0 then raises ``ListItemNewerFormatError`` (409 over
+HTTP) and removes or rewrites no row of that item or list. Neither rule
+reuses a field 4.0.0 ignores for something a writer must maintain. A later
+kind of side-partition row is named ``list:{name}-$<kind>-...``, so it is
+reaped with the actor and reported (never removed) when its list is gone.
+
 .. _v40-one-line-each:
 
 The changes, one line each
@@ -342,7 +468,8 @@ The changes, one line each
    cleaned,** at the first sign-in that proves their address: new actor id,
    data gone. If your deployment creates actors through the factory and later
    signs the same users in with OAuth, create them with
-   ``ActorInterface.create()`` instead, or close the factory. The same goes
+   ``ActorInterface.create()`` instead, or keep the factory closed (the
+   default with a provider; `Closing the factory`_). The same goes
    for the factory form with ``www_auth="oauth"``: the actor it creates is
    replaced at the OAuth callback that follows, so ``actor_created`` fires
    twice (and ``actor_deleted`` once) for one first sign-in. A replacement also
@@ -353,8 +480,12 @@ The changes, one line each
    by creator among several that share it prefers a vouched actor, then any
    other unvouched one, and takes a ``factory`` actor last: an owner's actor
    from before 4.0 beside a squatter's is the one cleaned, with its data.
-3. **An OAuth-only deployment should close the factory:**
-   ``.with_open_factory(False)``.
+3. **The factory is closed when a sign-in provider is configured** (see
+   `Closing the factory`_): an application that calls ``with_oauth``,
+   ``with_github``, ``with_apple_sign_in`` or ``with_google_native`` and
+   not ``with_open_factory`` answers ``POST /`` with 403. One whose peers
+   create trustees through its factory, whose users create actors with the
+   form, or whose tests post to ``/`` calls ``with_open_factory(True)``.
 4. Code calling ``Actor.create`` or ``ActorInterface.create`` directly needs
    no new argument for new ids: the new ``auth_method`` keyword defaults to
    ``"app"``. With a caller-supplied ``actor_id`` that is already taken,
@@ -362,8 +493,9 @@ The changes, one line each
    instead of ``True``. **A process that creates actors without
    ``integrate_*``** (a worker, a restore or import script, a test harness
    that builds ``Config()`` itself) must call ``check_ready()`` or run
-   against a store where ``actingweb-unique-creators enable --apply`` has
-   run (`Creator uniqueness`_): on a store without it, a fresh table prefix the
+   against a store where enforcement is enabled (by ``actingweb-unique-creators
+   enable --apply``, or by an application's first start on an empty store;
+   `Creator uniqueness`_): on a store without it, a fresh table prefix the
    library auto-created for instance, every create raises ``DbError``
    (see `Direct Actor.create and ActorInterface.create callers`_).
 5. MCP sign-ins now write the same actor fields as the other paths;
@@ -392,16 +524,19 @@ The changes, one line each
 12. **``with_unique_creator()`` is enforced** (see `Creator uniqueness`_):
     a second actor for a creator raises ``CreatorTaken`` (409; the factory
     keeps its 403), the factory no longer returns an existing actor for a
-    matching passphrase, and the application refuses to start until the
-    command has enabled enforcement.
+    matching passphrase, and on a store that holds actors the application
+    refuses to start until the command has enabled enforcement (a store
+    with no user actors enables itself at the first start, `A fresh
+    store`_).
 13. The factory form redirects an address that has an actor to ``/login``,
     not to ``/<id>/www``, and creators beginning with ``#`` or containing
     ``#dup-``, and ``system`` and ``oauth2-system``, are refused with 400.
 14. **Property-list items larger than one row now span** (see
     `Spanned list items`_): on DynamoDB a v2 list item over 390,000 encoded
     bytes is stored across several rows instead of failing, an item over
-    4 MiB raises ``ListItemTooLargeError`` (413 over REST) before any write,
-    and PostgreSQL is unchanged at its defaults. **Deploy 4.0 everywhere
+    2 MiB (the default ceiling; 4 MiB in 4.0.0rc1) raises
+    ``ListItemTooLargeError`` (413 over REST) before any write, and
+    PostgreSQL is unchanged at its defaults. **Deploy 4.0 everywhere
     before any client stores a larger item**: a 3.15.1 reader sees a
     spanned item as an envelope dict. ``$`` is refused in new list names and
     in a caller-supplied actor id, and a list diff over the threshold is sent
@@ -512,6 +647,21 @@ The changes, one line each
     ``redirect_uri`` is ``/oauth/callback``, and the web UI's new-trust form
     answers a failure with a redirect** (see `Removed:
     CallbackOauthHandler`_ and `The web UI's trust pages`_).
+33. **The built-in authorisation server requires PKCE from every client**
+    (see `An MCP client's access level`_, "PKCE from every client"): a
+    client that sends no ``code_challenge`` cannot sign in, and an
+    application with its own authorise form, its own sign-in route or its
+    own ``create_authorization_code`` calls passes the challenge through.
+    ``with_mcp(require_pkce=False)`` keeps the 4.0.0rc1 rule while you check.
+34. **``list_all_with_rows()`` and ``AttributeListStore.list_all()`` raise
+    ``DbError`` on a store fault** instead of answering ``[]`` or
+    ``([], {})`` (see `Fault contract`_).
+35. **Discovery no longer advertises ``client_credentials``, and
+    ``resources/templates/list`` is served** (see `An MCP client's access
+    level`_ and `The MCP OAuth server`_).
+36. **Operator commands refuse to write on DynamoDB when ``AWS_DB_PREFIX``
+    is unset** (see `The operator commands`_): a script that runs them on
+    the default prefix sets it explicitly, even to ``demo_actingweb``.
 
 
 .. _v40-every-application:
@@ -583,6 +733,21 @@ actors beside it as a best-effort sweep: a fault there is logged and the next
 sign-in retries. A property write whose subscription diff cannot be
 registered keeps the write and answers ``503`` (it used to succeed with the
 diff lost); a client retrying a list ``append`` then writes a second item.
+In code that fault is ``DbErrorAfterWrite`` (a ``DbError``): the value is
+stored and its diff is not. Over HTTP the 503 carries the code
+``stored_not_notified`` and no ``Retry-After``. A repeat of a plain set is
+safe, a repeat of an unkeyed append adds a second item, and
+``append_once`` does not.
+
+**Breaking: the list enumerations raise.**
+``PropertyListStore.list_all_with_rows()``,
+``AttributeListStore.list_all_with_rows()``,
+``AttributeListStore.list_all()`` and ``RemotePeerStore.list_all_lists()``
+answered ``[]`` or ``([], {})`` on a fault, which read as "no lists"; they
+raise ``DbError`` (503 through the integrations), as ``list_all()`` and
+``list_prefix_with_rows()`` already did. ``strict=`` is still accepted and
+ignored. **Check:** a caller that relied on the empty answer catches
+``DbError``.
 
 A backend error a retry cannot fix (a validation, size or constraint error,
 such as an item over DynamoDB's 400 KB limit) answers ``500`` with
@@ -691,8 +856,9 @@ for creator").
 
 A process that creates actors without ``integrate_*`` (a worker, a script, a
 test harness that builds ``Config()`` directly) must also call
-``ActingWebApp.check_ready()`` or run against a store where
-``actingweb-unique-creators enable --apply`` has run. The ``DbActor``
+``ActingWebApp.check_ready()`` or run against a store where enforcement is
+enabled (``actingweb-unique-creators enable --apply``, or an application's
+first start on a store with no user actors). The ``DbActor``
 constructor no longer creates the DynamoDB ``<prefix>_creators`` table, and
 on PostgreSQL the first enforced create or creator change checks for
 ``ux_actors_creator``.
@@ -761,20 +927,40 @@ Closing the factory
 -------------------
 
 
+**Breaking: the factory is closed when a sign-in provider is configured.**
+An application that called any provider builder (``with_oauth``,
+``with_github``, ``with_apple_sign_in``, ``with_google_native``, whatever
+its credentials: a missing secret does not open it) and not
+``with_open_factory`` closes it. The setting is resolved when read, so a
+provider builder called after the ``Config`` was built still closes it. A
+deployment without a provider (basic auth) keeps it open. One start-up
+WARNING says it is closed by default.
+
 .. code-block:: python
 
-   app = ActingWebApp(...).with_oauth(...).with_open_factory(False)
+   app = ActingWebApp(...).with_oauth(...)                          # closed
+   app = ActingWebApp(...).with_oauth(...).with_open_factory(True)  # open
 
-``POST /`` then answers ``403`` with ``{"error": true, "status_code": 403,
-"message": "Actor creation is disabled on this server (with_open_factory); ..."}``
-(the error page for a form), and the existing-creator form redirect, which told
-anyone which actor id belongs to an address, is closed with it. This deviates
-from the protocol's mandatory factory, so the factory stays open unless you
-call it; a basic-auth deployment that needs the factory form sign-in keeps it
-open. A closed factory still renders the ``GET /`` page and its form, whose
-submit gets the 403; replace the template if that page should not offer one.
-The reference demo app reads ``OPEN_FACTORY`` (default ``true``, so the
-quickstart curl works).
+A closed ``POST /`` answers ``403`` with the house JSON body, whose
+message says actor creation is disabled and names
+``with_open_factory(True)`` (the error page for a form), and the
+existing-creator form redirect, which told anyone which actor id belongs to
+an address, is closed with it. The default ``GET /`` page offers no form
+while the factory is closed. This deviates from the protocol's mandatory
+factory; open it where something needs it:
+
+- **A peer creates trustees here.** A peer application that creates its
+  trustee actors through this application's factory gets 403, and logs a
+  WARNING naming the factory. Open the factory.
+- **Users create actors with the form**, as a basic-auth deployment that
+  also configures a provider might.
+- **Tests and harnesses that post to** ``/`` with a provider configured:
+  call ``with_open_factory(True)`` in the test application, or create the
+  actors with ``ActorInterface.create()``.
+
+The reference demo app calls ``with_open_factory`` only when
+``OPEN_FACTORY`` is set, so it shows the default: closed with OAuth, open in
+its local QA mode, where no provider is configured.
 
 .. _v40-creator-uniqueness:
 
@@ -816,7 +1002,8 @@ that was never checked.
 
 .. _Step 0:
 
-**Step 0, for every deployment that keeps the default.** Neither the index nor
+**Step 0, for every deployment that keeps the default and whose store holds
+actors** (an empty store enables itself, `A fresh store`_). Neither the index nor
 the table can be switched on while actors share a creator, so in order,
 with the application's environment (``DATABASE_BACKEND``, the database
 settings, ``AWS_DB_PREFIX``, credentials).
@@ -838,9 +1025,11 @@ whatever ``AWS_DB_AUTO_CREATE_TABLES`` says. A deployment that declares its
 tables in a template can declare this one there instead (hash key
 ``creator``, a string; no range key; the library creates it with on-demand
 billing) and deploy the template before running the command: ``enable
---apply`` then finds the table and only fills it. Either way the application
-starts only after ``enable --apply`` has written the backfill-complete item,
-so the table and its contents come before 4.0's code.
+--apply`` then finds the table and only fills it. Either way an
+application whose store holds actors starts only after ``enable --apply``
+has written the backfill-complete item, so the table and its contents come
+before 4.0's code (a store with no user actors writes it at its first
+start, `A fresh store`_).
 ``python -m actingweb.db.verify_tables`` now lists ``<prefix>_creators`` as
 required: pass ``--no-unique-creator`` for an application that opts out.
 Code that calls ``required_models()``, ``required_table_names()`` or
@@ -929,9 +1118,10 @@ one of them.
    left by a delete in a 3.15.1 process), run ``resolve --apply``, then
    ``enable --apply``.
 
-Close the factory for the window with ``with_open_factory(False)`` if you
-can. The application refuses to start with creator uniqueness on until step 3 has run
-(``UniqueCreatorNotReady``); call ``ActingWebApp.check_ready()`` yourself if
+Keep the factory closed for the window if you can (4.0 closes it by
+default where a sign-in provider is configured; `Closing the factory`_).
+On a store that holds actors the application refuses to start with creator
+uniqueness on until step 3 has run (``UniqueCreatorNotReady``); call ``ActingWebApp.check_ready()`` yourself if
 you use neither integration. If the check cannot reach the database, the
 application refuses to start as well (``UniqueCreatorNotReady``, naming the
 fault): starting unchecked on DynamoDB, against an empty auto-created
@@ -1135,7 +1325,27 @@ relative to the working directory) is kept only after a fault:
 
 ``backfill`` marks a name only when its pass finished with no fault and no
 collision (two actors sharing an indexed value); the other names are still
-marked. On PostgreSQL, when ``backfill`` exits 1 and logs ``UNINDEXABLE``
+marked.
+
+**Collisions.** A collision leaves its name unmarked, so the start is
+still refused: a reverse lookup of a value two actors hold cannot say
+which actor it means. ``backfill`` prints every colliding actor and the
+actor that holds the lookup row, and names the two ways out:
+
+- remove or change the property on all but one actor (a duplicate actor of
+  one user, a test actor), then run ``backfill --apply`` again; or
+- after reviewing them, accept the collisions with
+  ``actingweb-property-lookup mark-complete --force --properties <names> --apply``.
+  A reverse lookup of a shared value then finds only the row's holder.
+
+Prevent them before the upgrade: stop new duplicates at the factory and
+remove the duplicate actors (checklist step 5). An application hook that
+writes a value that is not an address into an indexed email property (the
+default creator ``creator``, say, for an actor created without an
+address) makes every such actor collide: stop writing it, and clear it
+where it was written, before the backfill.
+
+On PostgreSQL, when ``backfill`` exits 1 and logs ``UNINDEXABLE``
 lines, shorten or remove that property on each actor they name and run it
 again: a value too long for the lookup index (about 2.7 KB after
 compression) is skipped, the rest is committed, and the name stays
@@ -1227,7 +1437,19 @@ picture; what an upgrade needs:
 
   .. code-block:: python
 
-     app.with_list_item_limits(span_threshold=390_000, max_bytes=4 * 2**20)
+     app.with_list_item_limits(span_threshold=390_000, max_bytes=2 * 2**20)
+
+- **The default ceiling is 2 MiB on DynamoDB** (4 MiB in 4.0.0rc1). An
+  application that stores items between 2 and 4 MiB sets
+  ``with_list_item_limits(max_bytes=...)``. Raising the ceiling later
+  strands nothing; lowering it leaves stored items over it.
+- **Every process that writes lists sets the same limits.** A bare
+  ``Config()`` takes the backend's defaults, not the application's
+  builder settings, so a worker or script that builds its own ``Config``
+  sets the same ``with_list_item_limits`` (or the ``Config`` keywords
+  ``list_item_span_threshold`` and ``list_item_max_bytes``) the
+  application does. Otherwise it refuses, or spans, items the application
+  would not.
 
 - **Drop your own size rule and catch the typed error.** An item over
   ``list_item_max_bytes`` raises ``ListItemTooLargeError`` (a
@@ -1724,7 +1946,8 @@ the squatter chose), any subscription, and any property the squatter prefilled.
 From 4.0 every creation path records how the actor came to exist in
 ``auth_method`` (see :doc:`../guides/authentication`), and a sign-in that proves
 an address over an actor nobody vouched for no longer inherits it. The protocol
-mandates the factory, so it stays; the fix is that a self-asserted ``creator``
+mandates the factory, so it stays available (closed by default where a sign-in
+provider is configured, `Closing the factory`_); the fix is that a self-asserted ``creator``
 can no longer be inherited as a verified identity.
 
 .. _v40-two-populations-two-behaviours:
@@ -1776,7 +1999,8 @@ provider supplies the address, for example after verifying it at GitHub. The
 verification click only moves the sign-out earlier: the session used to last
 until it expired. The same ``409`` meets such a user whenever someone else
 created an actor for their address through the open factory first, which is
-one more reason for an OAuth deployment to close it.
+one more reason an OAuth deployment keeps it closed (the default with a
+provider).
 
 No request leaves the process during either: the peer URLs on an unvouched
 actor were chosen by whoever created it, so the wipe skips the remote
@@ -1785,6 +2009,23 @@ confirmed the sign-in fails closed (an ERROR is logged and the actor stays
 unvouched), and the next sign-in retries. The status the client sees is
 ``502`` on ``/oauth/callback`` and ``500`` on the SPA authorize and token
 endpoints and on the verification link.
+
+**Whether an actor is vouched.** A marker being present is not the test:
+``factory`` and ``email_unverified`` do not vouch, and a creator renamed
+since it was vouched reads unvouched. Ask ``ActorInterface.is_vouched()``,
+which answers whether a provider, the operator or the application vouched
+for the actor's current creator, and raises ``DbError`` when the marker
+could not be read. Code that read ``auth_method`` (or called the internal
+``oauth2`` helpers) to decide this calls it instead.
+
+**Telling a user why their connections are gone.** An adoption fires the
+``actor_adopted`` hook on the surviving actor (its arguments list what was
+removed), and logs one WARNING line an operator can grep for:
+``ACTOR_ADOPTED: actor=<id> mode=<cleaned|replaced>
+previous_auth_method=<marker> previous_actor=<id|-> provider=<name>``,
+then the counts. The line carries ids and markers only, never the creator
+or an email address; an adoption announced by a later sign-in logs it too,
+with ``announced_later=true``.
 
 .. _v40-marking-actors-you-trust-before-the-first-sign-in:
 
@@ -2232,6 +2473,18 @@ finishes the work.
 SPA itself: that logout now answers ``cleared_cookies: []``, sends no
 ``Set-Cookie`` and ignores an SPA refresh token sent beside it.
 
+**Resource templates.** ``resources/templates/list`` answers the resources
+declared with a URI template (a ``{...}`` expression), as ``uriTemplate``,
+under the permissions ``resources/list`` applies. ``resources/list`` keeps
+listing them, so a client that never calls the templates method loses
+nothing; a resource declared only by a regex is not a template.
+
+**Options.** A second ``with_mcp()`` call changes only the options it
+names (one without ``server_name`` or ``instructions`` reset them before).
+``with_mcp(require_auth_for_initialize=True)`` answers an unauthenticated
+``initialize`` with the 401 challenge, so a client starts its OAuth flow at
+the handshake; it is off by default.
+
 .. _v40-post-mcp-parse-errors:
 
 ``POST /mcp`` parse errors
@@ -2347,12 +2600,46 @@ code_challenge_method=...)``: it applies the list, the
 ``oauth2_trust_requested`` hook, the trust and the code, and answers
 ``{"action": "redirect", "url": ...}``.
 
+**PKCE from every client.** MCP's authorisation rules and OAuth 2.1
+require PKCE of every client, so the built-in authorisation server refuses
+an authorisation request, a callback state and a code without a
+``code_challenge`` (400 ``invalid_request``), and the token request needs a
+``code_verifier``. 4.0.0rc1 refused only a public client, and only at the
+authorise step. A server-side WARNING names the client id and the opt-out.
+What it asks of an application:
+
+- **Its own** ``aw-oauth-authorization-form.html`` carries the hidden
+  fields ``code_challenge`` and ``code_challenge_method`` through to the
+  post; a form posted without them is refused, and the WARNING says so.
+- **Its own sign-in route** passes the client's ``code_challenge`` and
+  ``code_challenge_method`` to ``complete_client_authorization``, which
+  refuses a call without them before any hook or write.
+- **Codes it creates itself** with ``create_authorization_code`` carry a
+  ``code_challenge`` (and its method), and their exchange sends the
+  verifier.
+
+``with_mcp(require_pkce=False)`` restores the 4.0.0rc1 rule exactly: a
+public client refused at authorise only, no check at callback or exchange.
+An application whose clients have not been checked upgrades with it, so no
+sign-in changes, and enforces in a later change. Before removing it, check
+each registered client name: a client whose registrations are all public
+(``token_endpoint_auth_method: none``) and that has signed in since
+4.0.0rc1 sends a challenge, since 4.0.0rc1 already refused a public client
+without one; for any other client, find one recorded authorise request
+carrying ``code_challenge`` (an access log, or a capture).
+
 **Breaking: anonymous registrations.** ``POST /oauth/register`` refuses
 ``grant_types`` naming ``client_credentials`` and a ``trust_type`` the list
 does not offer (400 ``invalid_client_metadata``), and a stored anonymous
 client gets ``unauthorized_client`` for ``client_credentials``. A
 server-to-server integration needs a client created by an actor's owner:
 ``OAuth2ClientManager(actor_id, config).create_client(name, trust_type=...)``.
+**Behavior change:** the authorisation server document no longer lists
+``client_credentials`` in ``grant_types_supported``, since an anonymous
+registration may not use it; an owner-created client still obtains a token
+with it. The document is also served at
+``/.well-known/openid-configuration``, on Flask and FastAPI, for clients
+that look only there.
 
 **Redirect URIs.** A registration whose ``redirect_uris`` carry a user
 name or password (``https://name@host/cb``) is refused with
@@ -2363,10 +2650,30 @@ it; list them (``mcp_clients`` buckets) and delete them.
 **Rows to review.** A client that obtained a level before 4.0 keeps it until
 it authorises again (then the row follows the new approval). List the rows
 to review: trust rows with ``established_via = "oauth2_client"`` whose
-``relationship`` is not in the client list, for example on PostgreSQL
-``SELECT id, peerid, relationship FROM trusts WHERE established_via =
-'oauth2_client' AND relationship NOT IN ('mcp_client', ...);`` and delete or
-re-type them.
+``relationship`` is not in the client list, leaving out the rows the OAuth2
+system actor ``_actingweb_oauth2`` holds (those record client
+registrations, not a user's approval). On PostgreSQL:
+
+.. code-block:: sql
+
+   SELECT id, peerid, relationship FROM trusts
+   WHERE established_via = 'oauth2_client'
+     AND id <> '_actingweb_oauth2'
+     AND relationship NOT IN ('mcp_client', ...);
+
+On DynamoDB, scan ``<prefix>_trusts`` with the same filter on the
+attributes ``established_via``, ``id`` (the actor) and ``relationship``,
+for example with the AWS CLI (list the client types in the ``IN``):
+
+.. code-block:: bash
+
+   aws dynamodb scan --table-name "${AWS_DB_PREFIX}_trusts" \
+     --filter-expression "#via = :via AND #id <> :sys AND NOT (#rel IN (:t1))" \
+     --projection-expression "#id, #peer, #rel" \
+     --expression-attribute-names '{"#via": "established_via", "#id": "id", "#peer": "peerid", "#rel": "relationship"}' \
+     --expression-attribute-values '{":via": {"S": "oauth2_client"}, ":sys": {"S": "_actingweb_oauth2"}, ":t1": {"S": "mcp_client"}}'
+
+Delete or re-type the rows it lists.
 
 **A client's permission override names its row's type.** The override's own
 ``trust_type`` is the base its rules extend, and an OAuth2 or MCP client's
@@ -3290,6 +3597,14 @@ module docstring of ``actingweb.db.protocols`` states:
 A backend without ``strict`` fails with ``TypeError`` at its first call; one
 without ``increment_seq`` fails with ``AttributeError`` at its first diff;
 one without ``iter_rows`` stops those four commands before they scan.
+
+**The stored-format rule** (the envelope's ``need`` and the meta row's
+``format``, `Other versions beside this one`_) asks nothing new of a
+backend that goes through the methods above: the library reads and writes
+those fields. A backend that stores list rows itself stores and returns
+each row's bytes unchanged: it never interprets an envelope or a meta
+row, and never drops a field it does not know, so a later 4.x's ``need``
+or ``format`` reaches the library that refuses it.
 
 For reverse lookup (see `One reverse-lookup mechanism`_) a backend must also:
 

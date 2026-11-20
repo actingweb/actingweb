@@ -89,24 +89,32 @@ pip install 'actingweb[fastapi,dynamodb]'   # or [flask,...] / [...,postgresql]
 docker run -p 8000:8000 amazon/dynamodb-local
 export AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
 export AWS_DB_HOST=http://localhost:8000
+export AWS_DB_PREFIX=myapp_dev_   # explicit: see below
 ```
 
-**The first start of a fresh database stops on purpose.** Creator uniqueness
-is on by default, so `integrate_fastapi()` / `integrate_flask()` raise
-`UniqueCreatorNotReady` until it has been enforced on the store. Start the
-application once (on DynamoDB with table auto-creation on, that start creates
-the tables, then stops), run the command the error names, and start again:
+**A fresh database needs no setup step.** Creator uniqueness is on by
+default and stays on: do not opt out of it to make a first start work. On a
+store with no actors yet, the first `integrate_fastapi()` /
+`integrate_flask()` enables it itself, provided:
+
+- on DynamoDB, `AWS_DB_PREFIX` is set explicitly (an empty store on the
+  default prefix is refused, because the default can name a real
+  deployment): `export AWS_DB_PREFIX=myapp_dev_`;
+- on PostgreSQL, `alembic upgrade head` has run (it creates the tables) and
+  the application's role may create an index.
 
 ```bash
-python app.py                              # stops: UniqueCreatorNotReady
-actingweb-unique-creators enable --apply   # same environment variables
-python app.py                              # serves
+export AWS_DB_PREFIX=myapp_dev_   # DynamoDB: explicit, even for local runs
+python app.py                     # first start enables uniqueness, then serves
 ```
 
-On PostgreSQL run `alembic upgrade head` first (it creates the tables), then
-`actingweb-unique-creators enable --apply`, then start. An application that
-does not want one actor per creator opts out with
-`.with_unique_creator(False)`.
+Only a store that already holds actors without enforcement stops with
+`UniqueCreatorNotReady`; the error names the commands
+(`actingweb-unique-creators report`, `resolve --apply`, `enable --apply`).
+`actingweb-check-ready` shows what a start would say without starting it.
+An application that genuinely allows several actors per creator opts out
+with `.with_unique_creator(False)`; that is a product decision, never a way
+past the first start.
 
 `.with_devtest(True)` turns on a `/<actor_id>/devtest` helper endpoint for
 poking at an actor during manual testing -- it still requires

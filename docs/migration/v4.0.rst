@@ -59,9 +59,15 @@ The upgrade, in order
       [tool.poetry.dependencies]
       actingweb = {version = "4.0.0rc1", source = "testpypi"}
 
-   Every other package still resolves from PyPI. With pip:
-   ``pip install --index-url https://test.pypi.org/simple/ --extra-index-url
-   https://pypi.org/simple/ actingweb==4.0.0rc1``.
+   Every other package still resolves from PyPI. With pip, install the
+   package alone from TestPyPI, then its dependencies and extras from PyPI
+   (TestPyPI's own copies of some dependencies, ``fastapi`` among them, do
+   not install):
+
+   .. code-block:: bash
+
+      pip install --no-deps --index-url https://test.pypi.org/simple/ actingweb==4.0.0rc1
+      pip install "actingweb[fastapi]==4.0.0rc1"   # the extras you use
 
 **Dependencies.** Raise a pin on ``pyjwt`` in the application's own
 requirements to 2.15 or later (below 3), or the install does not resolve:
@@ -82,10 +88,11 @@ serves:
    (:doc:`../quickstart/configuration`, the IAM list; `Creator
    uniqueness`_, "What 4.0 adds to a role").
 4. On PostgreSQL: ``alembic upgrade head`` (revisions ``f6a7b8c9d0e1`` and
-   ``a7b8c9d0e1f2``). Whether 3.15.1 keeps serving correctly on a database
-   at ``a7b8c9d0e1f2`` (which retypes the ``attributes`` key columns) has
-   not been tested: run it in a maintenance window, or deploy 4.0 right
-   after it.
+   ``a7b8c9d0e1f2``). 3.15.1 keeps serving on a database at
+   ``a7b8c9d0e1f2``, which retypes the ``attributes`` key columns (tested,
+   `The operator commands`_, "What tested on PostgreSQL covers"), so the
+   upgrade can run before the deploy while 3.15.1 serves; its index is
+   built ``CONCURRENTLY``, so run it outside a busy period.
 5. If actors were created before 4.0 through the factory, the email form,
    ``Actor.create`` or an MCP connector, and you know they are legitimate:
    ``actingweb-mark-actors-vouched`` (a dry run), then with
@@ -246,7 +253,8 @@ tested*, run the command in a quiet period.
      - Cost, and what success prints
    * - ``alembic upgrade head``
      - Before the deploy (step 4)
-     - Not tested
+     - Tested: 3.15.1 serves on the migrated database (below); the
+       migration itself was not run under load
      - PostgreSQL
      - Builds an index ``CONCURRENTLY`` on a table with rows: run it outside
        a busy period. Ends at revision ``a7b8c9d0e1f2``.
@@ -324,7 +332,17 @@ the command against the same prefix:
   found.
 
 Both commands are short, so the overlap was a few rounds of the loop, not
-a long run under load. PostgreSQL was not tested.
+a long run under load. The two commands were not run this way on
+PostgreSQL.
+
+**What tested on PostgreSQL covers.** An application on 3.15.1 (from PyPI,
+under Python 3.11) served on a schema migrated to ``a7b8c9d0e1f2``, and one
+on this release on another, as peers: trust creation and approval,
+permission exchange, subscription creation, push callbacks, pull,
+suspension, resync, list diffs and deletion all completed in both
+directions, with no error on the 3.15.1 side, which read and wrote its
+attribute rows (the peer replicas the list diffs write) on the retyped
+columns.
 
 **Every command prints the store first, and refuses to write on an unset
 prefix.** It prints the backend and, on DynamoDB, the prefix, endpoint

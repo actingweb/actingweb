@@ -243,9 +243,10 @@ Pre-release versions are automatically published to **TestPyPI** (not production
 
 .. code-block:: bash
 
-    pip install --index-url https://test.pypi.org/simple/ \
-        --extra-index-url https://pypi.org/simple/ \
-        actingweb==3.10.0a1
+    # The package alone from TestPyPI, then its dependencies (and extras)
+    # from PyPI: TestPyPI's copies of some dependencies (fastapi) do not install.
+    pip install --no-deps --index-url https://test.pypi.org/simple/ actingweb==3.10.0a1
+    pip install "actingweb[fastapi]==3.10.0a1"
 
 **Branch restriction:** Tags can only be released from commits on the master branch. Tags on feature branches will fail the release workflow.
 

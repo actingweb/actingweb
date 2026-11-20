@@ -5,6 +5,22 @@ CHANGELOG
 Unreleased
 ----------
 
+FIXED
+~~~~~
+
+- **The Agent Skill told an agent that a fresh database's first start
+  stops, and an agent opted out of creator uniqueness to avoid the step.**
+  ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence
+  (start, ``UniqueCreatorNotReady``, ``actingweb-unique-creators enable
+  --apply``, start again); since 4.0.0rc1 an empty store enables creator
+  uniqueness at its first start. Given that text, an agent building a small
+  application chose ``with_unique_creator(False)`` instead. The skill now
+  says a fresh store needs no setup step (with ``AWS_DB_PREFIX`` set
+  explicitly on DynamoDB, after ``alembic upgrade head`` on PostgreSQL),
+  that opting out is a product decision and never a way past the first
+  start, and its environment block sets the prefix. **Check:** a project
+  that copied the skill copies it again.
+
 v4.0.0rc1: November 20, 2026
 ----------------------------
 

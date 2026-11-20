@@ -43,6 +43,7 @@ owner-chosen approach and a proposed plan (2026-11-06).
 
 | Item | Impact of doing it | Why now |
 | --- | --- | --- |
+| [The 4.0.0 release candidate against real consumers](rc-pass-against-real-consumers.md) | The published rc proven where it runs: a consumer's suite pinned to it (the Agent Skill, the PostgreSQL pair and the demo's deploy are done) | `v4.0.0rc1` is on TestPyPI (2026-11-20); Emm's pin is Emm's own run. Before the stable tag |
 | [A bounded read of a v2 list](bounded-list-read.md) | A tail or page of a long list costs its own rows, not the whole list's range | First after 4.0.0rc1 (owner, 2026-11-19); a consumer's comments feature needs it. Open: a PostgreSQL index revision, the cursor contract across requests, four wrapper layers |
 | [`delete_attr_if_data_equals` on a dict value](attribute-conditional-delete-on-dict-values.md) | A conditional delete of a dict attribute matches whatever the key order | A consumer's comments feature; unverified, a test first |
 | [List items: an append that creates nothing, a TTL, retained generations](list-items-conditional-create-ttl-and-retained-bodies.md) | Comments and versioning on lists without application workarounds | Additive; each needs a design (creation path, body-row expiry, a locating field) |
@@ -80,7 +81,6 @@ neglected work.
 | [Dual-era MCP support](mcp-2026-07-28-dual-era-support.md) | A client we serve going **modern-only**. A dual-era client needs nothing from us, so "supports 2026-07-28" is not the signal — a *sustained* stream of 400/`-32600` from one origin is, and the library now fires that criterion itself. Also blocked-adjacent: `actingweb_mcp`'s `require_mcp_auth_for_init` middleware silently becomes a no-op under the modern revision |
 | [Drop Python 3.11 after its end of life](drop-python-3-11-after-eol.md) | **October 2027**, CPython 3.11's end of life (owner's policy, 2026-11-04: support what upstream maintains). Then the first minor raises the minimum to 3.12, renaming the required CI contexts in the same change |
 | [AI agent discoverability follow-ups](ai-agent-discoverability-followups.md) | **The stable 4.0.0 tag and its docs on Read the Docs**: only the Context7 submission is left (the MCP client and the Agent Skill checks were done by `3-16-release-validation`, 2026-11-18) |
-| [The 4.0.0 release candidate against real consumers](rc-pass-against-real-consumers.md) | **`v4.0.0rc1` on TestPyPI**: `actingwebdemo` to the rc and deployed, Emm's pin on the rc, the Agent Skill with the library from TestPyPI |
 
 ## 4. Registers — deferred items, not schedulable work
 

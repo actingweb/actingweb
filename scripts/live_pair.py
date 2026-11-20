@@ -50,6 +50,10 @@ must be found by this tree's reverse lookup::
         --out /tmp/pair/same-mark.json -- actingweb-mark-actors-vouched --apply
     # likewise with: -- actingweb-property-lookup backfill --apply
 
+On PostgreSQL set ``DATABASE_BACKEND=postgresql`` and the ``PG_DB_*``
+variables, and give each side its own schema with ``PG_DB_PREFIX`` (migrated
+with ``alembic upgrade head`` first) instead of ``AWS_DB_PREFIX``.
+
 Nothing here is for production: the control route has no authentication
 beyond the loopback check, and the captures hold request bodies.
 """
@@ -293,7 +297,9 @@ def build_app(label: str, port: int, capture: str) -> Any:
     aw_app = (
         ActingWebApp(
             aw_type="urn:actingweb:example.test:live-pair",
-            database="dynamodb",
+            # An explicit database= wins over DATABASE_BACKEND, so the
+            # backend is read here: the pair runs on either.
+            database=os.getenv("DATABASE_BACKEND", "dynamodb"),
             fqdn=f"127.0.0.1:{port}",
             proto="http://",
         )
@@ -853,7 +859,11 @@ def same_store(args: argparse.Namespace) -> int:
     from actingweb.config import Config
     from actingweb.interface.actor_interface import ActorInterface
 
-    config = Config(database="dynamodb", fqdn="127.0.0.1", proto="http://")
+    config = Config(
+        database=os.getenv("DATABASE_BACKEND", "dynamodb"),
+        fqdn="127.0.0.1",
+        proto="http://",
+    )
     unreadable_old: list[str] = []
     unreadable_new: list[str] = []
     lookups_missed: list[str] = []

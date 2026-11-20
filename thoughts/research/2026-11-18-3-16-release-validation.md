@@ -804,3 +804,52 @@ re-sorted by the guide's audience groups: within each category they stay
 in the order of the work, which keeps related entries together; sorting
 260 entries by audience without reading each against the guide again
 risked separating an entry from the ones it refers to.
+
+## The published rc against real consumers (2026-11-20)
+
+From `thoughts/todo/rc-pass-against-real-consumers.md`, with `v4.0.0rc1`
+on TestPyPI (tag on `717873e`).
+
+**3.15.1 on a PostgreSQL database at `a7b8c9d0e1f2`.** Two schemas
+migrated to head with this release's Alembic chain; 3.15.1 (PyPI, Python
+3.11) served on one, the rc tree on the other, as live-pair peers. All nine
+flows completed in both directions (trust, permissions, subscription, push,
+pull, suspension, resync, list diffs, deletion), no error on the 3.15.1
+side, which wrote and read attribute rows on the retyped key columns. The
+guide's step 4 drops its maintenance-window advice. On the way:
+`scripts/live_pair.py` hard-coded `database="dynamodb"`, and an explicit
+`database=` wins over `DATABASE_BACKEND` (`database or os.getenv(...)`), so
+the first attempt ran both sides on DynamoDB Local; `CLAUDE.md` and
+`getting-started.rst` said the variable takes precedence. Both corrected,
+and the script reads the variable.
+
+**The Agent Skill with the library from TestPyPI.** Scratch repositories
+with `actingweb[fastapi]==4.0.0rc1` and the skill at the tag; the release
+validation's task (a FastAPI app, a `greeting` hook, a fresh DynamoDB Local
+prefix, a REST round trip), not naming the skill, to `claude -p` (2.1.329)
+and `codex exec` (0.150.1). Both finished. Claude Code kept the defaults
+and its first start served directly. Codex said it used the skill, but
+opted out of creator uniqueness ("avoids a separate database migration
+step"): the skill still described the rc1-era first start (stop,
+`enable --apply`, start). Rewritten (a fresh store needs no step; opting
+out is a product decision, never a way past the first start; the
+environment block sets `AWS_DB_PREFIX`); a second Codex run with the new
+text kept every default and its first start enabled the store. The
+documented pip form for TestPyPI (`--index-url` TestPyPI,
+`--extra-index-url` PyPI) fails with an extra: TestPyPI's own `fastapi`
+does not build. The guide, `CONTRIBUTING.rst` and `CLAUDE.md` now install
+the package alone from TestPyPI, then its dependencies from PyPI.
+
+**`actingwebdemo`.** The pin is `actingweb/actingwebdemo#32` (rc tag,
+Python 3.14, ruff `^0.15`, `BatchGetItem` and `ConditionCheckItem`,
+`AWS_DB_PREFIX` stated, `OPEN_FACTORY=true`); its tests pass on a fresh
+store with no setup step. Deployed 2026-11-20 (merge `703b300`, deploy
+run 44738549215 green). Before the merge, the live store
+(`demo_actingweb`, us-west-1) held only the two system actors: their
+properties, the 3.15.1 lookup markers (already complete), and attribute
+rows of deleted actors. `actingweb-check-ready` (4.0, read-only, the demo's
+settings) exited 0, reporting creator uniqueness and email-as-creator as
+"ready at first start", so no operator step ran and nothing was cleared.
+After the first 4.0 start every gate read "ready"; the creators table holds
+the two system actors and `#meta#backfill`. `/` and `/login` answer 200 with
+the sign-in form.

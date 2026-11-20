@@ -5,7 +5,7 @@ CHANGELOG
 Unreleased
 ----------
 
-v4.0.0rc1: November 18, 2026
+v4.0.0rc1: November 20, 2026
 ----------------------------
 
 .. note::

@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-18 by thoughts/plans/2026-11-15-3-16-release-validation.iterations.md (entry 2)
+**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
 **ID prefix:** OCR
 
 ## Summary
@@ -52,12 +52,44 @@ cannot be created.
   `get()`) (plans/2026-11-15-3-16-release-validation.md; owner's decisions
   2026-11-18; iterations entry 2)
 
+## Authorising
+
+- **OCR-5** — When an authorisation request, a callback state or a code has
+  no `code_challenge`, it is refused for every client unless
+  `require_pkce=False`, which restores rc1's behaviour: a public client is
+  refused at authorise only, and the callback and exchange accept a code
+  without a challenge. [plan+test] `tests/test_oauth2_pkce_binding.py`
+  (`test_a_confidential_client_without_a_challenge_gets_400`, the opt-out
+  tests, `test_the_callback_refuses_a_state_without_a_challenge`,
+  `test_the_exchange_refuses_a_code_without_a_challenge`) (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-37, AC-38, AC-49)
+- **OCR-6** — When the authorise form is posted without the challenge it was
+  shown with, the refusal is logged with what a custom form must carry.
+  [plan+test] `tests/test_oauth2_pkce_binding.py::test_a_form_post_without_a_challenge_warns_about_the_form` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-52)
+
+## Discovery
+
+- **OCR-7** — When the server document is read, `client_credentials` is not
+  offered; an owner-created client can still use it. [plan+test]
+  `tests/test_oauth2_public_clients.py::test_discovery_does_not_offer_client_credentials`,
+  `::test_an_owner_created_client_still_uses_the_grant` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-36)
+
 ## Decisions in force
 
 - **OCR-D1** — The trust row is written before the client row, so a client
   that exists always had a trust row created for it. (plans/2026-11-17-3-16-pre-rc1-fixes.md)
 
+- **OCR-D2** — `require_pkce=False` means the rc1 behaviour exactly, so an
+  application can upgrade with it and change no sign-in, then enforce in a
+  later change. (plans/2026-11-19-emm-4-0-adoption-findings.md)
+- **OCR-D3** — The challenge travels through the authorise form's hidden
+  fields; an application's own form, its own sign-in route calling
+  `complete_client_authorization` (refused without a challenge before any
+  hook or write), and any code it creates itself with
+  `create_authorization_code`, must pass it on. (plans/2026-11-19-emm-4-0-adoption-findings.md)
+
 ## Untested
 
 - OCR-3 through `handle_oauth_callback()` directly (it needs a provider's
   code); it decides through the same `_decided_type`.
+- `complete_client_authorization` accepts a `plain` challenge method from
+  the application's own route (rc1 behaviour; accepted 2026-11-20).

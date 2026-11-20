@@ -37,6 +37,7 @@ def _gates(
     schema: Any = (),
     email: Any = None,
     synced: bool = True,
+    properties_empty: Any = None,
 ) -> Iterator[dict[str, mock.MagicMock]]:
     """Patch the five probes; a ``BaseException`` value is raised."""
 
@@ -53,6 +54,9 @@ def _gates(
         "_store_empty": answer(
             actors if isinstance(actors, BaseException) else not actors
         ),
+        "_properties_empty": answer(
+            (not actors) if properties_empty is None else properties_empty
+        ),
         "_schema_problems": answer(
             list(schema) if isinstance(schema, tuple | list) else schema
         ),
@@ -60,7 +64,7 @@ def _gates(
             email if email is not None or not synced else {"state": "synced"}
         ),
     }
-    with mock.patch.multiple(P, **mocks):
+    with mock.patch.multiple(P, create=True, **mocks):
         yield mocks
 
 
@@ -159,3 +163,51 @@ def test_a_missing_lookup_table_is_not_a_fault() -> None:
         side_effect=DbError("lookup table missing: x_property_lookup_v2"),
     ):
         assert command._lookup_attention("dynamodb", ["email"]) == ["email"]  # pyright: ignore[reportPrivateUsage]
+
+
+def _denied() -> DbError:
+    from botocore.exceptions import ClientError
+
+    error = DbError("actor scan")
+    error.__cause__ = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "no Scan"}}, "Scan"
+    )
+    return error
+
+
+def test_a_denied_permission_is_not_an_empty_store() -> None:
+    """Iteration 5 (verification issue 4): only a missing table reads as
+    empty; a denied permission is unreadable (exit 2), never green."""
+    from actingweb.config import Config
+
+    config = Config(database="dynamodb")
+    with mock.patch(
+        "actingweb.maintenance.unique_creators.no_actors", side_effect=_denied()
+    ):
+        with pytest.raises(DbError):
+            command._store_empty(config)  # pyright: ignore[reportPrivateUsage]
+    with mock.patch(
+        "actingweb.db.dynamodb.attribute.DbAttribute.get_attr_strict",
+        side_effect=_denied(),
+    ):
+        with pytest.raises(DbError):
+            command._email_marker(config)  # pyright: ignore[reportPrivateUsage]
+    with mock.patch(
+        "actingweb.maintenance.property_lookup.read_readiness",
+        side_effect=_denied(),
+    ):
+        with pytest.raises(DbError):
+            command._lookup_attention("dynamodb", ["email"])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_the_lookup_gate_follows_the_properties_table(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Iteration 6 (verification issue 5): the start marks names itself when
+    the properties table holds no actor's row, whatever the actor count."""
+    with _gates(lookup=["email"], actors=True, properties_empty=True):
+        assert command.main(["--properties", "email"]) == 0
+    assert "reverse lookup: ready at first start" in capsys.readouterr().out
+    with _gates(lookup=["email"], actors=False, properties_empty=False):
+        assert command.main(["--properties", "email"]) == 1
+    assert "reverse lookup: REFUSED" in capsys.readouterr().out

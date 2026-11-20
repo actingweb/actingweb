@@ -251,8 +251,8 @@ credentials), in this order, before a deploy:
 1. ``alembic upgrade head`` on PostgreSQL. It comes first: it creates the
    tables the commands below read, including the
    ``property_lookup_backfill`` table step 4 writes its markers to.
-2. ``actingweb-mark-actors-vouched`` (with ``--email-as-creator`` under
-   ``with_email_as_creator``), if legacy actors are to be vouched: the new
+2. ``actingweb-mark-actors-vouched``, then with ``--apply`` (with
+   ``--email-as-creator`` under ``with_email_as_creator``), if legacy actors are to be vouched: the new
    version cleans an unmarked actor at its next sign-in.
 3. ``actingweb-unique-creators report``, ``resolve --apply`` and
    ``enable --apply`` (creator uniqueness, on by default), on a store that
@@ -265,8 +265,8 @@ credentials), in this order, before a deploy:
    (under ``with_email_as_creator``): the start refuses until the sweep
    has completed.
 
-   **5a.** ``actingweb-mark-actors-vouched`` again, if step 2 applied (with
-   the same options), as
+   **5a.** ``actingweb-mark-actors-vouched --apply`` again, if step 2
+   applied (with the same options), as
    the last write before the deploy: it marks the actors the old version
    created since step 2.
 
@@ -311,8 +311,7 @@ not hide it): the backend and, on DynamoDB, the table prefix, endpoint and
 region, or on PostgreSQL the host, database, schema and prefix. Check it
 before trusting a clean report: a report from the wrong tables looks like
 a clean one. On DynamoDB a command in a writing mode (``--apply``,
-``--migrate``, ``--repair``, ``--downgrade``, or
-``actingweb-mark-actors-vouched`` without ``--dry-run``) refuses with exit
+``--migrate``, ``--repair`` or ``--downgrade``) refuses with exit
 status 2 when ``AWS_DB_PREFIX`` is unset or empty, because the library's
 default prefix (``demo_actingweb``) can name a real deployment. Set it
 explicitly, even when the application runs on the default. Dry runs and
@@ -329,8 +328,8 @@ missing, as it does for the application.
 
 **After the deploy.** Processes of the old version can leave work behind
 during the rollout. Once every instance runs the new version, first run
-``actingweb-mark-actors-vouched`` once more (if step 2 applied, with the
-same options): it marks
+``actingweb-mark-actors-vouched --apply`` once more (if step 2 applied,
+with the same options): it marks
 the actors an old process created during the rollout. A window of a few
 seconds remains; an actor signed in through it is cleaned, which costs its
 user one reconnect. Then:

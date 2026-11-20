@@ -30,6 +30,7 @@ from actingweb.db.creator_rename import (
 )
 from actingweb.db.creator_rules import (
     is_exempt,
+    is_system_actor,
     missing_enforcement_message,
     normalise_creator,
 )
@@ -78,6 +79,29 @@ def _require_creators_backfill(op: str) -> None:
     )
     logger.error(missing_enforcement_message(what))
     raise DbError(op)
+
+
+def _system_actor_before_enable(actor_id: str, creator: str) -> bool:
+    """Whether this create is a system actor's on a store whose creators
+    table is not enabled yet.
+
+    A system actor (:func:`is_system_actor`: its fixed id and creator) is created on
+    first use, which can be before ``check_ready()`` enables an empty store:
+    an application that registers a trust type at import does so. Its
+    creator is refused from every caller, and its fixed id is guarded by the
+    write's own condition, so it is written without a creator record, as a
+    3.15.1 process writes it; the enable (or ``actingweb-unique-creators
+    enable --apply``) records it. Once the store is enabled it is created
+    like any other actor. A probe fault is left to
+    :func:`_require_creators_backfill` to report."""
+    if not is_system_actor(actor_id, creator):
+        return False
+    from actingweb.db.dynamodb import _backfill_probe
+
+    try:
+        return _backfill_probe.cached_backfill_state() != "complete"
+    except Exception:  # folds DbError: reported by _require_creators_backfill
+        return False
 
 
 class CreatorIndex(GlobalSecondaryIndex[Any]):
@@ -557,7 +581,11 @@ class DbActor:
             logger.warning("Trying to create actor that exists(" + actor_id + ")")
             return False
         actor = Actor(id=actor_id, creator=creator, passphrase=passphrase)
-        if self.unique_creator and not is_exempt(creator):
+        if (
+            self.unique_creator
+            and not is_exempt(creator)
+            and not _system_actor_before_enable(actor_id, creator)
+        ):
             _require_creators_backfill("actor create")
             record = Creator(creator=creator, actor_id=actor_id)
 

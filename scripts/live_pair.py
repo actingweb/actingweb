@@ -47,7 +47,7 @@ must be found by this tree's reverse lookup::
         --capture /tmp/pair/same.jsonl            # previous release
     AWS_DB_PREFIX=pair_same_ INDEXED_PROPERTIES=email \
         python scripts/live_pair.py same-store --old http://127.0.0.1:5701 \
-        --out /tmp/pair/same-mark.json -- actingweb-mark-actors-vouched
+        --out /tmp/pair/same-mark.json -- actingweb-mark-actors-vouched --apply
     # likewise with: -- actingweb-property-lookup backfill --apply
 
 Nothing here is for production: the control route has no authentication

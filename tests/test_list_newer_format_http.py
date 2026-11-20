@@ -55,3 +55,33 @@ def test_a_list_read_and_the_listing_answer_the_newer_format() -> None:
     assert listing.status_code == 200, listing.text
     body = listing.json()
     assert body["notes"]["_list"] is True and body["other"]["_list"] is True
+
+
+def test_a_newer_list_layout_fails_its_own_entry_in_the_listing() -> None:
+    """Iteration 3 (verification issue 2): a list whose meta ``format`` a
+    later version raised is marked in the default and ``short`` listings;
+    the other properties and lists are still served."""
+    client, config = _app()
+    creator = uuid_email()
+    actor = create_core_actor(config, creator, auth_method="app")
+    iface = ActorInterface.get_by_id(aid(actor), config)
+    assert iface is not None
+    iface.property_lists.notes.append("a")
+    iface.property_lists.other.append("kept")
+    iface.properties["plain"] = "value"
+    db = get_property(config)
+    raw = db.get(actor_id=aid(actor), name="list:notes-meta")
+    assert raw is not None
+    meta = json.loads(raw)
+    meta["format"] = 3
+    db.set(actor_id=aid(actor), name="list:notes-meta", value=json.dumps(meta))
+    auth = (creator, "squatter-passphrase")
+
+    for query in ("", "?format=short"):
+        listing = client.get(f"/{aid(actor)}/properties{query}", auth=auth)
+        assert listing.status_code == 200, (query, listing.text)
+        body = listing.json()
+        assert body["plain"] == "value"
+        assert body["other"] == {"_list": True, "count": 1}
+        assert body["notes"]["_list"] is True
+        assert body["notes"] == {"_list": True, "error": "list_item_newer_format"}

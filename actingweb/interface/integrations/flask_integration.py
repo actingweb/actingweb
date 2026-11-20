@@ -978,7 +978,7 @@ class FlaskIntegration(BaseActingWebIntegration):
             return Response(
                 render_template(
                     "aw-root-factory.html",
-                    factory_open=self.aw_app.get_config().open_factory,
+                    **factory.sign_in_page_values(self.aw_app.get_config()),
                 )
             )
         except Exception:  # folds DbError: no DB access: template rendering
@@ -1031,7 +1031,7 @@ class FlaskIntegration(BaseActingWebIntegration):
                         render_template(
                             "aw-root-factory.html",
                             error="Email is required",
-                            factory_open=self.aw_app.get_config().open_factory,
+                            **factory.sign_in_page_values(self.aw_app.get_config()),
                         )
                     )
                 except Exception:  # folds DbError: no DB access: template rendering

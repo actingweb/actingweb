@@ -1213,6 +1213,8 @@ def enable_empty_store(config: Any) -> None:
     if config.database == "postgresql":
         _enable_empty_postgresql()
         return
+    from pynamodb.exceptions import PutError
+
     from actingweb.db.dynamodb._backfill_probe import creators_backfill_state
     from actingweb.db.dynamodb._ensure import ensure_table
     from actingweb.db.dynamodb.actor import Actor, record_for_actor_as_read
@@ -1244,17 +1246,59 @@ def enable_empty_store(config: Any) -> None:
     for row in system:
         if not record(row):
             raise EnableRefused(f"the system actor {row.id} could not be recorded")
-    Creator(creator=BACKFILL_KEY).save()
-    # An actor an older process created between the scan and the item is
-    # behind a complete marker unless recorded now.
-    late, _ = scan()
-    for row in late:
-        if not record(row):
-            Creator(creator=BACKFILL_KEY).delete()
+
+    def late_pass() -> None:
+        """Record every actor (or system actor, written without a record
+        before the enable) another process created since the first scan:
+        behind a complete marker it is otherwise unrecorded for good."""
+        late_users, late_system = scan()
+        for row in [*late_system, *late_users]:
+            if not record(row):
+                raise EnableRefused(
+                    f"actor {row.id} was created during the enable and could "
+                    "not be recorded"
+                )
+
+    # The marker is written only if absent. An existing one is another first
+    # start's, which may be serving behind it: this start never removes it,
+    # and does not trust that its writer finished either. It runs the same
+    # late pass (idempotent: a record naming the same actor counts as done)
+    # and refuses its own start if that fails.
+    try:
+        Creator(creator=BACKFILL_KEY).save(condition=Creator.creator.does_not_exist())
+    except PutError as e:
+        if e.cause_response_code != "ConditionalCheckFailedException":
+            raise
+        try:
+            late_pass()
+        except EnableRefused:
+            raise
+        except Exception as fault:  # folds DbError: refused, not retried
+            # A retried check would find the marker and pass over the actor
+            # this pass could not record: refuse, naming the command that
+            # records every actor (safe to re-run).
             raise EnableRefused(
-                f"actor {row.id} was created during the enable and could not be "
-                "recorded"
+                "another start enabled the store, and an actor created "
+                f"meanwhile could not be checked ({type(fault).__name__}); run "
+                "'actingweb-unique-creators enable --apply'"
+            ) from fault
+        creators_backfill_state()  # another start's marker: remember it
+        return
+    # This start's own marker: a failure in the late pass removes it again,
+    # so "complete" is never left over an actor that was not recorded.
+    try:
+        late_pass()
+    except Exception:  # folds DbError: the marker goes, the error is raised
+        try:
+            Creator(creator=BACKFILL_KEY).delete()
+        except Exception as cleanup:  # folds DbError: reported, then the original
+            logger.critical(
+                "the creators table's backfill-complete item could not be "
+                f"removed after a failed enable ({type(cleanup).__name__}: "
+                f"{cleanup}); run 'actingweb-unique-creators report' and "
+                "'enable --apply' before serving"
             )
+        raise
     creators_backfill_state()  # remembers "complete" for this process
 
 
@@ -1496,7 +1540,7 @@ def _run_creator_to_email(args: argparse.Namespace, config: Any) -> int:
         logger.warning(
             f"{counts['unvouched']} actor(s) were passed because they are not "
             "vouched for their creator: only a vouched actor follows its email. "
-            "If they are legitimate, run actingweb-mark-actors-vouched first, "
+            "If they are legitimate, run actingweb-mark-actors-vouched --apply first, "
             "then this sweep again"
         )
     blocking = counts["held"] or counts["changed"] or counts["errors"]

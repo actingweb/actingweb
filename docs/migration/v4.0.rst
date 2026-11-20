@@ -88,8 +88,8 @@ serves:
    after it.
 5. If actors were created before 4.0 through the factory, the email form,
    ``Actor.create`` or an MCP connector, and you know they are legitimate:
-   ``actingweb-mark-actors-vouched --dry-run``, then without
-   ``--dry-run`` (`Marking actors you trust before the first sign-in`_),
+   ``actingweb-mark-actors-vouched`` (a dry run), then with
+   ``--apply`` (`Marking actors you trust before the first sign-in`_),
    because 4.0 cleans an unmarked actor at its next sign-in. Before step 7,
    stop new duplicates (3.15.1 has no switch for the factory: refuse
    ``POST /`` in front of the application, or at a proxy, where users sign
@@ -114,7 +114,7 @@ serves:
    follows the stored email`_), because the start refuses until the sweep
    has completed.
 
-   **8a.** Run ``actingweb-mark-actors-vouched`` again (if step 5 applied;
+   **8a.** Run ``actingweb-mark-actors-vouched --apply`` again (if step 5 applied;
    with ``--email-as-creator`` under ``with_email_as_creator``) as the last
    write before the deploy: it marks the actors 3.15.1 created
    since step 5.
@@ -131,8 +131,8 @@ or change attribute lists: until then a 3.15.1 process reads what those
 write as something else (`Other versions beside this one`_).
 
 **After the upgrade**, once every instance runs 4.0, first run
-``actingweb-mark-actors-vouched`` once more (if step 5 applied, with the
-same options): it marks
+``actingweb-mark-actors-vouched --apply`` once more (if step 5 applied,
+with the same options): it marks
 the actors a 3.15.1 process created during the rollout before their first
 sign-in on 4.0. A window of a few seconds remains between the last 3.15.1
 create and this run; an actor signed in through it is cleaned, which costs
@@ -231,7 +231,7 @@ The commands ship with 4.0: run them from an installation of 4.0 that does
 not serve traffic, with the application's own database settings
 (``AWS_DB_PREFIX`` or the ``PG_DB_*`` variables, and ``INDEXED_PROPERTIES``
 or ``--properties`` for the lookup). Each writes nothing without
-``--apply`` (``mark-actors-vouched`` writes unless ``--dry-run``). "While
+``--apply``. "While
 3.15.1 serves" says what the guide establishes; where it says *not
 tested*, run the command in a quiet period.
 
@@ -314,7 +314,7 @@ Python 3.11) served a loop on one table prefix (create an actor, read it
 with its credentials, write an indexed property) while this release ran
 the command against the same prefix:
 
-- ``actingweb-mark-actors-vouched`` (writing): exit 0 in about 0.5 s; the
+- ``actingweb-mark-actors-vouched`` (writing, as ``--apply`` now spells it): exit 0 in about 0.5 s; the
   3.15.1 side kept answering (24 actors created during the run, no failed
   request); every actor was readable by both versions afterwards, and
   every reverse lookup of a value 3.15.1 wrote found its actor.
@@ -330,8 +330,7 @@ a long run under load. PostgreSQL was not tested.
 prefix.** It prints the backend and, on DynamoDB, the prefix, endpoint
 and region (on PostgreSQL the host, database, schema and prefix) on stdout
 before its first read. On DynamoDB a writing mode (``--apply``,
-``--migrate``, ``--repair``, ``--downgrade``, and
-``actingweb-mark-actors-vouched`` without ``--dry-run``) refuses with exit
+``--migrate``, ``--repair`` or ``--downgrade``) refuses with exit
 status 2 when ``AWS_DB_PREFIX`` is unset or empty: set it explicitly, even
 to the default ``demo_actingweb``. A script that runs these commands sets
 it too.
@@ -462,7 +461,7 @@ The changes, one line each
    alone. Its passphrase is rotated and its trusts, subscriptions,
    sessions and registered OAuth2 clients are removed (MCP connectors must
    register and authorize again); its data is kept. Install 4.0 and run
-   ``actingweb-mark-actors-vouched`` *before the application serves its first
+   ``actingweb-mark-actors-vouched --apply`` *before the application serves its first
    sign-in* to skip that for actors you know are legitimate. **An application
    whose users signed up through an MCP connector must run it:** the MCP OAuth
    server proved those addresses through the provider but never wrote a
@@ -948,8 +947,10 @@ A closed ``POST /`` answers ``403`` with the house JSON body, whose
 message says actor creation is disabled and names
 ``with_open_factory(True)`` (the error page for a form), and the
 existing-creator form redirect, which told anyone which actor id belongs to
-an address, is closed with it. The default ``GET /`` page offers no form
-while the factory is closed. This deviates from the protocol's mandatory
+an address, is closed with it. With a provider, the default ``GET /`` page
+keeps its email form: a form ``POST /`` is redirected to the provider with
+the address as a hint and never reaches the factory, so the form signs in.
+Without a provider, a closed factory's page offers no form. This deviates from the protocol's mandatory
 factory; open it where something needs it:
 
 - **A peer creates trustees here.** A peer application that creates its
@@ -1346,7 +1347,25 @@ remove the duplicate actors (checklist step 5). An application hook that
 writes a value that is not an address into an indexed email property (the
 default creator ``creator``, say, for an actor created without an
 address) makes every such actor collide: stop writing it, and clear it
-where it was written, before the backfill.
+where it was written, before the backfill. Creator uniqueness exempts the
+default creator; the reverse lookup does not, because it indexes the
+property value, not the creator.
+
+.. note::
+
+   **Known issue, by design: actors made through the factory without an
+   address.** A 3.x factory that was given no address created actors with
+   the default creator ``creator``. If an application hook then stored that
+   creator in an indexed property (``email = creator``), every such actor
+   holds the same value, so the backfill reports a collision for the name
+   and the start is refused. Before the upgrade, close the factory (no new
+   ones), then delete those actors or clear the property on all but one;
+   ``backfill`` names each of them. Or, after reviewing them, accept the
+   collision with ``actingweb-property-lookup mark-complete --force
+   --properties <name> --apply``: a reverse lookup of the shared value then
+   finds only the actor that holds the lookup row. The collision is not
+   suppressed by default: a reverse lookup of ``creator`` could not say
+   which actor it means.
 
 On PostgreSQL, when ``backfill`` exits 1 and logs ``UNINDEXABLE``
 lines, shorten or remove that property on each actor they name and run it
@@ -2043,9 +2062,9 @@ with the application's own environment:
 
 .. code-block:: bash
 
-   actingweb-mark-actors-vouched --dry-run
-   actingweb-mark-actors-vouched --marker operator
-   actingweb-mark-actors-vouched --creator alice@example.com
+   actingweb-mark-actors-vouched
+   actingweb-mark-actors-vouched --marker operator --apply
+   actingweb-mark-actors-vouched --creator alice@example.com --apply
 
 (``python -m actingweb.maintenance.mark_actors_vouched`` and, in a source
 checkout, ``scripts/mark_actors_vouched.py`` run the same code.)
@@ -2318,7 +2337,7 @@ withdraws the marker, so starts with ``with_email_as_creator`` wait for the next
 **Upgrade order, with creator uniqueness and** ``with_email_as_creator`` **on.** Within `Step 0`_:
 
 1. If legacy actors are being vouched,
-   ``actingweb-mark-actors-vouched --email-as-creator`` first: an actor
+   ``actingweb-mark-actors-vouched --email-as-creator --apply`` first: an actor
    whose creator is an address and whose stored email is another one gets
    the creator as its email, so the sweep does not hand it to an address
    nobody proved. Without the option such actors are counted

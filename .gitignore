@@ -330,3 +330,4 @@ tests/integration/dynamodb-data/
 
 # Left beside a recording when a wire comparison fails (tests/integration/_wire.py check()).
 tests/integration/wire/*.actual.json
+.gstack/

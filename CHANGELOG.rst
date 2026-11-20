@@ -12,7 +12,7 @@ v4.0.0rc1: November 18, 2026
 
    **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
    here") before upgrading.** The first steps: ``alembic upgrade head`` on
-   PostgreSQL; ``actingweb-mark-actors-vouched`` where actors created
+   PostgreSQL; ``actingweb-mark-actors-vouched --apply`` where actors created
    before 4.0 are to be kept (no start checks it: an unmarked actor is
    cleaned at its next sign-in); ``actingweb-property-lookup backfill
    --apply`` where indexed properties hold data;
@@ -600,7 +600,7 @@ SECURITY
   anyone can ``POST /`` their address first (also older than 4.0); closing
   the factory removes that path.
   Install 4.0
-  and run ``actingweb-mark-actors-vouched`` before the application serves its
+  and run ``actingweb-mark-actors-vouched --apply`` before the application serves its
   first sign-in to mark actors you know are legitimate;
   ``docs/migration/v4.0.rst`` has the details. **Known
   limitations:** a provider access token or ``oauth_token`` cookie matched by
@@ -1038,8 +1038,7 @@ CHANGED
   not set.** The library defaults the prefix to ``demo_actingweb``, so a
   command run from a shell without the application's environment wrote to
   whatever store that name resolved to. Every command (``--apply``,
-  ``--migrate``, ``--repair``, ``--downgrade``, and
-  ``actingweb-mark-actors-vouched`` without ``--dry-run``) now refuses with
+  ``--migrate``, ``--repair``, ``--downgrade``) now refuses with
   exit status 2 when the prefix is unset or empty, naming the resolved
   prefix and the fix; dry runs and PostgreSQL are not refused. Every command
   also prints the store it will read (backend; on DynamoDB the prefix,
@@ -1059,8 +1058,10 @@ CHANGED
   configured.** An application that called any provider builder
   (``with_oauth``, ``with_github``, ``with_apple_sign_in``,
   ``with_google_native``, whatever its credentials) and not
-  ``with_open_factory`` now answers ``POST /`` with 403, its default
-  ``GET /`` page offers no form, and one start-up WARNING says so. The
+  ``with_open_factory`` now answers ``POST /`` with 403, and one start-up
+  WARNING says so. Its default ``GET /`` page keeps the provider buttons and
+  the email form, which signs in (a form ``POST /`` is redirected to the
+  provider and never reaches the factory). The
   setting is resolved when read, so a provider builder called after the
   ``Config`` was built still closes it. Without a provider (a basic-auth
   deployment) the factory stays open. **Check:** an application whose peers
@@ -2866,7 +2867,8 @@ ADDED
   answers 403 (the house JSON body naming ``with_open_factory(True)``, or
   the error page for a form), the existing-creator form redirect is closed
   with it (and no longer names the actor on an open factory either, see
-  CHANGED), and the default ``GET /`` page offers no form. ``Config`` gains
+  CHANGED), and without a provider the default ``GET /`` page offers no
+  form (with one, its email form signs in). ``Config`` gains
   ``open_factory``: unset, it is closed when a sign-in provider builder was
   called and open otherwise (see CHANGED); a value assigned on the
   ``Config`` survives until ``with_open_factory`` is called, after which the
@@ -2933,8 +2935,9 @@ ADDED
   deployment that must not have its existing actors cleaned at first sign-in:
   writes ``auth_method`` (default ``operator``; an unvouched value is
   refused) on actors with no marker, with ``--creator``, ``--start-after`` to
-  resume, ``--dry-run`` and ``--include-factory`` to also re-mark ``factory``
-  actors. It needs the 4.0 library and scans the whole actor table, streamed
+  resume, and ``--include-factory`` to also re-mark ``factory`` actors. Like
+  every other writing command it writes only with ``--apply``; without it
+  (or with ``--dry-run``) the run is a dry run. It needs the 4.0 library and scans the whole actor table, streamed
   (only each matching actor's id and creator is kept, about 220 MB per
   million actors) and strongly consistent on DynamoDB, since it writes back
   the creator it read (twice the read units of an eventual scan;

@@ -451,9 +451,10 @@ class ActingWebApp:
         """Open or close the actor factory (``POST /``).
 
         The factory creates an actor for any address from unauthenticated
-        input. Closed, the request answers 403, the default ``GET /`` page
-        offers no form, and sign-in through a provider is the only way to get
-        an actor.
+        input. Closed, the request answers 403 and sign-in through a provider
+        is the only way to get an actor; the default ``GET /`` page keeps its
+        email form when a provider is configured (a form ``POST /`` is then a
+        sign-in redirect) and offers none otherwise.
 
         Default (4.0): closed when a sign-in provider builder was called
         (``with_oauth``, ``with_github``, ``with_apple_sign_in``,
@@ -2081,8 +2082,8 @@ class ActingWebApp:
             logging.getLogger(__name__).warning(
                 "The actor factory (POST /) is closed: a sign-in provider is "
                 "configured and with_open_factory() was not called (4.0 "
-                "default). POST / answers 403 and the default GET / page offers "
-                "no form. Call with_open_factory(True) if peers create trustees "
+                "default). POST / answers 403 to an API client; the default GET / "
+                "page's email form signs in through the provider. Call with_open_factory(True) if peers create trustees "
                 "here or users create actors with the form."
             )
 

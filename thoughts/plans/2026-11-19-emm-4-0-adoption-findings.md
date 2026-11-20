@@ -1,6 +1,9 @@
 ---
 status: done
 approved: 2026-11-19 by Greger Wedel
+verified: thoughts/verifications/2026-11-20-emm-4-0-adoption-findings-3.md
+spec_merged: 2026-11-20
+iterations: thoughts/plans/2026-11-19-emm-4-0-adoption-findings.iterations.md
 ---
 
 # Implementation Plan: What 4.0.0rc1 takes from its first consumer's read
@@ -329,9 +332,18 @@ Phase 2
 - **AC-46** (added in plan: the closed factory also closes trustee
   creation) — When a peer's factory answers 403 to a trustee creation, the
   calling side logs a WARNING naming the factory and the status.
-- **AC-47** (added in plan: the default page would offer a form that
+- ~~**AC-47** (added in plan: the default page would offer a form that
   answers 403) — When the factory is closed, the default `GET /` page does
-  not render the creation form.
+  not render the creation form.~~ Restated in iteration 1: with a provider
+  the form signs in.
+- **AC-47** (restated in iteration 1) — When a sign-in provider is
+  configured, the default `GET /` and `/login` pages offer the provider
+  button and the email form (which signs in) on both integrations, whether
+  or not the factory is open; without a provider, a closed factory's page
+  offers no form.
+- **AC-55** (added in iteration 7) — When `actingweb-mark-actors-vouched`
+  runs without `--apply`, it writes nothing (a dry run, `--dry-run` still
+  accepted); `--apply` writes; both together are a usage error.
 - **AC-48** (added in plan: owner's decision on the evaluation) — When the
   store is empty on DynamoDB and `AWS_DB_PREFIX` is unset or empty, the
   start is refused as before, naming the prefix and the command.
@@ -360,14 +372,14 @@ Phase 3
 | AC-3 | 1 | `tests/test_mark_actors_vouched.py::test_dry_run_prints_marker_and_hides_addresses`, `::test_show_addresses_prints_creator_and_email` | Passing |
 | AC-4 | 1 | `tests/test_mark_actors_vouched.py::test_ids_file_limits_the_run`, `::test_a_listed_id_not_in_the_store_is_counted_missing`, `::test_unreadable_ids_file_is_a_usage_error` | Passing |
 | AC-5 | 1 | `tests/integration/test_email_as_creator_sweep.py::test_sweep_counts_unvouched` (both backends); `tests/test_unique_creators_command.py::test_creator_to_email_summary_names_the_order` | Passing |
-| AC-6 | 1 | `tests/test_oauth2_logout_mcp_tokens.py`: the three existing 503 tests (handler `:75`, FastAPI `:186`, Flask `:195`) extended to assert the exact header and `code` | Passing |
+| AC-6 | 1 | `tests/test_oauth2_logout_mcp_tokens.py`: the three existing 503 tests (handler `:64`, FastAPI `:189`, Flask `:202`) extended to assert the exact header and `code` | Passing |
 | AC-7 | 1 | `tests/test_db_fault_callers.py::TestActorInterfaceLookups::test_get_by_id_raises_on_a_fault`, `::test_get_by_creator_raises_on_a_fault` (through `seam_fault`) | Passing |
 | AC-8 | 1 | `tests/test_db_fault_callers.py::TestListStoreLookups::test_exists_raises_on_a_fault` | Passing |
 | AC-9 | 1 | `tests/test_operator_command_store.py::test_every_command_prints_the_store_first` (parametrised from `pyproject.toml`'s scripts, both backends, `capsys`) | Passing |
 | AC-10 | 1 | `tests/test_operator_command_store.py::test_writing_without_a_prefix_is_refused` (parametrised over every writing mode, `delenv`), `::test_an_empty_prefix_is_unset`, `::test_dry_runs_are_not_refused`, `::test_postgresql_is_not_refused` | Passing |
 | AC-11 | 2 | `tests/test_check_ready_command.py` (eight tests, probes patched, including `::test_a_missing_lookup_table_is_not_a_fault` and `::test_it_writes_nothing_and_creates_no_table`); `tests/integration/test_check_ready_command.py::test_fresh_and_populated_store` (both backends); manual, 2026-11-19: the real command with `--properties` and `--email-as-creator` on a table-less DynamoDB prefix (every gate ready at first start, exit 0, no table created), on the populated shared store (three gates refused with their fix lines, table count unchanged), on a PostgreSQL schema without migrations (attribute gate refused with `alembic upgrade head`, exit 1) and on the populated PostgreSQL schema (table count unchanged) | Passing |
 | AC-12 | 1 | `tests/test_adoption_log_line.py::test_one_line_per_adoption` (parametrised: cleaned, replaced, announced later), `::test_the_line_carries_no_address` | Passing |
-| AC-13 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_dynamodb_empty_store_starts` (real probes, `unique_creator` xdist group) | Passing |
+| AC-13 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_dynamodb_empty_store_starts` (real probes, `unique_creator` xdist group), `::test_a_trust_type_registered_before_the_start_on_a_fresh_store` (iteration 2) | Passing |
 | AC-14 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_postgresql_empty_store_starts`, `::test_postgresql_without_ddl_refuses_with_the_command`, `::test_two_first_starts_at_once_both_start`; `tests/test_unique_creator_default.py::test_a_failed_index_build_refuses` | Passing |
 | AC-15 | 2 | `tests/test_unique_creator_default.py::test_a_store_with_a_user_actor_still_refuses` | Passing |
 | AC-16 | 2 | `tests/test_startup_check_retry.py::test_a_faulting_check_is_tried_three_times`, `::test_a_check_that_recovers_lets_the_app_start`, `::test_a_not_ready_answer_is_not_retried` (sleep patched) | Passing |
@@ -379,9 +391,9 @@ Phase 3
 | AC-22 | 2 | `tests/test_db_error_after_write.py::test_a_diff_fault_after_a_property_write`, `::test_a_diff_fault_after_a_list_write`, `::test_clear_faults_before_its_write_is_plain`, `::test_a_rest_put_whose_diff_faults_answers_the_after_write_code` (renamed from the planned fold test: the folds at `properties.py` `:499`/`:886` go through `request_resync`, untouched, and have no new test), `::test_the_wire_answer_has_its_own_code_and_no_retry_after`, `::test_append_once_repeat_does_not_duplicate` | Passing |
 | AC-25 | 2 | `tests/test_property_list_span_codec.py::TestNeed` (six tests); `tests/test_property_list_newer_format.py::TestNewerItem::test_reading_raises_and_is_not_corruption`, `::test_http_answers_409_with_a_fixed_code` (the mapping and a consumer route, both list kinds); `tests/test_list_newer_format_http.py` (a REST list read through the handler: 409, red as a 500 before the handler clauses) | Passing |
 | AC-26 | 2 | `tests/test_property_list_newer_format.py::test_writes_by_handle_and_position_change_nothing`, `::test_compact_stops_before_its_first_write` | Passing |
-| AC-27 | 2 | `tests/test_property_list_newer_format.py::test_sweep_and_repair_keep_the_head_and_every_side_row` | Passing |
+| AC-27 | 2 | `tests/test_property_list_newer_format.py::TestNewerItem::test_sweep_and_repair_keep_the_head_and_every_side_row`; `tests/test_verify_property_lists.py:44` (repair and the `NEWER FORMAT` line) | Passing |
 | AC-28 | 2 | `tests/test_property_list_newer_format.py::test_unrecognised_side_row_names_survive_sweep_clear_and_delete`, `::TestNewerItem::test_the_whole_list_can_be_deleted`, `::TestNewerItem::test_clear_leaves_unrecognised_side_rows` (both list kinds) | Passing |
-| AC-29 | 2 | `tests/test_list_item_limits.py::test_default_ceiling_is_2_mib_with_a_row_cap` (replaces `:95`); `tests/test_actingweb_app.py` `:755`, `:784` updated | Passing |
+| AC-29 | 2 | `tests/test_list_item_limits.py::test_default_ceiling_is_2_mib_with_a_row_cap` (replaces `:95`); `tests/test_actingweb_app.py` `:781`, `:784` updated | Passing |
 | AC-30 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_challenged_when_required`, `::test_an_authenticated_initialize_passes`, `::test_a_token_store_fault_is_503` (each over `post` and `post_async`) | Passing |
 | AC-31 | 1 | `tests/test_mcp_auth_challenge.py::test_initialize_is_open_by_default` (both handlers) | Passing |
 | AC-32 | 1 | `tests/integration/test_oauth2_flows.py::test_openid_configuration_serves_the_server_document` (FastAPI); `tests/test_flask_well_known.py::test_openid_configuration` (parametrised: Flask and FastAPI) | Passing |
@@ -389,7 +401,7 @@ Phase 3
 | AC-34 | 1 | `tests/test_mcp_client_info_cache.py::test_a_second_name_does_not_replace_the_first`, `::test_repeated_requests_from_the_second_client_write_nothing`, `::test_the_placeholder_is_not_a_first_name`, `::test_an_unauthenticated_seed_is_not_a_first_name` | Passing |
 | AC-35 | 1 | `tests/test_spa_session_retrieve.py`: `env` parametrised over FastAPI and Flask, the seven existing tests run on both | Passing |
 | AC-36 | 1 | `tests/test_oauth2_public_clients.py::test_discovery_does_not_offer_client_credentials`, `::test_an_owner_created_client_still_uses_the_grant` | Passing |
-| AC-37 | 1 | `tests/test_oauth2_pkce_binding.py::test_a_confidential_client_without_a_challenge_gets_400`; `tests/integration/test_oauth2_flows.py:310` updated | Passing |
+| AC-37 | 1 | `tests/test_oauth2_pkce_binding.py::test_a_confidential_client_without_a_challenge_gets_400`; `tests/integration/test_oauth2_flows.py:328` updated | Passing |
 | AC-38 | 1 | `tests/test_oauth2_pkce_binding.py::test_the_opt_out_restores_the_confidential_exception`, `::test_the_opt_out_keeps_binding_a_challenge_that_is_sent`, `::test_the_opt_out_accepts_a_public_clients_code_without_a_challenge` | Passing |
 | AC-39 | 3 | the Full tier's docs build; manual: read each guide item against Phase 3's list, and the sweep greps of Phase 3's Verification return only intended hits (prose has no assertion) | Passing (docs build `-W` clean; the stale-phrase grep reviewed hit by hit, 2026-11-19) |
 | AC-40 | 1 | manual: `scripts/live_pair.py --same-store` with the marking run (two library versions in one run are outside the suite) | Passing (manual, 2026-11-19: see the Phase 1 notes) |
@@ -399,7 +411,7 @@ Phase 3
 | AC-44 | 2 | `tests/test_attribute_list_store.py::test_list_all_raises_on_a_fault` | Passing |
 | AC-45 | 2 | `tests/test_verify_property_lists.py::test_side_rows_of_a_list_without_meta_are_reported_not_removed` | Passing |
 | AC-46 | 2 | `tests/test_actor_peer_creation.py::test_a_closed_factory_is_warned`, `::test_a_refused_trust_approval_is_recorded` (the trust `PUT`, added in Phase 3) | Passing |
-| AC-47 | 2 | `tests/test_factory_open_switch.py::test_the_default_page_hides_the_form_when_closed` (both integrations) | Passing |
+| AC-47 | 2 | `tests/test_factory_open_switch.py::TestClosedByDefaultWithAProvider::test_with_a_provider_the_default_page_signs_in`, `::test_without_a_provider_a_closed_factory_offers_no_form` (both integrations; iteration 1) | Passing |
 | AC-48 | 2 | `tests/test_unique_creator_default.py::test_the_default_prefix_does_not_self_enable` | Passing |
 | AC-49 | 1 | `tests/test_oauth2_pkce_binding.py::test_the_callback_refuses_a_state_without_a_challenge`, `::test_the_exchange_refuses_a_code_without_a_challenge`, `::test_a_directly_created_code_follows_the_rule` | Passing |
 | AC-50 | 2 | `tests/integration/test_unique_creator_empty_store.py::test_an_actor_created_during_the_enable_is_recorded` | Passing |
@@ -407,6 +419,7 @@ Phase 3
 | AC-53 | 1 | `tests/test_property_lookup_command.py::TestBackfill::test_the_summary_counts_what_it_read` (both backends) | Passing |
 | AC-54 | 1 | `tests/test_property_lookup_command.py::TestBackfill::test_a_collision_names_the_actors_and_the_ways_out` (both backends) | Passing |
 | AC-52 | 1 | `tests/test_oauth2_pkce_binding.py::test_a_form_post_without_a_challenge_warns_about_the_form`, `::test_the_default_form_carries_the_challenge_back` | Passing |
+| AC-55 | 1 | `tests/test_mark_actors_vouched.py::TestApplyFlag` (three tests); `tests/test_operator_command_store.py` (`READ_ONLY`/`WRITING` updated) | Passing |
 
 ## Spec Delta
 
@@ -416,6 +429,7 @@ Phase 3
 - **ADDED** (Common) — When a command would write on DynamoDB with `AWS_DB_PREFIX` unset or empty, it refuses with exit status 2. (AC-10)
 - **ADDED** (Reverse lookup) — When `report` is given `--properties`, its verdict and fix line are about those names and it says where the set came from. (AC-1)
 - **ADDED** (Vouching) — When the marking runs, system actors are never marked; a dry run shows the marker and, on request, the addresses; `--ids-file` limits it. (AC-2, AC-3, AC-4)
+- **ADDED** (Vouching) — When the marking runs without `--apply`, it writes nothing, like every other writing command. (AC-55; iteration 7)
 - **ADDED** (Email as creator) — When the sweep passes an unvouched actor, it counts it and says the marking comes first. (AC-5)
 - **ADDED** (Readiness) — When `actingweb-check-ready` runs, it reports each gate in one of three states with its fix line, writes nothing, and exits 0, 1 or 2. (AC-11)
 - ~~**ADDED** (List verification) — When side rows are named for a list with no meta row, they are reported and kept. (AC-45)~~
@@ -430,12 +444,14 @@ Phase 3
 
 - **ADDED** (Creator uniqueness) — When the store has no user actors, the application enables enforcement itself (on DynamoDB only with an explicit prefix); with user actors and no enforcement it refuses. (AC-13, AC-14, AC-15, AC-48, AC-50)
 - **ADDED** (Faults) — When a check faults, it is tried three times; a refusal for a fault has `unavailable` true. (AC-16, AC-17)
+- **ADDED** (Creator uniqueness) — When one of the library's system actors (its fixed id with its own creator) is created on first use before an empty store is enabled (a trust type registered at import), it is written without a creator record (DynamoDB) or before the unique index exists (PostgreSQL), and the enable covers it; any other actor with a system creator is refused as before. (AC-13; iterations 2, 15)
 - **DECISION** — A start is still refused when the store does not answer after the retries; `unavailable` is not permission to serve.
 - **DECISION** — While an empty store enables itself, no older process may create actors in it; the second scan catches one that does. A start on a store that already enforces has no such rule.
 
 ### `thoughts/specs/actor-creation.md` (new spec, partial)
 
-- **ADDED** (Factory) — When a provider builder was called and the application did not call `with_open_factory`, `POST /` answers 403 and the default page offers no form; otherwise it creates an actor. (AC-18, AC-19, AC-47)
+- ~~**ADDED** (Factory) — When a provider builder was called and the application did not call `with_open_factory`, `POST /` answers 403 and the default page offers no form; otherwise it creates an actor. (AC-18, AC-19, AC-47)~~
+- **ADDED** (Factory) — When a provider builder was called and the application did not call `with_open_factory`, `POST /` answers 403; otherwise it creates an actor. The default sign-in page offers the email form whenever a provider is configured (the form signs in) or the factory is open. (AC-18, AC-19, AC-47; iteration 1)
 - **ADDED** (Factory) — When a peer's factory refuses a trustee creation, the caller logs a WARNING. (AC-46)
 - **ADDED** (Vouching) — When `is_vouched()` is called, it answers for the actor's current creator and raises when the marker could not be read. (AC-20)
 - **ADDED** (Adoption) — When a sign-in cleans or replaces an actor, one `ACTOR_ADOPTED:` line records it. (AC-12)
@@ -447,7 +463,7 @@ Phase 3
 - **ADDED** (Faults) — When the store faults under `exists()`, `list_all()` or `list_all_with_rows()`, on either store, `DbError` is raised. (AC-8, AC-21, AC-44)
 - **ADDED** (Faults) — When a write is stored and a later step faults, the exception is `DbErrorAfterWrite`: the value is stored, its diff is not registered. (AC-22)
 - ~~**ADDED** (Stored format) — When an envelope's `need`, or a list's `format`, names something the process does not implement, the item or list cannot be read, written or repaired by it, and nothing of it is removed except by deleting the whole list. (AC-25, AC-26, AC-27, AC-43)~~
-- **ADDED** (Stored format) — When an envelope's `need` names something the process does not implement, the item cannot be read, written, moved or repaired by it (`ListItemNewerFormatError`, 409 over HTTP), and nothing of it is removed except by deleting the whole list. When a list's meta `format` is not 1 or 2, the list is refused by every operation, `delete()` and `clear()` included. (AC-25, AC-26, AC-27, AC-43)
+- **ADDED** (Stored format) — When an envelope's `need` names something the process does not implement, the item cannot be read, written, moved or repaired by it (`ListItemNewerFormatError`, 409 over HTTP), and nothing of it is removed except by deleting or clearing the whole list. When a list's meta `format` is not 1 or 2, the list is refused by every operation, `delete()` and `clear()` included; an unparsable meta row is damage, not a newer layout, and does not stop an attribute list's `delete()`. (AC-25, AC-26, AC-27, AC-43; iterations 9, 10)
 - **ADDED** (Stored format) — When a list is swept, cleared or deleted, side rows with an unrecognised name are left. (AC-28)
 - **ADDED** (Limits) — When no ceiling is configured on a backend with a row cap, the ceiling is 2 MiB. (AC-29)
 - **DECISION** — Every stored shape 4.0.0rc1 writes is read by 4.0.0 final without an operator step.
@@ -916,6 +932,12 @@ docs `-W` clean)
 - Red before green was not kept for the storage guard, the start-up
   integration tests and `check-ready` (Phase 2 notes).
 - The consumer's suite against this tree was not run here.
+- [Updated 2026-11-20] After the first verification (iterations 1-13):
+  AC-47 restated (with a provider the default page's email form signs in,
+  so it stays); `actingweb-mark-actors-vouched` writes only with `--apply`
+  (AC-55); a system actor is written before an empty DynamoDB store is
+  enabled; `check-ready` reads only a missing table as empty and applies
+  the start's own lookup test.
 
 ### Learnings
 - A test fixture with real probes on a shared store reaches any new

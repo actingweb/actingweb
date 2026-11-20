@@ -804,8 +804,9 @@ class ListAttribute(ListCore):
         if not self._db:
             raise RuntimeError("No database connection available")
         self._invalidate_cache()
-        # A layout a later version wrote is refused before anything goes.
-        self._read_meta_row()
+        # A layout a later version wrote is refused before anything goes;
+        # a damaged meta row is not (any stored list can be deleted).
+        self._refuse_newer_layout_only()
         self._foreign_rows(sweep=True)
         self._v2_delete()
         self._layout = None

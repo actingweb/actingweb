@@ -393,6 +393,22 @@ def test_an_unauthenticated_seed_is_not_a_first_name() -> None:
             "params": {"clientInfo": {"name": "seeded", "version": "1"}},
         }
     )
+    # The authenticated initialize arrives on the SAME session the seed
+    # cached under; its own clientInfo is the first name, not the seed's.
     actor = _actor()
-    _update(_Trust(None), {"name": "claude-ai", "version": "1"}, actor)
+    authed = MCPHandler(make_mcp_webobj(session), make_mcp_config(), hooks=None)
+    authed.authenticate_and_get_actor_cached = lambda: actor  # type: ignore[method-assign]
+    with patch("actingweb.handlers.mcp.RuntimeContext") as rc:
+        ctx = Mock()
+        ctx.peer_id = "peer-1"
+        ctx.trust_relationship = _Trust(None)
+        rc.return_value.get_mcp_context.return_value = ctx
+        authed.post(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"clientInfo": {"name": "claude-ai", "version": "1"}},
+            }
+        )
     assert _written_names(actor) == ["claude-ai"]

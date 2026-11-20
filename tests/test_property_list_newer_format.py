@@ -228,3 +228,33 @@ def test_http_answers_409_with_a_fixed_code() -> None:
     assert resp.status_code == 409
     assert resp.json()["code"] == "list_item_newer_format"
     assert "secret-list-name" not in resp.text
+
+
+def test_each_newer_case_names_its_own_remedy() -> None:
+    """Iteration 8 (verification issue 7): a newer item points at delete();
+    a newer layout, which delete() refuses too, does not."""
+    item = ListItemNewerFormatError("notes", "0001")
+    layout = ListItemNewerFormatError("notes", detail="list format 3")
+    assert "delete()" in item.remedy and "upgrade" in item.remedy
+    assert "delete()" not in layout.remedy and "upgrade" in layout.remedy
+    assert layout.remedy in str(layout)
+
+
+def test_a_list_with_a_damaged_meta_row_can_still_be_deleted(
+    config: Config, store: dict[Any, Any], request: pytest.FixtureRequest
+) -> None:
+    """Iteration 9 (verification issue 6): only a newer layout refuses
+    delete(); an unparsable meta row is damage, and an attribute list's
+    delete() still removes the list whole, as it did before the format
+    check. (A property list's delete() dispatches on its meta row and
+    refused a damaged one before 4.0 too.)"""
+    if request.node.callspec.params["list_class"] == "property":
+        pytest.skip("a property list refused a damaged meta row before 4.0")
+    lst = _lst(config)
+    lst.append("a")
+    lst.append("b")
+    store[(ACTOR, f"list:{NAME}-meta")] = "{truncated"
+    _lst(config).delete()
+    assert not [
+        key for key in store if key[0] == ACTOR and key[1].startswith(f"list:{NAME}")
+    ], sorted(store)

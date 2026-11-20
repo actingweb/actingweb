@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-18 by thoughts/plans/2026-11-17-3-16-pre-rc1-fixes.iterations.md (entry 3)
+**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
 **ID prefix:** WUI
 
 ## Summary
@@ -28,6 +28,18 @@ the FastAPI integration. This partial spec covers only signing in to it.
 - **WUI-3** — When no provider is configured, a web UI request for an actor
   that does not exist is answered 404, on both integrations. [plan+test]
   `tests/test_email_verification_legacy_route.py::TestLegacyRouteNoLongerRegistered` (plans/2026-11-17-3-16-pre-rc1-fixes.md, AC-23)
+
+## SPA sign-in
+
+- **WUI-4** — When a browser requests `GET /oauth/spa/session/<id>`, both
+  integrations serve the pending session. [plan+test]
+  `tests/test_spa_session_retrieve.py` (both integrations) (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-35)
+
+## Logout
+
+- **WUI-5** — When `/oauth/logout` answers 503 for a fault, it carries
+  `X-ActingWeb-Error` and `code`. [plan+test]
+  `tests/test_oauth2_logout_mcp_tokens.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-6)
 
 ## Decisions in force
 

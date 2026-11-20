@@ -21,9 +21,9 @@ application serves its first sign-in, with the SAME environment as the
 application (``DATABASE_BACKEND``, the database settings, ``AWS_DB_PREFIX``,
 credentials)::
 
-    actingweb-mark-actors-vouched --dry-run
-    actingweb-mark-actors-vouched --marker operator
-    actingweb-mark-actors-vouched --creator alice@example.com
+    actingweb-mark-actors-vouched
+    actingweb-mark-actors-vouched --marker operator --apply
+    actingweb-mark-actors-vouched --creator alice@example.com --apply
 
 Rules:
 - Actors with a marker are never touched, except ``"factory"`` ones with
@@ -41,9 +41,11 @@ Rules:
   in sorted order, and a progress line every 100 actors (and the closing
   line) gives the value. After errors, re-run without it: the errored actors
   sort before that id.
-- ``--dry-run`` reports what would be written without writing: one line
-  per actor on stdout with its current marker; ``--show-addresses`` adds
-  its creator and stored email.
+- Without ``--apply`` the run is a dry run (as for every other writing
+  command; ``--dry-run`` says so explicitly): it reports what would be
+  written, one line per actor on stdout with its current marker;
+  ``--show-addresses`` adds its creator and stored email. ``--apply``
+  writes.
 - ``--email-as-creator``, for an application running
   ``with_email_as_creator``: an actor whose creator is an address and whose
   stored email is another address first gets the creator as its stored
@@ -65,7 +67,7 @@ an eventual scan; ``--rate-limit`` caps it in read capacity units per second
 (ignored on PostgreSQL).
 
 Output: one summary line, ``scanned`` (actors considered), ``marked``
-(written, or would be with ``--dry-run``), ``skipped`` (already carry a
+(written with ``--apply``, or would be on a dry run), ``skipped`` (already carry a
 marker), ``pending`` (marked, but still waiting for email verification),
 ``email_reset`` and ``email_differs`` (see ``--email-as-creator``),
 ``system`` (library actors, never marked), ``missing`` (listed in
@@ -342,10 +344,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--show-addresses",
         action="store_true",
-        help="with --dry-run, also print each actor's creator and stored email",
+        help="on a dry run, also print each actor's creator and stored email",
     )
     parser.add_argument("--start-after", default=None)
-    parser.add_argument("--dry-run", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the markers (without it the run is a dry run, as for "
+        "every other writing command)",
+    )
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would be written (the default; kept for scripts)",
+    )
     parser.add_argument(
         "--email-as-creator",
         action="store_true",
@@ -372,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
                 ids = [line.strip() for line in f if line.strip()]
         except OSError as e:
             parser.error(f"--ids-file could not be read: {e}")
-    refused = preflight("actingweb-mark-actors-vouched", writing=not args.dry_run)
+    dry_run = not args.apply
+    refused = preflight("actingweb-mark-actors-vouched", writing=not dry_run)
     if refused is not None:
         return refused
 
@@ -386,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
             include_factory=args.include_factory,
             creator=args.creator,
             start_after=args.start_after,
-            dry_run=args.dry_run,
+            dry_run=dry_run,
             rate_limit=args.rate_limit,
             email_as_creator=args.email_as_creator,
             ids=ids,
@@ -403,6 +417,7 @@ def main(argv: list[str] | None = None) -> int:
         f"email_reset={counts['email_reset']} "
         f"email_differs={counts['email_differs']} system={counts['system']} "
         f"missing={counts['missing']} errors={counts['errors']}"
+        + (" (dry run: nothing written; re-run with --apply)" if dry_run else "")
     )
     return 1 if counts["errors"] else 0
 

@@ -5,9 +5,10 @@ Run with the application's environment before a deploy. Each gate
 ``ActingWebApp.check_ready()`` applies is reported in one of three states:
 
 - ``ready``;
-- ``ready at first start``: the store holds no user actors, and the first
-  start makes it ready itself (creator uniqueness enables itself, reverse
-  lookup and the email marker mark themselves);
+- ``ready at first start``: the first start makes it ready itself:
+  creator uniqueness enables itself and the email marker is written when
+  the store holds no user actors; reverse lookup marks its names when no
+  actor has a property row (the test the start itself applies);
 - ``REFUSED``, with the fix line.
 
 The command reads only: it writes nothing, creates no table and never
@@ -43,18 +44,43 @@ FIRST_START = "ready at first start"
 # -- the probes (read-only; patched by the tests) ------------------------------
 
 
+def _missing_table(exc: BaseException) -> bool:
+    """Whether an exception says a table does not exist: the one answer a
+    probe reads as "empty" or "nothing marked". A denied permission, bad
+    credentials or any other fault is not one: the gate is unreadable."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        if "lookup table missing" in str(current):
+            return True
+        code = getattr(current, "cause_response_code", None)
+        response = getattr(current, "response", None)
+        if code is None and isinstance(response, dict):
+            code = (response.get("Error") or {}).get("Code")
+        if code == "ResourceNotFoundException" or type(current).__name__ in (
+            "TableDoesNotExist",
+        ):
+            return True
+        if any(
+            k.__name__ == "UndefinedTable" and k.__module__.startswith("psycopg")
+            for k in type(current).__mro__
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _lookup_attention(database: str, names: list[str]) -> list[str]:
     """The names that are not ready. A missing lookup (or marker) table is
     an answer, not a fault: no name is marked yet (the first start, or the
     backfill, creates it)."""
-    from actingweb.db.exceptions import DbError
-    from actingweb.interface.app import _store_answered
     from actingweb.maintenance.property_lookup import read_readiness
 
     try:
         return list(read_readiness(database, names).attention)
-    except DbError as e:
-        if "lookup table missing" in str(e) or _store_answered(e):
+    except Exception as e:  # folds DbError: a missing table is an answer
+        if _missing_table(e):
             return list(names)
         raise
 
@@ -67,13 +93,25 @@ def _uniqueness_missing(config: Any) -> str | None:
 
 def _store_empty(config: Any) -> bool:
     """No user actor (a missing actor table reads as empty: a fresh store)."""
-    from actingweb.interface.app import _store_answered
     from actingweb.maintenance.unique_creators import no_actors
 
     try:
         return no_actors(config, strict=True)
     except Exception as e:  # folds DbError: a missing table is an answer
-        if _store_answered(e):
+        if _missing_table(e):
+            return True
+        raise
+
+
+def _properties_empty(database: str) -> bool:
+    """No actor's row in the properties table: what the start tests before
+    it marks the indexed names itself (a missing table reads as empty)."""
+    from actingweb.maintenance.property_lookup import properties_table_empty
+
+    try:
+        return properties_table_empty(database)
+    except Exception as e:  # folds DbError: a missing table is an answer
+        if _missing_table(e):
             return True
         raise
 
@@ -90,7 +128,6 @@ def _email_marker(config: Any) -> dict[str, Any] | None:
     """The email-as-creator marker, read without constructing the backend
     (on DynamoDB its constructor creates a missing table)."""
     from actingweb.constants import READINESS_BUCKET, READINESS_STORE
-    from actingweb.interface.app import _store_answered
     from actingweb.maintenance.email_as_creator import MARKER_NAME
 
     try:
@@ -107,7 +144,7 @@ def _email_marker(config: Any) -> dict[str, Any] | None:
                 READINESS_STORE, READINESS_BUCKET, MARKER_NAME
             )
     except Exception as e:  # folds DbError: a missing table is no marker
-        if _store_answered(e):
+        if _missing_table(e):
             return None
         raise
     data = row.get("data") if isinstance(row, dict) else None
@@ -176,8 +213,10 @@ def run(args: argparse.Namespace) -> int:
         attention = _lookup_attention(database, names)
         if not attention:
             return READY, ""
-        if store_empty():
-            return FIRST_START, "(empty store: the first start marks every name)"
+        if _properties_empty(database):
+            return FIRST_START, (
+                "(no actor has properties: the first start marks every name)"
+            )
         return "REFUSED", (
             f"{', '.join(attention)} not backfilled. Run 'actingweb-property-lookup "
             f"backfill --apply --properties {','.join(names)}'"

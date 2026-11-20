@@ -251,9 +251,10 @@ class ListItemNewerFormatError(Exception):
 
     Not a ``ListCorruptionError``: nothing is wrong with the stored data, and
     no repair may remove or rewrite it. This version reads, writes, compacts
-    and sweeps none of it; deleting the whole list is the one escape. Over
-    HTTP it answers 409 with the fixed code ``list_item_newer_format`` and no
-    detail. ``remedy`` names what to do.
+    and sweeps none of it. For a newer item, deleting or clearing the list is
+    the escape; a newer list layout is refused by every operation, ``delete()``
+    and ``clear()`` included. Over HTTP it answers 409 with the fixed code
+    ``list_item_newer_format`` and no detail. ``remedy`` names what to do.
     """
 
     remedy = (
@@ -266,6 +267,12 @@ class ListItemNewerFormatError(Exception):
     ) -> None:
         self.list_name = list_name
         self.rank = rank
+        if rank is None and detail.startswith("list format"):
+            # The layout itself is newer: delete() refuses it too.
+            self.remedy = (
+                "upgrade the library to the version that wrote it; this "
+                "version neither repairs nor deletes the list"
+            )
         where = f" item at rank {rank!r}" if rank is not None else ""
         super().__init__(
             f"List '{list_name}'{where} was stored by a later library version"
@@ -1476,6 +1483,15 @@ class ListCore:
         self._refuse_newer_format(parsed_meta)
         self._meta_cache = parsed_meta
         return self._meta_cache
+
+    def _refuse_newer_layout_only(self) -> None:
+        """Raise ``ListItemNewerFormatError`` for a newer list layout; let
+        an unparsable or non-object meta row pass (``delete()`` removes a
+        damaged list whole)."""
+        try:
+            self._read_meta_row()
+        except ValueError:
+            pass
 
     def _refuse_newer_format(self, meta: dict[str, Any]) -> None:
         """A list layout a later version wrote: a meta ``format`` other than
@@ -3204,8 +3220,10 @@ class ListCore:
         # otherwise, invisible to exists()/list_all() (which key off the
         # meta row) right up until a new list is created under this name
         # and reads it as its own items. A layout a later version wrote is
-        # refused first (4.0 stored-format rule).
-        self._read_meta_row()
+        # refused first (4.0 stored-format rule). An unparsable meta row
+        # passes this check; an attribute list then deletes the list whole,
+        # while this layout dispatch (_require_v2) still refuses it.
+        self._refuse_newer_layout_only()
         self._foreign_rows(sweep=True)
 
         self._require_v2()

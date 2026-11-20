@@ -301,3 +301,53 @@ class TestScopeAndDetail:
                 ]
             )
         assert exc.value.code == 2
+
+
+class TestApplyFlag:
+    """Iteration 7 (verification issue 18): like every other writing
+    command, the marking writes only with ``--apply``; without it the run
+    is a dry run. ``--dry-run`` is still accepted."""
+
+    def _run(self, monkeypatch: Any, argv: list[str]) -> dict[str, Any]:
+        monkeypatch.setenv("DATABASE_BACKEND", "dynamodb")
+        monkeypatch.setenv("AWS_DB_PREFIX", "markapply")
+        seen: dict[str, Any] = {}
+
+        def mark_actors(config: Any, **kwargs: Any) -> dict[str, int]:
+            from collections import defaultdict
+
+            seen.update(kwargs)
+            return defaultdict(int)
+
+        monkeypatch.setattr(script, "mark_actors", mark_actors)
+        seen["status"] = script.main(argv)
+        return seen
+
+    def test_without_apply_nothing_is_written(self, monkeypatch: Any) -> None:
+        assert self._run(monkeypatch, [])["dry_run"] is True
+        assert self._run(monkeypatch, ["--dry-run"])["dry_run"] is True
+
+    def test_apply_writes(self, monkeypatch: Any) -> None:
+        assert self._run(monkeypatch, ["--apply"])["dry_run"] is False
+
+    def test_apply_and_dry_run_together_are_refused(self, monkeypatch: Any) -> None:
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, ["--apply", "--dry-run"])
+        assert exc.value.code == 2
+
+
+def test_a_dry_run_says_so_in_its_summary(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Iteration 16 (second verification, issue 3): the summary of a run
+    without ``--apply`` says nothing was written and how to write."""
+    import logging
+
+    run = TestApplyFlag()
+    with caplog.at_level(logging.INFO):
+        run._run(monkeypatch, [])  # pyright: ignore[reportPrivateUsage]
+    assert "dry run: nothing written; re-run with --apply" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        run._run(monkeypatch, ["--apply"])  # pyright: ignore[reportPrivateUsage]
+    assert "dry run" not in caplog.text

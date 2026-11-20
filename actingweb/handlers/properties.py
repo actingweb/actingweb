@@ -1484,10 +1484,13 @@ class PropertiesHandler(_PropertyHandlerBase):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    pair[list_name] = {
-                        "_list": True,
-                        "count": len(list_prop),
-                    }
+                    try:
+                        count = len(list_prop)
+                    except ListItemNewerFormatError:
+                        # A layout a later version wrote: this list only.
+                        pair[list_name] = {"_list": True, **NEWER_FORMAT_MARKER}
+                        continue
+                    pair[list_name] = {"_list": True, "count": count}
         except ListItemNewerFormatError as e:
             _write_list_newer_format_response(self.response, e.list_name, e)
             return

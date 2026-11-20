@@ -1786,7 +1786,7 @@ class FastAPIIntegration(BaseActingWebIntegration):
             return self.templates.TemplateResponse(
                 request,
                 "aw-root-factory.html",
-                context={"factory_open": self.aw_app.get_config().open_factory},
+                context=factory.sign_in_page_values(self.aw_app.get_config()),
             )
         else:
             # Fallback for when templates are not available
@@ -1836,8 +1836,8 @@ class FastAPIIntegration(BaseActingWebIntegration):
                         request,
                         "aw-root-factory.html",
                         context={
+                            **factory.sign_in_page_values(self.aw_app.get_config()),
                             "error": "Email is required",
-                            "factory_open": self.aw_app.get_config().open_factory,
                         },
                     )
                 else:

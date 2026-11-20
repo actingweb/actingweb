@@ -341,6 +341,9 @@ Phase 2
   button and the email form (which signs in) on both integrations, whether
   or not the factory is open; without a provider, a closed factory's page
   offers no form.
+- **AC-56** (added in iteration 22) — When an attribute write is given a
+  value `json` cannot encode, on either backend, it raises
+  `UnserialisableValue` (a `ValueError`, not a `DbError`) and writes nothing.
 - **AC-55** (added in iteration 7) — When `actingweb-mark-actors-vouched`
   runs without `--apply`, it writes nothing (a dry run, `--dry-run` still
   accepted); `--apply` writes; both together are a usage error.
@@ -420,6 +423,7 @@ Phase 3
 | AC-54 | 1 | `tests/test_property_lookup_command.py::TestBackfill::test_a_collision_names_the_actors_and_the_ways_out` (both backends) | Passing |
 | AC-52 | 1 | `tests/test_oauth2_pkce_binding.py::test_a_form_post_without_a_challenge_warns_about_the_form`, `::test_the_default_form_carries_the_challenge_back` | Passing |
 | AC-55 | 1 | `tests/test_mark_actors_vouched.py::TestApplyFlag` (three tests); `tests/test_operator_command_store.py` (`READ_ONLY`/`WRITING` updated) | Passing |
+| AC-56 | 2 | `tests/test_unserialisable_value.py::test_an_unserialisable_value_is_refused_before_the_store` (seven attribute writes; both backends in the Full tier) | Passing |
 
 ## Spec Delta
 

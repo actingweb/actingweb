@@ -107,3 +107,29 @@ class AttributeKeyCollision(DbError):
         self.bucket = bucket
         self.name = name
         self.actor_id = actor_id
+
+
+class UnserialisableValue(ValueError, TypeError):
+    """A value the store cannot encode as JSON (a ``datetime``, a ``set``, an
+    object), refused before any store call: nothing was written.
+
+    Not a ``DbError``: that answers 503 with ``Retry-After``, and a retry of
+    this write can never succeed. A ``ValueError`` (a caller's bad input),
+    and a ``TypeError`` too, which is what ``json`` raised before 4.0 caught
+    it here.
+    """
+
+    def __init__(self, what: str, cause: BaseException) -> None:
+        self.what = what
+        super().__init__(f"{what} cannot be stored: not JSON-encodable ({cause})")
+
+
+def require_json(value: object, what: str) -> None:
+    """Raise :class:`UnserialisableValue` when ``json`` cannot encode
+    ``value``; called before a write reaches the store."""
+    import json
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as e:
+        raise UnserialisableValue(what, e) from e

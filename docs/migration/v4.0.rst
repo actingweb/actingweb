@@ -3538,7 +3538,10 @@ order of the UTF-8 name), ``create_attr_if_not_exists`` and
 ``set_attr_if_data_equals`` and ``delete_attr_if_data_equals`` (compare the
 stored data exactly), ``delete_attrs`` and ``put_attr``. Every attribute
 write, ``set_attr`` included, is conditioned on its bucket: a write to a key
-another bucket holds raises ``AttributeKeyCollision``. The list format itself
+another bucket holds raises ``AttributeKeyCollision``, and a value ``json``
+cannot encode raises ``UnserialisableValue`` before the store is called
+(``require_json`` in ``actingweb.db.exceptions`` does the check; a custom
+backend calls it too). The list format itself
 is ``actingweb.list_core.ListCore`` over a ``ListStorage``; a backend does not
 implement ``ListStorage``, the library adapts these methods to it.
 

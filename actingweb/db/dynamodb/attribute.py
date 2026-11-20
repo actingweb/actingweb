@@ -16,7 +16,7 @@ from pynamodb.exceptions import DeleteError, DoesNotExist, PutError, UpdateError
 from pynamodb.models import Model
 
 from actingweb.db.dynamodb._ensure import ensure_table
-from actingweb.db.exceptions import AttributeKeyCollision, DbError
+from actingweb.db.exceptions import AttributeKeyCollision, DbError, require_json
 
 # ``delete_by_chain`` scans whole token buckets; past this many rows in one
 # bucket it logs a WARNING that the scan is outgrowing its budget (see the
@@ -242,6 +242,7 @@ class DbAttribute:
         A falsy ``data`` deletes the row: True when it is gone after the call
         (an absent row counts). A fault raises ``DbError``.
         """
+        require_json(data, "attribute data")
         if not actor_id or not name or not bucket:
             return False
         if not data:
@@ -366,6 +367,7 @@ class DbAttribute:
         Returns:
             True if update succeeded (current matched old_data), False otherwise
         """
+        require_json(new_data, "attribute data")
         if not actor_id or not bucket or not name:
             return False
 
@@ -436,6 +438,7 @@ class DbAttribute:
         is followed by one consistent read: JSON-equal stored data means the
         row is this call's own (an SDK retry of a write that landed).
         """
+        require_json(data, "attribute data")
         if not actor_id or not bucket or not name:
             raise ValueError("create_attr_if_absent needs actor_id, bucket and name")
 
@@ -600,6 +603,7 @@ class DbAttribute:
     ) -> bool:
         """Create the row; True only when this call created it. False when
         the bucket already holds the name (whatever its data or TTL)."""
+        require_json(data, "attribute data")
         item = Attribute(
             id=actor_id,
             bucket_name=bucket + ":" + name,
@@ -630,6 +634,7 @@ class DbAttribute:
         """``create_attr_if_not_exists`` for each row: the names this call
         created. One conditional put per row (DynamoDB has no conditional
         batch write)."""
+        require_json(rows, "attribute data")
         return {
             name
             for name, data in rows.items()
@@ -642,6 +647,7 @@ class DbAttribute:
     ) -> bool:
         """Replace the row's data when it equals ``expected`` exactly; False
         when it differs, the row is absent, or another bucket owns it."""
+        require_json(data, "attribute data")
         item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
         try:
             item.update(
@@ -702,6 +708,7 @@ class DbAttribute:
     def put_attr(actor_id: str, bucket: str, name: str, data: Any) -> None:
         """Write the row unconditionally within the bucket. A falsy ``data``
         is refused (``ValueError``), never turned into a delete."""
+        require_json(data, "attribute data")
         if not data:
             raise ValueError("put_attr does not store falsy data")
         item = Attribute(

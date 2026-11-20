@@ -2607,6 +2607,18 @@ ADDED
   no ``Retry-After``. A plain ``DbError`` still means nothing was written,
   or that the caller cannot tell.
 
+- **An attribute value ``json`` cannot encode is refused as
+  ``UnserialisableValue``.** A ``datetime``, a ``set`` or an object in an
+  attribute write used to fail inside the store call and was reported as
+  ``DbError("attribute set")``, which answers 503 with ``Retry-After``: a
+  client retrying on 503 retried a write that can never succeed. Every
+  attribute write (``set_attr``, the conditional and create-if-absent writes,
+  ``put_attr``) now checks the value first, on both backends, and raises
+  ``actingweb.db.exceptions.UnserialisableValue``, a ``ValueError`` (and a
+  ``TypeError``, what ``json`` raised before); nothing is written. **Behavior
+  change:** code that caught ``DbError`` for this case catches
+  ``ValueError`` instead; over HTTP it is an application error, not a 503.
+
 - **A stored-format rule for later 4.x versions, and
   ``ListItemNewerFormatError``.** A list item's envelope may carry
   ``need`` (the features a later version stored it with) and a list's meta

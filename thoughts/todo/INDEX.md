@@ -44,7 +44,6 @@ owner-chosen approach and a proposed plan (2026-11-06).
 | Item | Impact of doing it | Why now |
 | --- | --- | --- |
 | [A bounded read of a v2 list](bounded-list-read.md) | A tail or page of a long list costs its own rows, not the whole list's range | First after 4.0.0rc1 (owner, 2026-11-19); a consumer's comments feature needs it. Open: a PostgreSQL index revision, the cursor contract across requests, four wrapper layers |
-| [A value `json` cannot encode reads as a store fault](unserialisable-value-reads-as-a-store-fault.md) | A client that retries on 503 stops retrying a write that can never succeed (it gets a 400) | Verified 2026-11-19 on both backends from a consumer's report; small |
 | [`delete_attr_if_data_equals` on a dict value](attribute-conditional-delete-on-dict-values.md) | A conditional delete of a dict attribute matches whatever the key order | A consumer's comments feature; unverified, a test first |
 | [List items: an append that creates nothing, a TTL, retained generations](list-items-conditional-create-ttl-and-retained-bodies.md) | Comments and versioning on lists without application workarounds | Additive; each needs a design (creation path, body-row expiry, a locating field) |
 | [Vouching and adoption follow-ups](marking-and-adoption-followups.md) | Unmarked actors with no sign-in left alone, peers told of a clean, the bridge's vouch bound to its address | Left by the 2026-11-19 plan; each needs a definition or a protocol answer first |

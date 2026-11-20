@@ -20,6 +20,11 @@ faults, the stored-format rule and the item ceiling.
   is `DbErrorAfterWrite` (503 `stored_not_notified`, no `Retry-After`): the
   value is stored, its diff is not registered. [plan+test] `tests/test_db_error_after_write.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-22)
 
+- **PLS-6** — When an attribute write is given a value `json` cannot
+  encode, it raises `UnserialisableValue` (a `ValueError`, not a `DbError`)
+  before the store is called, and nothing is written. [plan+test]
+  `tests/test_unserialisable_value.py` (plans/2026-11-19-emm-4-0-adoption-findings.iterations.md, entry 22; AC-56)
+
 ## Stored format
 
 - **PLS-3** — When an envelope's `need` names something the process does not

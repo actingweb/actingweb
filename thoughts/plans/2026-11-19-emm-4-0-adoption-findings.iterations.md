@@ -37,3 +37,7 @@ Accepted without code (Low): issue 8 (FastAPI with the web UI off already served
 21. **[UX refinement] The known-issue note names the second way out** — accepting the collision with `mark-complete --force` (`docs/migration/v4.0.rst`). Why: third verification issue 4 (Low). AC: none. Spec: none.
 
 Accepted without code (Low, owner 2026-11-20): third verification issues 2 (a system actor saved after the late pass is unrecorded; `report` lists it) and 3 (the email form checks the default provider's `is_enabled()`, not its URL build).
+
+## 2026-11-20, after the PR opened (#184; owner: take the unserialisable-value todo into 4.0)
+
+22. **[New functionality] An attribute value `json` cannot encode is refused as `UnserialisableValue`** — every attribute write on both backends calls `require_json` first and raises `UnserialisableValue` (a `ValueError` and a `TypeError`, not a `DbError`), writing nothing; before, the encode failed inside the store call and read as `DbError` (503, `Retry-After`) (`actingweb/db/exceptions.py`, `actingweb/db/dynamodb/attribute.py`, `actingweb/db/postgresql/attribute.py`, `tests/test_unserialisable_value.py`, `CHANGELOG.rst`, `docs/migration/v4.0.rst`; the todo and its `INDEX.md` row deleted). Properties and list items were checked and do not raise on such a value. Why: the consumer's report (2026-11-19, verified then): a client that retries on 503 retried forever. AC: AC-56 added. Spec: property-lists updated (PLS-6).

@@ -216,10 +216,12 @@ def _newest_migration_guide() -> Path:
 
 
 def _first_changelog_section_with_entries() -> str:
-    """The newest changelog section that has entries, padded with blank lines
-    so that its line numbers are the file's: the
-    ``Unreleased`` section while a release is being written, the release's
-    own section once the bump has emptied ``Unreleased``."""
+    """The changelog's newest release notes, padded with blank lines so that
+    line numbers are the file's: ``Unreleased`` and the newest versioned
+    section (whichever have entries), up to and including that versioned
+    section. While a release is being written its entries are in
+    ``Unreleased``; once released, a first fix under ``Unreleased`` does not
+    hide the release's own section."""
     lines = (REPO_ROOT / "CHANGELOG.rst").read_text(encoding="utf-8").splitlines()
     starts = [
         i - 1
@@ -227,9 +229,11 @@ def _first_changelog_section_with_entries() -> str:
         if i and re.fullmatch(r"-{3,}", line) and lines[i - 1].strip()
     ]
     for start, end in zip(starts, [*starts[1:], len(lines)], strict=True):
-        section = lines[start:end]
+        if lines[start].strip() == "Unreleased":
+            continue
+        section = lines[starts[0] : end]
         if any(line.startswith("- ") for line in section):
-            return "\n" * start + "\n".join(section)
+            return "\n" * starts[0] + "\n".join(section)
     raise AssertionError("CHANGELOG.rst has no section with entries")
 
 

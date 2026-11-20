@@ -204,7 +204,10 @@ after merging. Tag the merge commit.
 - Pre-releases (`X.Y.ZaN`, `X.Y.ZbN`, `X.Y.ZrcN`, `X.Y.Z.devN`) publish to
   **TestPyPI** and a GitHub Release marked pre-release; a stable version
   publishes to PyPI. Install a pre-release with
-  `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ actingweb==X.Y.ZrcN`.
+  `pip install --no-deps --index-url https://test.pypi.org/simple/ actingweb==X.Y.ZrcN`
+  then `pip install "actingweb[<extras>]==X.Y.ZrcN"` (dependencies from PyPI:
+  TestPyPI's own `fastapi` does not install, so a single command mixing the
+  two indexes fails on the extras).
 - Publish: nothing beyond the tag (`.github/workflows/publish-to-pypi.yml`
   reacts to `v*`). Repository secrets `POETRY_PYPI_TOKEN_PYPI` and
   `POETRY_TESTPYPI_TOKEN` must exist.
@@ -408,7 +411,7 @@ app = (
 
 **Database Backend Selection**:
 - Set `database="postgresql"` in ActingWebApp, OR
-- Set `DATABASE_BACKEND=postgresql` environment variable (takes precedence)
+- Leave `database` out and set `DATABASE_BACKEND=postgresql` (an explicit `database=` wins over the variable)
 - Default is `"dynamodb"` if not specified
 
 **Lambda/Serverless Deployments**:

@@ -374,8 +374,9 @@ Database Configuration
 -----------------------
 
 ActingWeb supports two production-ready database backends: **DynamoDB** (default)
-and **PostgreSQL**. Select one with the ``database`` argument (or the
-``DATABASE_BACKEND`` environment variable, which takes precedence):
+and **PostgreSQL**. Select one with the ``database`` argument, or leave it out and set the
+``DATABASE_BACKEND`` environment variable (an explicit ``database``
+argument wins over the variable):
 
 .. code-block:: python
 

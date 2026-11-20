@@ -43,7 +43,7 @@ owner-chosen approach and a proposed plan (2026-11-06).
 
 | Item | Impact of doing it | Why now |
 | --- | --- | --- |
-| [The 4.0.0 release candidate against real consumers](rc-pass-against-real-consumers.md) | The published rc proven where it runs: the demo deployed on it and a consumer's suite pinned to it (the Agent Skill and the PostgreSQL pair are done) | `v4.0.0rc1` is on TestPyPI (2026-11-20); the demo's pin is a PR waiting on the owner's operator steps. First before the stable tag |
+| [The 4.0.0 release candidate against real consumers](rc-pass-against-real-consumers.md) | The published rc proven where it runs: a consumer's suite pinned to it (the Agent Skill, the PostgreSQL pair and the demo's deploy are done) | `v4.0.0rc1` is on TestPyPI (2026-11-20); Emm's pin is Emm's own run. Before the stable tag |
 | [A bounded read of a v2 list](bounded-list-read.md) | A tail or page of a long list costs its own rows, not the whole list's range | First after 4.0.0rc1 (owner, 2026-11-19); a consumer's comments feature needs it. Open: a PostgreSQL index revision, the cursor contract across requests, four wrapper layers |
 | [`delete_attr_if_data_equals` on a dict value](attribute-conditional-delete-on-dict-values.md) | A conditional delete of a dict attribute matches whatever the key order | A consumer's comments feature; unverified, a test first |
 | [List items: an append that creates nothing, a TTL, retained generations](list-items-conditional-create-ttl-and-retained-bodies.md) | Comments and versioning on lists without application workarounds | Additive; each needs a design (creation path, body-row expiry, a locating field) |

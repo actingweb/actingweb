@@ -843,5 +843,13 @@ the package alone from TestPyPI, then its dependencies from PyPI.
 **`actingwebdemo`.** The pin is `actingweb/actingwebdemo#32` (rc tag,
 Python 3.14, ruff `^0.15`, `BatchGetItem` and `ConditionCheckItem`,
 `AWS_DB_PREFIX` stated, `OPEN_FACTORY=true`); its tests pass on a fresh
-store with no setup step. The operator steps against its store and the
-merge (which deploys) are the owner's.
+store with no setup step. Deployed 2026-11-20 (merge `703b300`, deploy
+run 44738549215 green). Before the merge, the live store
+(`demo_actingweb`, us-west-1) held only the two system actors: their
+properties, the 3.15.1 lookup markers (already complete), and attribute
+rows of deleted actors. `actingweb-check-ready` (4.0, read-only, the demo's
+settings) exited 0, reporting creator uniqueness and email-as-creator as
+"ready at first start", so no operator step ran and nothing was cleared.
+After the first 4.0 start every gate read "ready"; the creators table holds
+the two system actors and `#meta#backfill`. `/` and `/login` answer 200 with
+the sign-in form.

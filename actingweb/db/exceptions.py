@@ -1,5 +1,8 @@
 """Exceptions shared across database backends."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 
 class DbError(Exception):
     """A database backend operation failed unexpectedly.
@@ -15,6 +18,32 @@ class DbError(Exception):
     def __init__(self, op: str, actor_id: str | None = None) -> None:
         actor_part = f" for actor {actor_id}" if actor_id else ""
         super().__init__(f"database error during {op}{actor_part}")
+
+
+class DbErrorAfterWrite(DbError):
+    """A property or list write was stored, and the fault came after it,
+    registering its diff for subscribers (4.0).
+
+    The value is stored; the diff is not registered, so a subscriber's copy
+    stays stale until the next diff or a resync. A repeat of a plain set is
+    safe (it writes the same value and registers the diff); a repeat of an
+    unkeyed append adds a second item, while ``append_once`` does not. A
+    plain ``DbError`` means nothing was written, or that the caller cannot
+    tell. Over HTTP it answers 503 with the code ``stored_not_notified``
+    and no ``Retry-After``.
+    """
+
+
+@contextmanager
+def after_write(op: str, actor_id: str | None = None) -> Iterator[None]:
+    """Raise a ``DbError`` from the block as :class:`DbErrorAfterWrite`:
+    wraps the diff registration that follows a stored write."""
+    try:
+        yield
+    except DbErrorAfterWrite:
+        raise
+    except DbError as e:
+        raise DbErrorAfterWrite(op, actor_id) from e
 
 
 class CreatorTaken(DbError):
@@ -78,3 +107,29 @@ class AttributeKeyCollision(DbError):
         self.bucket = bucket
         self.name = name
         self.actor_id = actor_id
+
+
+class UnserialisableValue(ValueError, TypeError):
+    """A value the store cannot encode as JSON (a ``datetime``, a ``set``, an
+    object), refused before any store call: nothing was written.
+
+    Not a ``DbError``: that answers 503 with ``Retry-After``, and a retry of
+    this write can never succeed. A ``ValueError`` (a caller's bad input),
+    and a ``TypeError`` too, which is what ``json`` raised before 4.0 caught
+    it here.
+    """
+
+    def __init__(self, what: str, cause: BaseException) -> None:
+        self.what = what
+        super().__init__(f"{what} cannot be stored: not JSON-encodable ({cause})")
+
+
+def require_json(value: object, what: str) -> None:
+    """Raise :class:`UnserialisableValue` when ``json`` cannot encode
+    ``value``; called before a write reaches the store."""
+    import json
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as e:
+        raise UnserialisableValue(what, e) from e

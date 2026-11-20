@@ -238,24 +238,24 @@ def _env_example_value(key: str) -> str | None:
 
 
 def test_demo_env_example_sets_open_factory() -> None:
-    """The env-example case below reads None, the unset branch, if the key
-    is removed; this pins that the key is there."""
-    assert _env_example_value("OPEN_FACTORY") == "true"
+    """The key is in the example, empty: the library default applies."""
+    assert _env_example_value("OPEN_FACTORY") == ""
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (None, True),
+        # With OAuth configured the factory is closed by default (4.0).
+        (None, False),
         ("true", True),
         ("false", False),
         # A copied .env.example is what the browser-QA setup runs with.
-        pytest.param(_env_example_value("OPEN_FACTORY"), True, id="env-example"),
+        pytest.param(_env_example_value("OPEN_FACTORY"), False, id="env-example"),
     ],
 )
 def test_demo_example_open_factory_follows_env(monkeypatch, value, expected):
-    """OPEN_FACTORY=false closes the actor factory; unset leaves it open so the
-    quickstart curl works."""
+    """OPEN_FACTORY=true opens the actor factory; unset or empty, the demo
+    shows the library default (closed, since it configures OAuth)."""
     import importlib.util
 
     if value is None:

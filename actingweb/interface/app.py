@@ -3,6 +3,7 @@ Main ActingWebApp class providing fluent API for application configuration.
 """
 
 import os
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -38,7 +39,18 @@ class StoreNotReady(RuntimeError):
     and a plain ``StoreNotReady`` listing every message when more do, so an
     operator fixes them in one deploy window; catch this class to handle
     any.
+
+    ``unavailable`` is True when the store did not answer (a check faulted
+    on every attempt), False when it answered "not ready" (a missing table
+    or a denied permission included). A refusal for more than one reason is
+    ``unavailable`` only if every reason is. It is not permission to serve:
+    a function platform can retry the initialisation on it, an operator
+    acts on the other.
     """
+
+    def __init__(self, message: str = "", *, unavailable: bool = False) -> None:
+        super().__init__(message)
+        self.unavailable = unavailable
 
 
 class UniqueCreatorNotReady(StoreNotReady):
@@ -65,6 +77,48 @@ class EmailAsCreatorNotReady(StoreNotReady):
     4.0 have not been moved to their stored email
     (``actingweb-unique-creators creator-to-email``), or the actor backend
     lacks ``rename_creator`` (see :meth:`ActingWebApp.check_ready`)."""
+
+
+#: Start-up checks: attempts per check, and the back-off budget (seconds)
+#: shared by every check of one ``check_ready()``.
+_STARTUP_ATTEMPTS = 3
+_STARTUP_BACKOFF = (0.5, 1.5)
+_STARTUP_SLEEP_BUDGET = 2.0
+
+_ANSWERED_DYNAMODB_CODES = frozenset(
+    {
+        "ResourceNotFoundException",
+        "AccessDeniedException",
+        "UnrecognizedClientException",
+    }
+)
+_ANSWERED_PG_CLASSES = frozenset(
+    {"UndefinedTable", "UndefinedColumn", "InsufficientPrivilege", "InvalidSchemaName"}
+)
+
+
+def _store_answered(exc: BaseException) -> bool:
+    """Whether a probe's exception is the store's answer (a missing table,
+    a denied permission), not a fault to retry."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        code = getattr(current, "cause_response_code", None)
+        response = getattr(current, "response", None)
+        if code is None and isinstance(response, dict):
+            code = (response.get("Error") or {}).get("Code")
+        if code in _ANSWERED_DYNAMODB_CODES or type(current).__name__ in (
+            "TableDoesNotExist",
+        ):
+            return True
+        if any(
+            k.__name__ in _ANSWERED_PG_CLASSES and k.__module__.startswith("psycopg")
+            for k in type(current).__mro__
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class ActingWebApp:
@@ -123,6 +177,8 @@ class ActingWebApp:
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
         self._mcp_instructions: str | None = None
+        self._mcp_require_auth_for_initialize = False
+        self._mcp_require_pkce = True
         self._sync_subscription_callbacks = False  # Async by default
         # None means "not set via the builder": Config's default, or a value
         # assigned on the Config, stays authoritative.
@@ -130,6 +186,8 @@ class ActingWebApp:
         # None = the builder was never asked: a value assigned on the Config
         # survives. After with_open_factory() the builder's value wins.
         self._open_factory: bool | None = None
+        # Any provider builder was called: the factory is closed by default.
+        self._provider_builder_called = False
         # _UNSET = with_list_item_limits() was not given that argument: the
         # backend default, or a value assigned on the Config, stays
         # authoritative. None is a real value (spanning off / no ceiling).
@@ -233,6 +291,10 @@ class ActingWebApp:
         self._config.mcp = self._enable_mcp
         self._config.mcp_server_name = self._mcp_server_name
         self._config.mcp_instructions = self._mcp_instructions
+        self._config.mcp_require_auth_for_initialize = (
+            self._mcp_require_auth_for_initialize
+        )
+        self._config.mcp_require_pkce = self._mcp_require_pkce
         # OAuth configuration — multi-provider support
         if self._oauth_configs:
             # Build named providers (skip the empty-string default key)
@@ -272,6 +334,7 @@ class ActingWebApp:
         # Config survives; after one, the builder's value wins.
         if self._refresh_token_grace_period is not None:
             self._config.refresh_token_grace_period = self._refresh_token_grace_period
+        self._config.provider_configured = self._provider_builder_called
         if self._open_factory is not None:
             self._config.open_factory = self._open_factory
         self._apply_list_item_limits()
@@ -352,6 +415,7 @@ class ActingWebApp:
         # Store under the provider key (empty string for backward-compat default)
         self._oauth_configs[provider] = oauth_cfg
         self._www_auth = "oauth"
+        self._provider_builder_called = True
         # Ensure existing config (if already created) is updated
         self._apply_runtime_changes_to_config()
         return self
@@ -387,11 +451,17 @@ class ActingWebApp:
         """Open or close the actor factory (``POST /``).
 
         The factory creates an actor for any address from unauthenticated
-        input, so an OAuth-only deployment closes it (``enable=False``): the
-        request answers 403, and sign-in through OAuth is the only way to get
-        an actor. A deviation from the protocol's mandatory factory, off the
-        default (``True``) only on request. A basic-auth deployment that needs
-        the factory form login keeps it open.
+        input. Closed, the request answers 403 and sign-in through a provider
+        is the only way to get an actor; the default ``GET /`` page keeps its
+        email form when a provider is configured (a form ``POST /`` is then a
+        sign-in redirect) and offers none otherwise.
+
+        Default (4.0): closed when a sign-in provider builder was called
+        (``with_oauth``, ``with_github``, ``with_apple_sign_in``,
+        ``with_google_native``, whatever its credentials), open otherwise.
+        ``with_open_factory(True)`` opens it with a provider, for an
+        application whose peers create trustees through it or whose users
+        create actors with the form; a basic-auth deployment needs no call.
         """
         self._open_factory = enable
         self._apply_runtime_changes_to_config()
@@ -583,9 +653,12 @@ class ActingWebApp:
         """Set creator uniqueness, which is **on by default** since 4.0.
 
         With it on the database holds one actor per creator and
-        :meth:`check_ready` refuses to start until
-        ``actingweb-unique-creators enable --apply`` has run (a fresh
-        deployment runs it once, after its first start). Pass
+        :meth:`check_ready` refuses to start until the database enforces
+        it. A store with no actors enables it itself at the first start (on
+        DynamoDB only with ``AWS_DB_PREFIX`` set explicitly; on PostgreSQL
+        with a role that may create an index); one that already holds
+        actors needs ``actingweb-unique-creators report``,
+        ``resolve --apply`` and ``enable --apply`` first. Pass
         ``with_unique_creator(False)`` to opt out and keep the older,
         duplicate-tolerant behaviour.
         """
@@ -602,10 +675,17 @@ class ActingWebApp:
     def with_mcp(
         self,
         enable: bool = True,
-        server_name: str = "actingweb",
-        instructions: str | None = None,
+        server_name: str = _UNSET,
+        instructions: str | None = _UNSET,
+        *,
+        require_auth_for_initialize: bool = _UNSET,
+        require_pkce: bool = _UNSET,
     ) -> "ActingWebApp":
         """Enable or disable MCP (Model Context Protocol) functionality.
+
+        A later call changes only the options it names: ``with_mcp()``
+        again keeps the server name, instructions and the two security
+        options an earlier call set.
 
         Args:
             enable: If True, enable MCP support.
@@ -622,10 +702,31 @@ class ActingWebApp:
                 initial connection. Use it to point new LLMs at an
                 entry-point tool (e.g. ``how_to_use()``). Like
                 ``server_name``, the first call wins for the singleton.
+            require_auth_for_initialize: If True, an unauthenticated
+                ``initialize`` answers 401 with the ``WWW-Authenticate``
+                challenge (503 when the token store is down), so a client
+                starts its OAuth flow at the handshake. Default False: the
+                handshake is answered and the first authenticated method
+                is challenged.
+            require_pkce: Default True: the built-in authorisation server
+                requires a PKCE ``code_challenge`` from every client, at
+                authorise, at the callback and at the token exchange (MCP's
+                authorisation rules, OAuth 2.1). False restores the 4.0.0rc1
+                behaviour exactly: only a public client is refused at
+                authorise without a challenge, and a code without one is
+                accepted at callback and exchange. An application whose
+                clients have not been checked upgrades with False and
+                enforces in a later change.
         """
         self._enable_mcp = enable
-        self._mcp_server_name = server_name
-        self._mcp_instructions = instructions
+        if server_name is not _UNSET:
+            self._mcp_server_name = server_name
+        if instructions is not _UNSET:
+            self._mcp_instructions = instructions
+        if require_auth_for_initialize is not _UNSET:
+            self._mcp_require_auth_for_initialize = bool(require_auth_for_initialize)
+        if require_pkce is not _UNSET:
+            self._mcp_require_pkce = bool(require_pkce)
         # Config.aw_supported is computed on every read, so the ``mcp`` tag
         # follows the flag as soon as it is applied to the config.
         self._apply_runtime_changes_to_config()
@@ -680,7 +781,7 @@ class ActingWebApp:
         written, and the REST handlers answer 413.
 
         An omitted argument keeps the backend default: on DynamoDB (a 400 KB
-        row cap) 390,000 bytes and 4 MiB; on PostgreSQL (no row cap) no
+        row cap) 390,000 bytes and 2 MiB; on PostgreSQL (no row cap) no
         spanning and no ceiling. An explicit ``None`` turns spanning off or
         removes the ceiling. A deployment that develops on PostgreSQL and
         runs DynamoDB in production sets both, so the two behave alike.
@@ -1093,6 +1194,7 @@ class ActingWebApp:
             )
 
         self._www_auth = "oauth"
+        self._provider_builder_called = True
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1158,6 +1260,7 @@ class ActingWebApp:
             "audiences": derived,
         }
         self._www_auth = "oauth"
+        self._provider_builder_called = True
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1226,6 +1329,7 @@ class ActingWebApp:
             )
 
         self._www_auth = "oauth"
+        self._provider_builder_called = True
         self._apply_runtime_changes_to_config()
         return self
 
@@ -1570,6 +1674,8 @@ class ActingWebApp:
                 mcp=self._enable_mcp,
                 mcp_server_name=self._mcp_server_name,
                 mcp_instructions=self._mcp_instructions,
+                mcp_require_auth_for_initialize=self._mcp_require_auth_for_initialize,
+                mcp_require_pkce=self._mcp_require_pkce,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,
                 peer_profile_attributes=self._peer_profile_attributes,
                 peer_capabilities_caching=self._peer_capabilities_caching,
@@ -1585,6 +1691,7 @@ class ActingWebApp:
                 self._config.refresh_token_grace_period = (
                     self._refresh_token_grace_period
                 )
+            self._config.provider_configured = self._provider_builder_called
             if self._open_factory is not None:
                 self._config.open_factory = self._open_factory
             self._apply_list_item_limits()
@@ -1673,8 +1780,12 @@ class ActingWebApp:
         - **Creator uniqueness.** With ``with_unique_creator()`` on (the
           default; ``with_unique_creator(False)`` opts out) raises :class:`UniqueCreatorNotReady` when the DynamoDB
           ``creators`` table or its backfill-complete item is missing, or the
-          PostgreSQL index ``ux_actors_creator`` is missing or INVALID. A
-          fault while probing is refused the same way: starting unchecked
+          PostgreSQL index ``ux_actors_creator`` is missing or INVALID, and
+          the store already holds actors. A store with no actors enables it
+          here instead (DynamoDB only with ``AWS_DB_PREFIX`` set explicitly;
+          PostgreSQL with a role that may create an index), and is refused
+          naming ``actingweb-unique-creators enable --apply`` when it cannot.
+          A fault while probing is refused the same way: starting unchecked
           could let every existing user's next sign-in create a second actor
           (DynamoDB). With the flag off it does nothing.
         - **Attribute lists.** Raises :class:`AttributeSchemaNotReady` when the
@@ -1697,6 +1808,8 @@ class ActingWebApp:
         every message. Catch :class:`StoreNotReady` to handle any.
         """
         self._prewarm_dynamodb_tables()
+        self._startup_sleep_left = _STARTUP_SLEEP_BUDGET
+        self._startup_degraded = False
         refusals: list[StoreNotReady] = []
         for check in (
             self._check_property_lookup_ready,
@@ -1713,8 +1826,33 @@ class ActingWebApp:
         if refusals:
             raise StoreNotReady(
                 "The database is not ready in more than one way:\n\n"
-                + "\n\n".join(str(r) for r in refusals)
+                + "\n\n".join(str(r) for r in refusals),
+                unavailable=all(r.unavailable for r in refusals),
             ) from refusals[0]
+
+    def _probe(self, read: Callable[[], Any]) -> Any:
+        """Run a start-up probe: a fault is tried again (three attempts in
+        all, back-off from one budget shared by the whole ``check_ready()``;
+        once a check has ended unavailable, the others get one attempt). An
+        answer of the store (a missing table, a denied permission) is not
+        retried. Raises the last exception."""
+        attempts = (
+            1 if getattr(self, "_startup_degraded", False) else (_STARTUP_ATTEMPTS)
+        )
+        for attempt in range(attempts):
+            try:
+                return read()
+            except Exception as e:  # folds DbError: retried, then re-raised
+                if _store_answered(e):
+                    raise
+                left = getattr(self, "_startup_sleep_left", 0.0)
+                if attempt == attempts - 1 or left <= 0:
+                    self._startup_degraded = True
+                    raise
+                pause = min(_STARTUP_BACKOFF[min(attempt, 1)], left)
+                self._startup_sleep_left = left - pause
+                time.sleep(pause)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _check_property_lookup_ready(self) -> None:
         if getattr(self, "_property_lookup_checked", False):
@@ -1727,7 +1865,7 @@ class ActingWebApp:
         from ..maintenance.property_lookup import settle
 
         try:
-            state = settle(config)
+            state = self._probe(lambda: settle(config))
         except Exception as e:  # folds DbError: fails closed, like absence
             cause = e.__cause__ or e
             raise PropertyLookupNotReady(
@@ -1737,7 +1875,8 @@ class ActingWebApp:
                 "lookup) call with_indexed_properties([]). The check reads "
                 "the lookup table and its backfill markers; on PostgreSQL "
                 "run 'alembic upgrade head' if the property_lookup_backfill "
-                "table is missing."
+                "table is missing.",
+                unavailable=not _store_answered(e),
             ) from e
         if state.attention:
             dropped = [n for n in state.attention if n in state.marked]
@@ -1776,10 +1915,10 @@ class ActingWebApp:
         config = self.get_config()
         if not config.unique_creator:
             return
-        try:
-            from ..maintenance.unique_creators import missing_enforcement
+        from ..maintenance import unique_creators
 
-            missing = missing_enforcement(config)
+        try:
+            missing = self._probe(lambda: unique_creators.missing_enforcement(config))
         except Exception as e:  # folds DbError: fails closed, like absence
             # Starting unchecked is worse than not starting: on DynamoDB an
             # empty, auto-created creators table would make every existing
@@ -1788,27 +1927,80 @@ class ActingWebApp:
                 "Creator uniqueness is on (the default) but whether the "
                 f"database enforces it could not be checked ({e}); fix the "
                 "database connection or permissions and start again, or opt "
-                "out with with_unique_creator(False)."
+                "out with with_unique_creator(False).",
+                unavailable=not _store_answered(e),
             ) from e
         if missing:
-            from ..maintenance.unique_creators import no_actors
-
-            if no_actors(config):
-                raise UniqueCreatorNotReady(
-                    f"Creator uniqueness is on (the default) but {missing}. "
-                    "There are no actors yet: run "
-                    "'actingweb-unique-creators enable --apply' and start "
-                    "again, or opt out with with_unique_creator(False) "
-                    f"({guide_section('Creator uniqueness')})."
+            try:
+                empty = self._probe(
+                    lambda: unique_creators.no_actors(config, strict=True)
                 )
-            raise UniqueCreatorNotReady(
-                f"Creator uniqueness is on (the default) but {missing}. Run "
-                "'actingweb-unique-creators report', then 'resolve --apply' "
-                f"and 'enable --apply' ({guide_section('Creator uniqueness')}), "
-                "or opt out with "
-                "with_unique_creator(False)."
-            )
+            except Exception as e:  # folds DbError: fails closed, like absence
+                raise UniqueCreatorNotReady(
+                    f"Creator uniqueness is on (the default) but {missing}, and "
+                    f"whether the store holds actors could not be read ({e}). "
+                    "Start again when the database answers, or run "
+                    "'actingweb-unique-creators enable --apply'.",
+                    unavailable=not _store_answered(e),
+                ) from e
+            if not empty:
+                raise UniqueCreatorNotReady(
+                    f"Creator uniqueness is on (the default) but {missing}. Run "
+                    "'actingweb-unique-creators report', then 'resolve --apply' "
+                    f"and 'enable --apply' ({guide_section('Creator uniqueness')}), "
+                    "or opt out with with_unique_creator(False)."
+                )
+            self._enable_empty_store(config, missing)
         self._unique_creator_checked = True
+
+    def _enable_empty_store(self, config: Any, missing: str) -> None:
+        """A store with no user actors enables enforcement itself (4.0):
+        nothing to resolve, so the start-enable-start sequence is not needed.
+        On DynamoDB only with ``AWS_DB_PREFIX`` set explicitly (the default
+        prefix with table auto-creation could start an empty store under the
+        wrong name); on PostgreSQL by building the index, which needs DDL
+        rights. Any failure refuses the start with the command to run."""
+        from ..maintenance import unique_creators
+
+        command = "'actingweb-unique-creators enable --apply'"
+        if config.database != "postgresql" and not os.getenv("AWS_DB_PREFIX"):
+            prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb") or "(empty)"
+            raise UniqueCreatorNotReady(
+                f"Creator uniqueness is on (the default) but {missing}. There "
+                "are no actors yet, but AWS_DB_PREFIX is not set (the tables "
+                f"resolve to the prefix {prefix!r}), so this start does not "
+                "enable it on a store it may have named by mistake. Set "
+                "AWS_DB_PREFIX explicitly (to the default too, if that is "
+                "this deployment's prefix) and start again; the command "
+                f"{command} needs it set as well. Or opt out with "
+                f"with_unique_creator(False) ({guide_section('Creator uniqueness')})."
+            )
+        try:
+            unique_creators.enable_empty_store(config)
+            still = unique_creators.missing_enforcement(config)
+        except Exception as e:  # folds DbError: refused with the command
+            raise UniqueCreatorNotReady(
+                f"Creator uniqueness is on (the default) but {missing}, and "
+                f"enabling it on this empty store failed ({e}). Run {command} "
+                "with the application's environment (on PostgreSQL a role "
+                "that may create an index) and start again, or opt out with "
+                f"with_unique_creator(False) ({guide_section('Creator uniqueness')}).",
+                unavailable=not _store_answered(e)
+                and not isinstance(e, unique_creators.EnableRefused),
+            ) from e
+        if still:
+            raise UniqueCreatorNotReady(
+                f"Creator uniqueness is on (the default) but {still} after "
+                f"enabling it on an empty store. Run {command} and start again."
+            )
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Creator uniqueness enabled on an empty store at start-up: "
+            + unique_creators.store_description(config)
+            + ". If this is not the store you meant, stop and check the "
+            "environment."
+        )
 
     def _check_email_as_creator_ready(self) -> None:
         if getattr(self, "_email_as_creator_checked", False):
@@ -1824,12 +2016,13 @@ class ActingWebApp:
         from ..maintenance import email_as_creator
 
         try:
-            problem = email_as_creator.settle(config)
+            problem = self._probe(lambda: email_as_creator.settle(config))
         except Exception as e:  # folds DbError: fails closed, like absence
             raise EmailAsCreatorNotReady(
                 "Whether the actors were moved to their stored email "
                 f"(with_email_as_creator) could not be read: {type(e).__name__}. "
-                "Re-run when the database answers."
+                "Re-run when the database answers.",
+                unavailable=not _store_answered(e),
             ) from e
         if problem:
             raise EmailAsCreatorNotReady(problem)
@@ -1861,12 +2054,13 @@ class ActingWebApp:
             )
 
             try:
-                problems = attribute_schema_problems()
+                problems = self._probe(attribute_schema_problems)
             except Exception as e:  # folds DbError: fails closed, like absence
                 raise AttributeSchemaNotReady(
                     "Whether the attributes table is ready for attribute lists "
                     f"could not be checked ({e}); fix the database connection "
-                    "or permissions and start again."
+                    "or permissions and start again.",
+                    unavailable=not _store_answered(e),
                 ) from e
             if problems:
                 raise AttributeSchemaNotReady(
@@ -1879,6 +2073,20 @@ class ActingWebApp:
                 )
         self._attribute_schema_checked = True
 
+    def _warn_closed_factory_default(self) -> None:
+        """One start-up WARNING when the factory is closed by default."""
+        import logging
+
+        config = self.get_config()
+        if config.open_factory_is_default and not config.open_factory:
+            logging.getLogger(__name__).warning(
+                "The actor factory (POST /) is closed: a sign-in provider is "
+                "configured and with_open_factory() was not called (4.0 "
+                "default). POST / answers 403 to an API client; the default GET / "
+                "page's email form signs in through the provider. Call with_open_factory(True) if peers create trustees "
+                "here or users create actors with the form."
+            )
+
     def integrate_flask(self, flask_app: Any) -> "FlaskIntegration":
         """Integrate with Flask application."""
         try:
@@ -1889,6 +2097,7 @@ class ActingWebApp:
                 "Install with: pip install 'actingweb[flask]'"
             ) from e
         self.check_ready()
+        self._warn_closed_factory_default()
         integration = FlaskIntegration(self, flask_app)
         integration.setup_routes()
         return integration
@@ -1919,6 +2128,7 @@ class ActingWebApp:
             ) from e
 
         self.check_ready()
+        self._warn_closed_factory_default()
         integration = FastAPIIntegration(
             self,
             fastapi_app,

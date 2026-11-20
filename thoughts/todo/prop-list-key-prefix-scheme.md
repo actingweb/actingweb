@@ -12,6 +12,12 @@ todos") and left out. A scheme that converts a list only on an operator's
 step can ship in a minor (`CONTRIBUTING.rst`, "Which number a release
 gets"); one that converts on first write is a major.
 
+**2026-11-19 (owner, `2026-11-19-emm-4-0-adoption-findings`):** still not
+in 4.0, but its design is written between 4.0.0rc1 and 4.0.0 final, so the
+final's stored-format rules (an envelope's `need`, a list's `format`,
+side rows named `list:{name}-$<kind>-...`) are checked against it before
+they are frozen.
+
 Filed from the "Scalability" evaluation notes in
 `thoughts/plans/2026-08-20-v2-positional-access-cost.md`: "the 1 MB Query
 ceiling is close... the ceiling itself belongs to the `prop#`/`list#` scheme

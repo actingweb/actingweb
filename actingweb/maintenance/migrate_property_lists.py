@@ -79,11 +79,14 @@ import time
 from typing import Any
 
 from actingweb.db.exceptions import DbError
+from actingweb.list_core import ListItemNewerFormatError
+from actingweb.maintenance._common import preflight
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
+
 logger = logging.getLogger("migrate_property_lists")
 
 
@@ -137,42 +140,6 @@ class Checkpoint:
             os.replace(tmp, self._path)
 
 
-def _log_target(config: Any, mode: str, rps: float) -> None:
-    """Say out loud which deployment is about to be swept.
-
-    The library defaults AWS_DB_PREFIX to "demo_actingweb", and a real
-    populated demo deployment exists -- so running this without the
-    environment the application uses silently sweeps the WRONG data and
-    reports it clean. A clean report from the wrong table is worse than an
-    error, because nothing about it looks wrong. Print the target, and warn
-    when the prefix is the default that nobody sets deliberately.
-    """
-    backend = getattr(config, "database", "unknown")
-    if backend == "postgresql":
-        target = (
-            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
-            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
-            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
-            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
-        )
-    else:
-        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
-        target = (
-            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
-            f"prefix={prefix} "
-            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
-        )
-        if not os.getenv("AWS_DB_PREFIX"):
-            logger.warning(
-                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
-                "If your deployment uses a different prefix you are about to "
-                "sweep the wrong tables and get a clean report from them. Set "
-                "the same environment the application runs with."
-            )
-    logger.info(f"Target: backend={backend} {target}")
-    logger.info(f"Mode: {mode}; rps={rps}")
-
-
 def migrate_actor(
     actor_id: str,
     config: Any,
@@ -186,7 +153,8 @@ def migrate_actor(
     Returns (lists_checked, lists_migrated_or_would_migrate, lists_errored,
     refusals), where each refusal is a ``(actor_id/list_name, reason)``
     pair -- ``"rename required"`` for a '#'-named list, ``"repair
-    required"`` for one with holes or orphans.
+    required"`` for one with holes or orphans, ``"stored by a later
+    version"`` for a list whose layout a later library version wrote.
     """
     from actingweb.property import PropertyListStore
     from actingweb.property_list import ListProperty
@@ -207,6 +175,16 @@ def migrate_actor(
             # actor's whole property partition per list purely to learn the
             # format -- ~13 partition dumps per actor on a typical one.
             already_v2 = list_prop.storage_format() == 2
+        except ListItemNewerFormatError:
+            # A layout a later version wrote: never rewritten from here.
+            refused.append((f"{actor_id}/{name}", "stored by a later version"))
+            line = (
+                f"actor={actor_id} list={name}: NEWER FORMAT -- stored by a "
+                "later library version; skipped, not migrated or swept"
+            )
+            print(line)
+            logger.warning(line)
+            continue
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"actor={actor_id} list={name}: format check failed: {e}")
             errored += 1
@@ -425,7 +403,7 @@ def downgrade_to_v1(actor_id: str, list_name: str, config: Any) -> dict[str, Any
     return {"downgraded": True, "item_count": len(items)}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Bulk-migrate v1 property lists to v2 storage format. Attribute "
@@ -476,11 +454,17 @@ def main() -> int:
         help="EMERGENCY: downgrade one v2 list back to v1 (see module "
         "docstring -- not for routine use)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     from actingweb.config import Config
     from actingweb.db import get_actor_list
 
+    refused = preflight(
+        "actingweb-migrate-property-lists",
+        writing=bool(args.migrate or args.downgrade),
+    )
+    if refused is not None:
+        return refused
     config = Config()
 
     if args.downgrade:
@@ -496,7 +480,7 @@ def main() -> int:
         logger.info(f"Result: {result}")
         return 0 if result.get("downgraded") else 1
 
-    _log_target(config, "MIGRATE" if args.migrate else "dry-run", args.rps)
+    logger.info(f"Mode: {'MIGRATE' if args.migrate else 'dry-run'}; rps={args.rps}")
 
     if args.migrate_damaged:
         logger.warning(

@@ -217,3 +217,54 @@ class TestAuxPartition:
     def test_dollar_actor_id_refused(self) -> None:
         with pytest.raises(ValueError):
             aux_partition("a$b")
+
+
+class TestNeed:
+    """AC-25: ``need`` names features a later 4.x stored the item with. This
+    version implements none, so such an item is a newer format: not
+    malformed (a sweep would remove it), not a plain item."""
+
+    def test_need_is_checked_before_the_shape(self) -> None:
+        from actingweb.property_list_span import NewerFormatError
+
+        # A span shape 4.0 rejects (parts 0) under a need it does not know:
+        # newer format, not malformed.
+        raw = json.dumps(
+            {"__aw_env": 1, "need": ["span2"], "span": {"gen": "x", "parts": 0}}
+        )
+        with pytest.raises(NewerFormatError) as raised:
+            parse(raw)
+        assert not isinstance(raised.value, EnvelopeError)
+        assert raised.value.needs == ("span2",)
+
+    def test_a_known_shape_with_a_need_is_still_newer(self) -> None:
+        from actingweb.property_list_span import NewerFormatError
+
+        raw = json.dumps({"__aw_env": 1, "need": ["zstd"], "v": 1})
+        with pytest.raises(NewerFormatError):
+            parse(raw)
+
+    @pytest.mark.parametrize(
+        "need",
+        [[], "zstd", ["Upper"], ["x" * 33], [1], ["a"] * 9, ["a b"]],
+    )
+    def test_a_malformed_need_is_malformed(self, need: Any) -> None:
+        raw = json.dumps({"__aw_env": 1, "need": need, "v": 1})
+        with pytest.raises(EnvelopeError):
+            parse(raw)
+
+    def test_need_round_trips_through_wrap(self) -> None:
+        from actingweb.property_list_span import NewerFormatError
+
+        raw = wrap(value=1, need=("future_x",))
+        assert json.loads(raw)["need"] == ["future_x"]
+        with pytest.raises(NewerFormatError):
+            parse(raw)
+
+    def test_need_is_not_carried_in_extra(self) -> None:
+        env = parse(json.dumps({"__aw_env": 1, "v": 1, "other": 2}))
+        assert env is not None and env.extra == {"other": 2}
+        assert "need" not in json.loads(wrap(value=1, extra={"need": ["x"]}))
+
+    def test_a_marker_other_than_1_with_need_reads_as_a_user_item(self) -> None:
+        assert parse(json.dumps({"__aw_env": 2, "need": ["x"]})) is None

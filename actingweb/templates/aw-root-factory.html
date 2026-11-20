@@ -23,6 +23,7 @@
     </div>
   {% endif %}
 
+  {% if (email_form if email_form is defined else (factory_open is not defined or factory_open)) %}
   <h2>Or continue with your email</h2>
   <form action="{{ base_path|default('') }}/" method="post">
     <label for="creator">Email</label>
@@ -30,5 +31,6 @@
     <p></p>
     <input type="submit" value="Continue">
   </form>
+  {% endif %}
 </div>
 {% endblock %}

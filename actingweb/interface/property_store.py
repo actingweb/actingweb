@@ -8,7 +8,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
-from ..db.exceptions import DbError
+from ..db.exceptions import DbError, DbErrorAfterWrite, after_write
 from ..property import PropertyStore as CorePropertyStore
 from ..property_list import (
     UNSET,
@@ -119,10 +119,13 @@ class PropertyStore:
                 blob=blob,
                 **kwargs,
             )
-        except DbError:
+        except DbError as e:  # folds DbError: re-raised as DbErrorAfterWrite
             # The value is written; the caller answers 503 so the subscriber's
             # gap is not silent (a retry writes the value again).
-            raise
+            raise DbErrorAfterWrite(
+                f"diff registration after the write of {key}",
+                getattr(self._actor, "id", None),
+            ) from e
         except Exception as e:
             logger.warning(f"Error registering diff for {key}: {e}")
 
@@ -288,9 +291,12 @@ class PropertyStore:
                 # Written after the snapshot: kept, and told after the
                 # clear's diff (verification M3).
                 if self._actor:
-                    self._actor.register_diffs(
-                        target="properties", subtarget=key, blob=now[key]
-                    )
+                    # After the clear's first deletes: a fault here comes
+                    # after a write.
+                    with after_write("diff registration in clear", self._actor.id):
+                        self._actor.register_diffs(
+                            target="properties", subtarget=key, blob=now[key]
+                        )
                 continue
             self._core_store[key] = None
 
@@ -397,10 +403,13 @@ class NotifyingListProperty:
                 resource=None,
                 blob=json.dumps(diff_info),
             )
-        except DbError:
+        except DbError as e:  # folds DbError: re-raised as DbErrorAfterWrite
             # The list change is written; the caller answers 503 so the
             # subscriber's gap is not silent.
-            raise
+            raise DbErrorAfterWrite(
+                f"diff registration after a change of list {self._list_name}",
+                getattr(self._actor, "id", None),
+            ) from e
         except Exception as e:
             logger.warning(f"Error registering diff for list {self._list_name}: {e}")
 
@@ -702,9 +711,8 @@ class PropertyListStore:
         does not go the way the names suggest: on a measured account this
         dump was 1,361.0 RCU over 11 queries and the five scoped reads
         covering the same lists were 1,363.5 over 15, so replacing one dump
-        with several scoped calls is marginally worse. Note also that this
-        method swallows a backend fault to `([], {})` while
-        `list_prefix_with_rows()` raises -- see there for why.
+        with several scoped calls is marginally worse. A backend fault
+        raises `DbError` (4.0), as `list_prefix_with_rows()` does.
         """
         return self._core_store.list_all_with_rows()
 

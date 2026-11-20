@@ -79,6 +79,7 @@ from typing import Any
 
 from actingweb.constants import PEER_PERMISSIONS_BUCKET
 from actingweb.db.exceptions import DbError
+from actingweb.maintenance._common import preflight
 from actingweb.maintenance.verify_orphans import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -454,6 +455,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     args = _build_parser().parse_args(argv)
+    refused = preflight(PROG, writing=bool(getattr(args, "apply", False)))
+    if refused is not None:
+        return refused
     handlers = {"report": cmd_report, "prune": cmd_prune}
     try:
         return handlers[args.command](args)

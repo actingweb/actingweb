@@ -157,26 +157,18 @@ class PropertyListStore:
         it -- and the latency win from issuing several of them is the
         CALLER's, from issuing them concurrently.
 
-        On error this returns `([], {})` rather than raising. That is kept
-        for compatibility and is the OPPOSITE of
-        `list_prefix_with_rows()`; the asymmetry is deliberate and its
-        reasoning is on that method.
+        A fault raises `DbError` (4.0; it answered `([], {})`, which read a
+        fault as "no lists"), as `list_prefix_with_rows()` and `list_all()`
+        do.
         """
         list_names: list[str] = []
         rows: dict[str, str] = {}
-        try:
-            if self._config:
-                db_list = get_property_list(self._config)
-                rows = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
-                for prop_name in rows.keys():
-                    if prop_name.startswith("list:") and prop_name.endswith("-meta"):
-                        list_names.append(prop_name[5:-5])
-        except Exception as e:  # folds DbError: documented ([], {}) on error
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error in list_all_with_rows(): {e}")
-            return [], {}
+        if self._config:
+            db_list = get_property_list(self._config)
+            rows = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+            for prop_name in rows.keys():
+                if prop_name.startswith("list:") and prop_name.endswith("-meta"):
+                    list_names.append(prop_name[5:-5])
         return list_names, rows
 
     def list_prefix_with_rows(self, prefix: str) -> tuple[list[str], dict[str, str]]:
@@ -240,11 +232,10 @@ class PropertyListStore:
             ValueError: If `prefix` is empty. An empty prefix would be the
                 whole-partition dump under a name promising the opposite;
                 call `list_all_with_rows()` when that is what you want.
-            DbError: On a backend fault. UNLIKE `list_all_with_rows()`,
-                which swallows to `([], {})`. The asymmetry is deliberate:
-                for a scoped read "nothing here" is the common answer, so
-                swallowing would render a throttled query as "you have no
-                memories" and the caller could not tell.
+            DbError: On a backend fault, as `list_all_with_rows()` raises
+                too (4.0). For a scoped read "nothing here" is the common
+                answer, so swallowing would render a throttled query as
+                "you have no memories" and the caller could not tell.
         """
         if not prefix:
             raise ValueError(

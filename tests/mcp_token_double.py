@@ -374,3 +374,9 @@ def make_config() -> tuple[Config, MemoryStore]:
 def index_actor(store: MemoryStore, bucket: str, name: str) -> Any:
     """The actor id a global index row points at, or None."""
     return store.data(OAUTH2_SYSTEM_ACTOR, bucket, name)
+
+
+#: A PKCE verifier for codes the tests create directly. PKCE is required from
+#: every client (4.0), so such a code carries it as a ``plain`` challenge and
+#: its exchange sends it back.
+PKCE_VERIFIER = "pkce-test-verifier-" + "v" * 40

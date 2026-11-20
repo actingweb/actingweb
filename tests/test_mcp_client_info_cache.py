@@ -310,3 +310,105 @@ def test_an_entry_in_use_survives_the_size_bound(
     for i in range(2, 4):
         _initialize({"Mcp-Session-Id": f"s-{i}"}, {"name": str(i)})
     assert mine._resolve_live_client_info("actor-k") == {"name": "Claude"}
+
+
+# --- AC-34: the first authenticated client name is kept ---------------------
+# Several clients can share one OAuth registration's trust row (a connector
+# and its CLI); renaming the row on every request from the other flaps the
+# name and writes the trust row each time.
+
+from unittest.mock import Mock, patch  # noqa: E402
+
+from actingweb.handlers.mcp import MCPHandler  # noqa: E402
+from tests.mcp_helpers import make_mcp_config, make_mcp_webobj  # noqa: E402
+
+
+class _Trust:
+    def __init__(self, name: str | None, version: str | None = "1.0") -> None:
+        self.client_name = name
+        self.client_version = version
+        self.client_platform = None
+        self.relationship = "mcp_client"
+        self.established_via = "oauth2_client"
+
+
+def _actor() -> Any:
+    actor = Mock()
+    actor.id = "actor-1"
+    actor.core_actor.modify_trust_and_notify.return_value = True
+    return actor
+
+
+def _update(trust: _Trust, info: dict[str, Any], actor: Any) -> None:
+    handler = MCPHandler(make_mcp_webobj(), make_mcp_config(), hooks=None)
+    with patch("actingweb.handlers.mcp.RuntimeContext") as rc:
+        ctx = Mock()
+        ctx.peer_id = "peer-1"
+        ctx.trust_relationship = trust
+        rc.return_value.get_mcp_context.return_value = ctx
+        handler._update_trust_with_client_info(actor, info)  # pyright: ignore[reportPrivateUsage]
+
+
+def _written_names(actor: Any) -> list[Any]:
+    return [
+        call.kwargs.get("client_name")
+        for call in actor.core_actor.modify_trust_and_notify.call_args_list
+    ]
+
+
+def test_a_second_name_does_not_replace_the_first() -> None:
+    actor = _actor()
+    _update(_Trust("claude-ai"), {"name": "mcporter", "version": "2.0"}, actor)
+    # The version changed, so the row is written, but the name stays.
+    assert _written_names(actor) == ["claude-ai"]
+
+
+def test_repeated_requests_from_the_second_client_write_nothing() -> None:
+    actor = _actor()
+    for _ in range(3):
+        _update(_Trust("claude-ai"), {"name": "mcporter", "version": "1.0"}, actor)
+    actor.core_actor.modify_trust_and_notify.assert_not_called()
+
+
+def test_the_placeholder_is_not_a_first_name() -> None:
+    actor = _actor()
+    _update(_Trust("MCP Client"), {"name": "claude-ai", "version": "1.0"}, actor)
+    assert _written_names(actor) == ["claude-ai"]
+    actor = _actor()
+    _update(_Trust(None), {"name": "claude-ai", "version": "1.0"}, actor)
+    assert _written_names(actor) == ["claude-ai"]
+
+
+def test_an_unauthenticated_seed_is_not_a_first_name() -> None:
+    """An unauthenticated initialize caches under the session id only; the
+    trust row's first name comes from the authenticated request."""
+    session = {"Mcp-Session-Id": "s-ac34"}
+    seed = MCPHandler(make_mcp_webobj(session), make_mcp_config(), hooks=None)
+    seed.authenticate_and_get_actor_cached = lambda: None  # type: ignore[method-assign]
+    seed.post(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"clientInfo": {"name": "seeded", "version": "1"}},
+        }
+    )
+    # The authenticated initialize arrives on the SAME session the seed
+    # cached under; its own clientInfo is the first name, not the seed's.
+    actor = _actor()
+    authed = MCPHandler(make_mcp_webobj(session), make_mcp_config(), hooks=None)
+    authed.authenticate_and_get_actor_cached = lambda: actor  # type: ignore[method-assign]
+    with patch("actingweb.handlers.mcp.RuntimeContext") as rc:
+        ctx = Mock()
+        ctx.peer_id = "peer-1"
+        ctx.trust_relationship = _Trust(None)
+        rc.return_value.get_mcp_context.return_value = ctx
+        authed.post(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"clientInfo": {"name": "claude-ai", "version": "1"}},
+            }
+        )
+    assert _written_names(actor) == ["claude-ai"]

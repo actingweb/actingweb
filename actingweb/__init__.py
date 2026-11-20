@@ -55,6 +55,7 @@ __all__ = [
     "ListMetadataContentionError",
     "ListItemTooLargeError",
     "ListItemSpanError",
+    "ListItemNewerFormatError",
     "UNRESOLVED",
     "AppendOnceResult",
 ]
@@ -71,12 +72,16 @@ from . import interface
 #   handlers/properties.py maps it to 413.
 # - ListItemSpanError: a spanned item's body rows are missing (a
 #   ListCorruptionError; handlers/properties.py maps it to 409).
+# - ListItemNewerFormatError: an item or list a later library version
+#   stored (its envelope's need, or the list's format); not corruption, and
+#   no repair touches it. Answered 409 with the code list_item_newer_format.
 # - UNRESOLVED: the slot value items_with_handles(resolve=False) leaves for a
 #   spanned item whose bodies it did not read.
 # - AppendOnceResult: what ListProperty.append_once() returns.
 from .property_list import (
     UNRESOLVED,
     AppendOnceResult,
+    ListItemNewerFormatError,
     ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,

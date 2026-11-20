@@ -52,6 +52,7 @@ def test_bad_code_is_invalid_grant(env: Any) -> None:
             "redirect_uri": "https://client/cb",
             "client_id": resp["client_id"],
             "client_secret": resp["client_secret"],
+            "code_verifier": "v" * 43,
         },
     )
     assert status == 400

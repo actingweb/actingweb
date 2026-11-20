@@ -19,6 +19,7 @@ from actingweb.db.creator_rules import (
     UNIQUE_INDEX_NAME,
     dup_value,
     is_exempt,
+    is_system_actor,
     missing_enforcement_message,
     normalise_creator,
 )
@@ -69,6 +70,19 @@ def _creator_index_present() -> bool:
 def reset_index_probe() -> None:
     """Forget what the index probe saw (tests that build or drop it)."""
     _index_seen_valid.clear()
+
+
+def _system_actor_before_enable(actor_id: str, creator: str) -> bool:
+    """Whether this create is a system actor's (:func:`is_system_actor`) on
+    a store whose ``ux_actors_creator`` is not built yet: it is written as a
+    plain row, and the index the enable builds covers it. A probe fault is
+    left to :func:`_require_creator_index` to report."""
+    if not is_system_actor(actor_id, creator):
+        return False
+    try:
+        return not _creator_index_present()
+    except Exception:  # folds DbError: reported by _require_creator_index
+        return False
 
 
 def _require_creator_index(op: str) -> None:
@@ -281,7 +295,11 @@ class DbActor:
         if self.get(actor_id=actor_id):
             logger.warning(f"Trying to create actor that exists({actor_id})")
             return False
-        if self.unique_creator and not is_exempt(creator):
+        if (
+            self.unique_creator
+            and not is_exempt(creator)
+            and not _system_actor_before_enable(actor_id, creator)
+        ):
             _require_creator_index("actor create")
 
         try:

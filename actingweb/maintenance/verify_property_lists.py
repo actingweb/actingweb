@@ -47,7 +47,13 @@ a run refuses a checkpoint written in the other mode.
 Exit code 0 if every list is healthy (or was repaired to healthy) by the
 end of the run, 1 if any list is still unhealthy or errored. 2 if the actor list
 could not be read (nothing was scanned), or the checkpoint is of the other
-mode.
+mode. 3 if nothing else is wrong but a list holds data a later library
+version stored (4.0 stored-format rule): those lists are reported on lines
+of their own (``NEWER FORMAT``) and neither repaired nor swept; run the
+command from that version.
+
+With ``--spans`` or ``--sweep-spans``, side-partition rows named for a list
+that has no meta row are reported too, and never removed.
 """
 
 import argparse
@@ -60,11 +66,14 @@ import time
 from typing import Any
 
 from actingweb.db.exceptions import DbError
+from actingweb.list_core import ListItemNewerFormatError
+from actingweb.maintenance._common import preflight
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
+
 logger = logging.getLogger("verify_property_lists")
 
 
@@ -140,42 +149,6 @@ class Checkpoint:
             os.replace(tmp, self._path)
 
 
-def _log_target(config: Any, mode: str, rps: float) -> None:
-    """Say out loud which deployment is about to be swept.
-
-    The library defaults AWS_DB_PREFIX to "demo_actingweb", and a real
-    populated demo deployment exists -- so running this without the
-    environment the application uses silently sweeps the WRONG data and
-    reports it clean. A clean report from the wrong table is worse than an
-    error, because nothing about it looks wrong. Print the target, and warn
-    when the prefix is the default that nobody sets deliberately.
-    """
-    backend = getattr(config, "database", "unknown")
-    if backend == "postgresql":
-        target = (
-            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
-            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
-            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
-            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
-        )
-    else:
-        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
-        target = (
-            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
-            f"prefix={prefix} "
-            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
-        )
-        if not os.getenv("AWS_DB_PREFIX"):
-            logger.warning(
-                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
-                "If your deployment uses a different prefix you are about to "
-                "sweep the wrong tables and get a clean report from them. Set "
-                "the same environment the application runs with."
-            )
-    logger.info(f"Target: backend={backend} {target}")
-    logger.info(f"Mode: {mode}; rps={rps}")
-
-
 def sweep_actor(
     actor_id: str,
     config: Any,
@@ -189,6 +162,7 @@ def sweep_actor(
     attributes: bool = False,
     buckets: tuple[str, ...] = (),
     delete_damaged_replicas: bool = False,
+    newer: list[str] | None = None,
 ) -> tuple[int, int, int]:
     """Verify (and optionally repair) every list belonging to one actor.
 
@@ -203,6 +177,12 @@ def sweep_actor(
     ``attributes`` adds the actor's attribute lists (see the module
     docstring); ``buckets`` names buckets beyond the ``remote:{peer}`` ones
     of its trusted peers.
+
+    A list, or an item of it, a later library version stored (4.0
+    stored-format rule) is reported on a line of its own, appended to
+    ``newer`` when given, and neither repaired nor swept. With ``spans`` or
+    ``sweep_spans``, side-partition rows named for a list that has no meta
+    row are reported too, and never removed.
 
     Returns (lists_checked, lists_unhealthy_after, lists_errored).
     """
@@ -231,10 +211,27 @@ def sweep_actor(
             logger.error(f"actor={actor_id}: attribute lists could not be listed: {e}")
             errored += 1
 
+    def newer_found(label: str, what: str) -> None:
+        line = (
+            f"{label}: NEWER FORMAT: {what}, stored by a later library "
+            "version. Not repaired or swept; upgrade the library to read it"
+        )
+        print(line)
+        logger.warning(line)
+        if newer is not None:
+            newer.append(label)
+
     for label, make, bucket in targets:
         limiter.wait()
         checked += 1
         list_prop = make()
+        try:
+            list_prop.storage_format()
+        except ListItemNewerFormatError:
+            newer_found(label, "the list's layout")
+            continue
+        except Exception:  # folds DbError: the steps below report it
+            pass
         if bucket is not None:
             outcome = _settle_attribute_layout(
                 list_prop, label, bucket, repair, delete_damaged_replicas
@@ -261,6 +258,12 @@ def sweep_actor(
             try:
                 if list_prop.storage_format() == 2:
                     sweep_report: dict[str, Any] = list_prop.sweep_span_orphans()
+                    if sweep_report.get("newer_format_heads"):
+                        newer_found(
+                            label,
+                            f"{len(sweep_report['newer_format_heads'])} item(s)",
+                        )
+                        continue
                     swept = sweep_report
                     logger.info(
                         f"{label}: span sweep removed "
@@ -283,10 +286,17 @@ def sweep_actor(
                 identity_key=identity_key,
                 spans=spans or (sweep_spans and not repair),
             )
+        except ListItemNewerFormatError:
+            newer_found(label, "the list's layout")
+            continue
         except Exception as e:  # folds DbError: counted as error, exit 1
             logger.error(f"{label}: verify() failed: {e}")
             if not sweep_failed:  # one list counts once
                 errored += 1
+            continue
+
+        if report.get("newer_format_heads"):
+            newer_found(label, f"{len(report['newer_format_heads'])} item(s)")
             continue
 
         # v1 and v2 reports carry different fields, and the foreign-row
@@ -489,7 +499,46 @@ def sweep_actor(
         else:
             unhealthy_after += 1
 
+    if spans or sweep_spans:
+        try:
+            _report_side_rows_without_meta(actor_id, config, set(list_names))
+        except Exception as e:  # folds DbError: counted as error, exit 1
+            logger.error(f"actor={actor_id}: side rows could not be listed: {e}")
+            errored += 1
+
     return checked, unhealthy_after, errored
+
+
+def _report_side_rows_without_meta(
+    actor_id: str, config: Any, list_names: set[str]
+) -> dict[str, int]:
+    """Side-partition rows (``list:{name}-$<kind>-...``) named for a list
+    that has no meta row: reported, never removed. A later version's row
+    kind under a deleted list, or residue a recreated list would adopt.
+    One keys-only prefix read of the actor's side partition (every body
+    byte on DynamoDB). Returns ``{list_name: rows}``."""
+    from actingweb.property_list import get_property
+    from actingweb.property_list_span import aux_partition
+
+    rows = get_property(config).get_prefix(
+        actor_id=aux_partition(actor_id), prefix="list:", keys_only=True
+    )
+    found: dict[str, int] = {}
+    for name in rows or {}:
+        if "-$" not in name:
+            continue
+        list_name = name[len("list:") :].split("-$", 1)[0]
+        if list_name not in list_names:
+            found[list_name] = found.get(list_name, 0) + 1
+    for list_name, count in sorted(found.items()):
+        line = (
+            f"actor={actor_id} list={list_name}: {count} side-partition row(s) "
+            "named for a list with no meta row -- kept; a list created under "
+            "this name would read them as its own"
+        )
+        print(line)
+        logger.warning(line)
+    return found
 
 
 def _attribute_targets(
@@ -637,7 +686,7 @@ def _owe_replica_rebuild(list_attr: Any, bucket: str) -> int:
         return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Sweep all actors' property lists (and, with --attributes, "
@@ -729,7 +778,7 @@ def main() -> int:
         default=".verify_property_lists.checkpoint.json",
         help="resume state file (default .verify_property_lists.checkpoint.json)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.delete_damaged_replicas and not (args.repair and args.attributes):
         parser.error("--delete-damaged-replicas needs --repair and --attributes")
     if args.bucket and not args.attributes:
@@ -740,8 +789,11 @@ def main() -> int:
     from actingweb.config import Config
     from actingweb.db import get_actor_list
 
+    refused = preflight("actingweb-verify-property-lists", writing=args.repair)
+    if refused is not None:
+        return refused
     config = Config()
-    _log_target(config, "REPAIR" if args.repair else "dry-run", args.rps)
+    logger.info(f"Mode: {'REPAIR' if args.repair else 'dry-run'}; rps={args.rps}")
 
     # Streamed: memory does not grow with the fleet. Eventually consistent
     # (only ids are used; each actor's lists are read afterwards), resumed
@@ -762,6 +814,7 @@ def main() -> int:
     total_checked = 0
     total_unhealthy = 0
     total_errored = 0
+    newer_lists: list[str] = []
     actors_swept = 0
 
     while True:
@@ -783,6 +836,7 @@ def main() -> int:
         actor_id = actor.get("id") if isinstance(actor, dict) else None
         if not actor_id or checkpoint.is_done(actor_id):
             continue
+        newer_before = len(newer_lists)
         checked, unhealthy, errored = sweep_actor(
             actor_id,
             config,
@@ -795,6 +849,7 @@ def main() -> int:
             attributes=args.attributes,
             buckets=tuple(args.bucket),
             delete_damaged_replicas=args.delete_damaged_replicas,
+            newer=newer_lists,
         )
         total_checked += checked
         total_unhealthy += unhealthy
@@ -806,7 +861,7 @@ def main() -> int:
         # that --repair deliberately never fixes (duplicate residue) keep
         # the actor out of the checkpoint until an operator resolves them,
         # which is the intended nag.
-        if not errored and not unhealthy:
+        if not errored and not unhealthy and len(newer_lists) == newer_before:
             checkpoint.mark_done(actor_id)
 
     if not actors_read:
@@ -834,7 +889,16 @@ def main() -> int:
     ):
         os.unlink(args.checkpoint_file)
 
-    return 1 if (total_unhealthy or total_errored) else 0
+    if newer_lists:
+        print(
+            f"{len(newer_lists)} list(s) hold data a later library version "
+            "stored; they were not checked or repaired. Run this command from "
+            "that version."
+        )
+    if total_unhealthy or total_errored:
+        return 1
+    # Its own status: nothing is wrong, but this version could not judge.
+    return 3 if newer_lists else 0
 
 
 if __name__ == "__main__":

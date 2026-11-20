@@ -138,7 +138,9 @@ class TestReplacement:
         assert all("secret" not in t for t in removed)
 
         text = caplog.text
-        assert "peer-squat" in text
+        # The ACTOR_ADOPTED line counts what was removed; peer ids (an OAuth
+        # client's names its user's address) go to the hook, not the log.
+        assert "ACTOR_ADOPTED:" in text and "trusts=1" in text
         assert "squatter-passphrase" not in text and PLANTED_SECRET not in text
 
     def test_second_login_changes_nothing(self, env) -> None:

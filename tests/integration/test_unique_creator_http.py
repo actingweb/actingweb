@@ -245,6 +245,16 @@ class TestFixedIdCreates:
         assert get_actor(enforced_store).get_creator_holder(email) == holder
 
 
+def _unenforced(config: Any) -> Any:
+    """A copy of ``config`` without uniqueness: an actor written as a store
+    that predates enforcement holds it."""
+    import copy
+
+    plain = copy.copy(config)
+    plain.unique_creator = False
+    return plain
+
+
 def _app(unique: bool = True) -> ActingWebApp:
     return ActingWebApp(
         aw_type="urn:actingweb:test:unique_creator",
@@ -255,9 +265,12 @@ def _app(unique: bool = True) -> ActingWebApp:
 
 @pytest.mark.usefixtures("real_unique_probe")
 class TestStartupCheck:
-    def test_a_store_never_enabled_refuses_with_the_command_name(
+    def test_a_store_never_enabled_with_a_user_actor_refuses_with_the_command(
         self, fresh_store: Any
     ) -> None:
+        assert get_actor(_unenforced(fresh_store)).create(
+            actor_id="u1never", creator="never@example.com", passphrase="p"
+        )
         with pytest.raises(UniqueCreatorNotReady, match="actingweb-unique-creators"):
             _app().check_ready()
 
@@ -266,6 +279,9 @@ class TestStartupCheck:
         from actingweb.db.dynamodb.creator import Creator
 
         Creator.create_table(wait=True)
+        assert get_actor(_unenforced(fresh_store)).create(
+            actor_id="u1table", creator="table@example.com", passphrase="p"
+        )
         with pytest.raises(UniqueCreatorNotReady, match="not backfilled"):
             _app().check_ready()
 

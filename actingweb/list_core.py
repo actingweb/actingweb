@@ -36,6 +36,7 @@ from actingweb.property_list_span import (
     SPAN_ROW_RE,
     Envelope,
     EnvelopeError,
+    NewerFormatError,
     SpanInfo,
     carries_library_marker,
     encode_item,
@@ -228,6 +229,55 @@ class ListItemSpanError(ListCorruptionError):
             )
         IndexError.__init__(
             self, f"List '{list_name}' item at rank {rank!r} {detail}; {self.remedy}"
+        )
+
+
+def _is_newer_head(raw: str) -> bool:
+    """Whether a head was stored by a later version (its ``need``)."""
+    try:
+        parse(raw)
+    except NewerFormatError:
+        return True
+    except EnvelopeError:
+        return False
+    return False
+
+
+class ListItemNewerFormatError(Exception):
+    """A list item, or the list itself, was stored by a later version of the
+    library in a format this version does not implement (4.0 stored-format
+    rule: an item's envelope names it in ``need``, a list's meta row in
+    ``format``).
+
+    Not a ``ListCorruptionError``: nothing is wrong with the stored data, and
+    no repair may remove or rewrite it. This version reads, writes, compacts
+    and sweeps none of it. For a newer item, deleting or clearing the list is
+    the escape; a newer list layout is refused by every operation, ``delete()``
+    and ``clear()`` included. Over HTTP it answers 409 with the fixed code
+    ``list_item_newer_format`` and no detail. ``remedy`` names what to do.
+    """
+
+    remedy = (
+        "upgrade the library to the version that wrote it; do not repair the "
+        "list (delete() removes it whole)"
+    )
+
+    def __init__(
+        self, list_name: str, rank: str | None = None, *, detail: str = ""
+    ) -> None:
+        self.list_name = list_name
+        self.rank = rank
+        if rank is None and detail.startswith("list format"):
+            # The layout itself is newer: delete() refuses it too.
+            self.remedy = (
+                "upgrade the library to the version that wrote it; this "
+                "version neither repairs nor deletes the list"
+            )
+        where = f" item at rank {rank!r}" if rank is not None else ""
+        super().__init__(
+            f"List '{list_name}'{where} was stored by a later library version"
+            + (f" ({detail})" if detail else "")
+            + f"; {self.remedy}"
         )
 
 
@@ -877,7 +927,8 @@ class ListCore:
         generation its old raw value named, if any. Best-effort."""
         try:
             env = parse(raw)
-        except EnvelopeError:
+        except (EnvelopeError, NewerFormatError):
+            # A newer-format head's bodies are not this version's to judge.
             return
         if env is not None:
             self._span_delete_bodies(env.span)
@@ -1054,7 +1105,7 @@ class ListCore:
         concurrent byte-identical write, so it never qualifies."""
         try:
             env = parse(head)
-        except EnvelopeError:
+        except (EnvelopeError, NewerFormatError):
             return False
         if env is None or (env.span is None and env.tok is None):
             return False
@@ -1098,6 +1149,10 @@ class ListCore:
         ``ListItemSpanError`` it is."""
         try:
             return parse(raw)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError as e:
             raise ListItemSpanError(
                 self.name, rank, detail=f"has a malformed envelope ({e})"
@@ -1124,6 +1179,12 @@ class ListCore:
             return None, None
         try:
             return raw, parse(raw)
+        except NewerFormatError as e:
+            # Never tolerated: a write would replace a head this version
+            # cannot read.
+            raise ListItemNewerFormatError(
+                self.name, rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             return raw, None
 
@@ -1133,6 +1194,10 @@ class ListCore:
         handle -- the remedy ``ListItemSpanError`` names."""
         try:
             env = parse(raw)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             return ListItemHandle(rank=rank, raw_value=raw)
         if env is None:
@@ -1415,8 +1480,34 @@ class ListCore:
                 f"Metadata for list '{self.name}' is not a JSON object "
                 f"(got {type(parsed_meta).__name__})"
             )
+        self._refuse_newer_format(parsed_meta)
         self._meta_cache = parsed_meta
         return self._meta_cache
+
+    def _refuse_newer_layout_only(self) -> None:
+        """Raise ``ListItemNewerFormatError`` for a newer list layout; let
+        an unparsable or non-object meta row pass (``delete()`` removes a
+        damaged list whole)."""
+        try:
+            self._read_meta_row()
+        except ValueError:
+            pass
+
+    def _refuse_newer_format(self, meta: dict[str, Any]) -> None:
+        """A list layout a later version wrote: a meta ``format`` other than
+        1 or 2. Refused wherever the meta row is read, so no read, write,
+        clear, delete, migration or sweep of this version touches the list
+        (4.0 stored-format rule: a later 4.x that changes a list's layout
+        raises ``format``)."""
+        fmt = meta.get("format")
+        if fmt is None or isinstance(fmt, bool):
+            return
+        try:
+            value = int(fmt)
+        except (TypeError, ValueError):
+            return  # unparsable reads as 1, as before
+        if value not in (1, 2):
+            raise ListItemNewerFormatError(self.name, detail=f"list format {value}")
 
     def _read_meta_row(self) -> tuple[dict[str, Any] | None, str | None]:
         """The meta row as stored RIGHT NOW, bypassing the cache entirely --
@@ -1454,6 +1545,7 @@ class ListCore:
                 f"Metadata for list '{self.name}' is not a JSON object "
                 f"(got {type(parsed).__name__})"
             )
+        self._refuse_newer_format(parsed)
         return parsed, meta_str
 
     def _save_metadata(
@@ -1784,6 +1876,10 @@ class ListCore:
         raises ``ListItemSpanError`` for it), the item otherwise."""
         try:
             env = parse(raw)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             return UNRESOLVED
         if env is None:
@@ -1842,6 +1938,12 @@ class ListCore:
         except (json.JSONDecodeError, TypeError):
             return
         if not isinstance(parsed, dict):
+            return
+        try:
+            self._refuse_newer_format(parsed)
+        except ListItemNewerFormatError:
+            # Not primed: the lazy path raises when this list is read, so a
+            # dump of an actor's lists fails for this list only.
             return
         self._meta_cache = parsed
         if int(parsed.get("format", 1) or 1) == 2:
@@ -2691,7 +2793,7 @@ class ListCore:
             return
         try:
             env = parse(raw)
-        except EnvelopeError:
+        except (EnvelopeError, NewerFormatError):
             return
         if env is None or env.key is None or self._aux_or_none() is None:
             return
@@ -3053,7 +3155,8 @@ class ListCore:
         # below only clear the format the list currently reports, so
         # residue from an interrupted rewrite would survive a clear() and
         # then be adopted as items by whichever format the list next
-        # changes to.
+        # changes to. A layout a later version wrote is refused first.
+        self._read_meta_row()
         self._foreign_rows(sweep=True)
 
         self._require_v2()
@@ -3084,12 +3187,17 @@ class ListCore:
             for key_hash, keyed in self._keyed_by_hash(pairs).items()
             for _, _, tok in keyed
         }
+        # A key row whose content this version cannot parse is kept when a
+        # later version stored part of the list: it may be that version's.
+        newer = any(_is_newer_head(raw) for _, raw in pairs)
         stale = [
             self._key_row(key_hash)
             for key_hash, raw_k in self._key_rows().items()
-            if (named := self._parse_key_row(raw_k)) is None
-            or (key_hash, named.tok) in deleted
-            or not self._in_flight(named.tok)
+            if ((named := self._parse_key_row(raw_k)) is None and not newer)
+            or (
+                named is not None
+                and ((key_hash, named.tok) in deleted or not self._in_flight(named.tok))
+            )
         ]
         self._delete_aux_rows(stale)
         self._replace_metadata(self._create_default_metadata_v2())
@@ -3111,7 +3219,11 @@ class ListCore:
         # residue left by an interrupted rewrite outlives the list
         # otherwise, invisible to exists()/list_all() (which key off the
         # meta row) right up until a new list is created under this name
-        # and reads it as its own items.
+        # and reads it as its own items. A layout a later version wrote is
+        # refused first (4.0 stored-format rule). An unparsable meta row
+        # passes this check; an attribute list then deletes the list whole,
+        # while this layout dispatch (_require_v2) still refuses it.
+        self._refuse_newer_layout_only()
         self._foreign_rows(sweep=True)
 
         self._require_v2()
@@ -3350,6 +3462,10 @@ class ListCore:
         passes it."""
         try:
             env = parse(raw)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             return False
         if env is None:
@@ -3619,6 +3735,16 @@ class ListCore:
         """
         if self._dispatch_and_stash() != 2:
             raise self._not_v2_error("delete_by_handle")
+        try:
+            parse(handle.raw_value)
+        except NewerFormatError as e:
+            # Before any write: deleting the item would leave its side rows,
+            # which only the version that wrote it knows.
+            raise ListItemNewerFormatError(
+                self.name, handle.rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
+        except EnvelopeError:
+            pass  # a malformed head is removable by handle
         db = self._storage
         if not db.delete_if_value_equals(
             name=self._v2_item_name(handle.rank),
@@ -3662,6 +3788,10 @@ class ListCore:
         spans = self._check_item_size(value_str, can_span=True)
         try:
             old_env = parse(handle.raw_value)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, handle.rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             old_env = None
 
@@ -3979,10 +4109,13 @@ class ListCore:
                 and not (not meta_row_present and length > 0)
             ),
         }
-        span_heads, malformed = self._span_heads(pairs)
+        span_heads, malformed, newer = self._span_heads(pairs)
         report["spanned_items"] = len(span_heads)
         report["span_bytes"] = sum(span.bytes for _, span in span_heads)
         report["malformed_heads"] = malformed
+        # Heads a later version stored: not damage, and nothing this version
+        # may repair (the operator command reports them on their own).
+        report["newer_format_heads"] = newer
         if malformed:
             report["healthy"] = False
         if spans:
@@ -3991,7 +4124,9 @@ class ListCore:
                 span_heads, span_names, check_content=True
             )
             raw_by_rank = dict(pairs)
-            for gen in self._gens_named_by(raw_by_rank[r] for r in malformed):
+            for gen in self._gens_named_by(
+                raw_by_rank[r] for r in [*malformed, *newer]
+            ):
                 orphan_gens.pop(gen, None)
             report["span_body_rows"] = len(span_names)
             report["orphan_span_gens"] = len(orphan_gens)
@@ -4009,7 +4144,7 @@ class ListCore:
                     (
                         i,
                         None
-                        if rank in malformed
+                        if rank in malformed or rank in newer
                         else self._identity_of(raw, identity_key, rank),
                     )
                     for i, (rank, raw) in enumerate(pairs)
@@ -4023,20 +4158,25 @@ class ListCore:
 
     def _span_heads(
         self, pairs: list[tuple[str, str]]
-    ) -> tuple[list[tuple[str, SpanInfo]], list[str]]:
+    ) -> tuple[list[tuple[str, SpanInfo]], list[str], list[str]]:
         """From ``(rank, raw)`` heads: the spanned ones as ``(rank, span)``,
-        and the ranks of malformed envelopes. No body read."""
+        the ranks of malformed envelopes, and the ranks of heads a later
+        version stored (``need``). No body read."""
         spanned: list[tuple[str, SpanInfo]] = []
         malformed: list[str] = []
+        newer: list[str] = []
         for rank, raw in pairs:
             try:
                 env = parse(raw)
+            except NewerFormatError:
+                newer.append(rank)
+                continue
             except EnvelopeError:
                 malformed.append(rank)
                 continue
             if env is not None and env.span is not None:
                 spanned.append((rank, env.span))
-        return spanned, malformed
+        return spanned, malformed, newer
 
     def _key_rows(self) -> dict[str, str]:
         """``{key_hash: raw}`` for the list's key rows: one prefix read of
@@ -4065,7 +4205,7 @@ class ListCore:
                 continue
             try:
                 env = parse(raw)
-            except EnvelopeError:
+            except (EnvelopeError, NewerFormatError):
                 continue
             if env is not None and env.key is not None:
                 by_key.setdefault(env.key, []).append((rank, raw, env.tok))
@@ -4395,6 +4535,15 @@ class ListCore:
         if not self._db:
             raise RuntimeError("No database connection available")
 
+        if report.get("newer_format_heads"):
+            # Before the sweep, the key repair or any copy writes: a head a
+            # later version stored is moved by no one but that version.
+            raise ListItemNewerFormatError(
+                self.name,
+                report["newer_format_heads"][0],
+                detail="compact() moves nothing in a list holding it",
+            )
+
         if sweep_span_orphans:
             report.update(self._sweep_spans())
 
@@ -4515,6 +4664,10 @@ class ListCore:
         written as it is. Returns ``(head, new_span)``."""
         try:
             env = parse(raw)
+        except NewerFormatError as e:
+            raise ListItemNewerFormatError(
+                self.name, rank, detail=f"needs {', '.join(e.needs)}"
+            ) from None
         except EnvelopeError:
             return raw, None
         if env is None or env.span is None:
@@ -4535,7 +4688,27 @@ class ListCore:
         list's body rows, then remove aged orphan generations and heads
         whose bodies are not all there. See ``_v2_compact()``."""
         pairs = self._v2_load_full()
-        span_heads, malformed = self._span_heads(pairs)
+        span_heads, malformed, newer = self._span_heads(pairs)
+        if newer:
+            # A later version stored some of this list: its side rows may be
+            # ones this version cannot account for. Remove nothing.
+            logger.warning(
+                "List '%s' (actor %s): %d item(s) were stored by a later library "
+                "version; the span sweep removes nothing from this list",
+                self.name,
+                self.actor_id,
+                len(newer),
+            )
+            return {
+                "span_body_rows": None,
+                "orphan_span_gens": None,
+                "broken_spans": [],
+                "orphan_span_gens_removed": 0,
+                "broken_spans_removed": 0,
+                "malformed_heads_removed": 0,
+                "malformed_heads_kept": len(malformed),
+                "newer_format_heads": newer,
+            }
         span_names = self._aux_names("span")
         broken, orphans = self._span_inventory(
             span_heads, span_names, check_content=True

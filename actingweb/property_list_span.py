@@ -9,9 +9,20 @@ JSON (every row written before 4.0, and every item at or under the span
 threshold) or an *envelope*: a JSON object whose **first** key is
 ``"__aw_env": 1``, with optional ``key`` and ``tok`` (the keyed-append hash
 and writer token), ``span`` (``{"gen", "parts", "bytes"}``: the item's
-encoded value lives in body rows) and ``v`` (the item, absent when ``span``
-is present). Fields this version does not know are kept in
+encoded value lives in body rows), ``v`` (the item, absent when ``span``
+is present) and ``need`` (the features a later version stored the item
+with; see below). Fields this version does not know are kept in
 ``Envelope.extra`` and carried across a rewrite.
+
+**Stored-format rule (4.0).** A later 4.x that changes how an item is
+stored names the change in ``need`` (a list of 1 to 8 names, each
+``[a-z0-9_-]{1,32}``). This version implements none
+(``IMPLEMENTED_NEEDS``), so an item with any ``need`` raises
+``NewerFormatError``: it is not malformed and is never removed or
+rewritten by this version. ``need`` is checked first, before any other
+field, so a later version may change any other field's shape under it.
+A later version never reuses a field this one ignores for something a
+writer must maintain.
 
 **The side partition.** Body rows (and, from the keyed append, key rows)
 live under the partition key ``aux_partition(actor_id)`` =
@@ -41,11 +52,13 @@ SPAN_THRESHOLD_DEFAULT = 390_000
 SPAN_PART_BYTES = 390_000
 
 # The default ceiling on one item's encoded size where a row cap exists:
-# 4 MiB. Derived from what the library itself does per item (about 11 body
-# rows to write, about 1,056 strongly consistent read units over 6 Query
-# pages to resolve on DynamoDB, roughly four copies of the value in memory
-# while a request handles it), never from a platform's payload limit.
-ITEM_MAX_BYTES_DEFAULT = 4 * 2**20
+# 2 MiB (4.0; 4 MiB in 4.0.0rc1). Derived from what the library itself does
+# per item (about 6 body rows to write, about half the 1,056 strongly
+# consistent read units a 4 MiB item costs to resolve on DynamoDB, roughly
+# four copies of the value in memory while a request handles it), never from
+# a platform's payload limit. Raising it later strands nothing; lowering it
+# later would leave stored items over the ceiling.
+ITEM_MAX_BYTES_DEFAULT = 2 * 2**20
 
 
 def encoded_size(value_str: str) -> int:
@@ -65,7 +78,7 @@ def default_limits(max_row_bytes: Any) -> tuple[int | None, int | None]:
     """The ``(span_threshold, max_bytes)`` defaults for a backend whose
     ``DbProperty.MAX_ROW_BYTES`` is ``max_row_bytes``.
 
-    An ``int`` (a backend with a row cap) gives ``(390_000, 4 MiB)``;
+    An ``int`` (a backend with a row cap) gives ``(390_000, 2 MiB)``;
     anything else, including ``None`` and an absent attribute, gives
     ``(None, None)``: never span, no ceiling.
     """
@@ -150,12 +163,31 @@ def value_digest(value_str: str) -> str:
 MAX_PARTS = 9999
 
 # The fields parse() understands; anything else rides in Envelope.extra.
-_KNOWN_FIELDS = frozenset({ENVELOPE_MARKER, "key", "tok", "span", "v"})
+_KNOWN_FIELDS = frozenset({ENVELOPE_MARKER, "key", "tok", "span", "v", "need"})
+
+# The ``need`` names this version implements: none (4.0).
+IMPLEMENTED_NEEDS: frozenset[str] = frozenset()
+_NEED_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}\Z")
+_MAX_NEEDS = 8
 
 
 class EnvelopeError(ValueError):
     """A stored value starts like an envelope but is not a valid one.
     ``property_list`` maps it to ``ListItemSpanError`` before any read."""
+
+
+class NewerFormatError(Exception):
+    """A stored envelope names, in ``need``, a feature this version does not
+    implement: a later 4.x wrote it. Not an ``EnvelopeError``: the item is
+    not malformed, and nothing that removes or repairs malformed heads may
+    touch it. ``needs`` holds the names this version lacks."""
+
+    def __init__(self, needs: tuple[str, ...]) -> None:
+        self.needs = needs
+        super().__init__(
+            f"stored by a later version (needs {', '.join(needs)}); upgrade "
+            "the library to read it"
+        )
 
 
 @dataclass(frozen=True)
@@ -183,6 +215,7 @@ class Envelope:
     span: SpanInfo | None = None
     value: Any = _NO_VALUE
     extra: dict[str, Any] = field(default_factory=dict)
+    need: tuple[str, ...] = ()
 
     @property
     def has_value(self) -> bool:
@@ -261,6 +294,12 @@ def parse(raw: Any) -> Envelope | None:
     obj = _envelope_obj(raw)
     if obj is None:
         return None
+    # First, before any other field: a later version may change another
+    # field's shape under a need this one does not implement.
+    need = _parse_need(obj)
+    missing = tuple(n for n in need if n not in IMPLEMENTED_NEEDS)
+    if missing:
+        raise NewerFormatError(missing)
     key = obj.get("key")
     tok = obj.get("tok")
     if key is not None and not isinstance(key, str):
@@ -300,7 +339,27 @@ def parse(raw: Any) -> Envelope | None:
         span=span,
         value=obj["v"] if ("v" in obj and span is None) else _NO_VALUE,
         extra=extra,
+        need=need,
     )
+
+
+def _parse_need(obj: dict[str, Any]) -> tuple[str, ...]:
+    """The envelope's ``need``: ``()`` when absent.
+
+    Raises:
+        EnvelopeError: ``need`` is not a list of 1 to 8 names matching
+            ``[a-z0-9_-]{1,32}`` (malformed, and so removable as such).
+    """
+    if "need" not in obj:
+        return ()
+    need = obj["need"]
+    if (
+        not isinstance(need, list)
+        or not 1 <= len(need) <= _MAX_NEEDS
+        or not all(isinstance(n, str) and _NEED_NAME_RE.match(n) for n in need)
+    ):
+        raise EnvelopeError("envelope need is not a list of 1 to 8 names")
+    return tuple(need)
 
 
 def wrap(
@@ -310,12 +369,15 @@ def wrap(
     tok: str | None = None,
     span: SpanInfo | None = None,
     extra: dict[str, Any] | None = None,
+    need: tuple[str, ...] = (),
 ) -> str:
     """Encode an envelope, marker first. Exactly one of ``value`` and
-    ``span`` is given."""
+    ``span`` is given. ``need``: for a later version's writer (and tests)."""
     if (value is _NO_VALUE) == (span is None):
         raise ValueError("an envelope carries exactly one of value and span")
     obj: dict[str, Any] = {ENVELOPE_MARKER: 1}
+    if need:
+        obj["need"] = list(need)
     for k, v in (extra or {}).items():
         if k not in _KNOWN_FIELDS:
             obj[k] = v

@@ -8,7 +8,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-from flask import Flask, Response, redirect, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from ... import request_context, runtime_context
@@ -67,6 +67,12 @@ class FlaskIntegration(BaseActingWebIntegration):
         # consumer route calling ActorInterface, answers 503 (409 for
         # CreatorTaken) instead of a 500.
         self.flask_app.register_error_handler(DbError, self._db_error_response)
+        # Data a later library version stored: a fixed 409, never str(e).
+        from ...list_core import ListItemNewerFormatError
+
+        self.flask_app.register_error_handler(
+            ListItemNewerFormatError, self._newer_format_response
+        )
 
     def _db_error_response(self, exc: Exception) -> Response:
         """The app-level answer for a ``DbError`` (see ``_errors.py``).
@@ -88,6 +94,23 @@ class FlaskIntegration(BaseActingWebIntegration):
                 self.aw_app.get_config(),
             ),
         }
+        return Response(
+            _json.dumps(body),
+            status=status,
+            headers=headers,
+            mimetype="application/json",
+        )
+
+    def _newer_format_response(self, exc: Exception) -> Response:
+        """The app-level answer for ``ListItemNewerFormatError``."""
+        import json as _json
+
+        from ._errors import newer_format_answer
+
+        logging.getLogger(__name__).warning(
+            f"Refused data a later library version stored: {exc}"
+        )
+        status, headers, body = newer_format_answer()
         return Response(
             _json.dumps(body),
             status=status,
@@ -320,6 +343,20 @@ class FlaskIntegration(BaseActingWebIntegration):
         def oauth2_spa_session_compat() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             return self._handle_oauth2_spa_endpoint("session")
 
+        @self.flask_app.route("/oauth/spa/session/<session_id>", methods=["GET"])
+        def oauth2_spa_session_retrieve(session_id: str) -> Response:  # pyright: ignore[reportUnusedFunction]
+            """Retrieve pending SPA session data after OAuth callback."""
+            from ...handlers.oauth2_spa import spa_session_retrieve
+
+            status, body, headers = spa_session_retrieve(
+                self.aw_app.get_config(), session_id, request.headers.get("Origin")
+            )
+            response = jsonify(body)
+            response.status_code = status
+            for key, value in headers.items():
+                response.headers[key] = value
+            return response
+
         @self.flask_app.route("/oauth/spa/logout", methods=["POST", "OPTIONS"])
         def oauth2_spa_logout() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
             # Delegate to main logout handler for consistency
@@ -333,11 +370,12 @@ class FlaskIntegration(BaseActingWebIntegration):
         # MCP endpoint
         @self.flask_app.route("/mcp", methods=["GET", "POST"])
         def app_mcp() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
-            # POST initialize, ping, any ``notifications/*`` message sent
-            # without an ``id`` and a client's JSON-RPC response (both answered
-            # 202 with no body) are the only unauthenticated MCP requests;
-            # everything else — including a GET — is answered with the 401
-            # challenge by the handler.
+            # POST initialize (unless with_mcp(require_auth_for_initialize=
+            # True)), ping, any ``notifications/*`` message sent without an
+            # ``id`` and a client's JSON-RPC response (both answered 202 with
+            # no body) are the only unauthenticated MCP requests; everything
+            # else — including a GET — is answered with the 401 challenge by
+            # the handler.
             return self._handle_mcp_request()
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
@@ -348,6 +386,15 @@ class FlaskIntegration(BaseActingWebIntegration):
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return self._handle_oauth2_discovery_endpoint(
                 ".well-known/oauth-authorization-server"
+            )
+
+        @self.flask_app.route(
+            "/.well-known/openid-configuration", methods=["GET", "OPTIONS"]
+        )
+        def oauth_openid_configuration() -> Response | WerkzeugResponse | str:  # pyright: ignore[reportUnusedFunction]
+            """The authorisation server document at the OpenID location."""
+            return self._handle_oauth2_discovery_endpoint(
+                ".well-known/openid-configuration"
             )
 
         @self.flask_app.route(
@@ -928,7 +975,12 @@ class FlaskIntegration(BaseActingWebIntegration):
             return self._create_flask_response(webobj)
         # Simply show the factory template without any authentication
         try:
-            return Response(render_template("aw-root-factory.html"))
+            return Response(
+                render_template(
+                    "aw-root-factory.html",
+                    **factory.sign_in_page_values(self.aw_app.get_config()),
+                )
+            )
         except Exception:  # folds DbError: no DB access: template rendering
             # Fallback for when templates are not available
             return Response(
@@ -977,7 +1029,9 @@ class FlaskIntegration(BaseActingWebIntegration):
                 try:
                     return Response(
                         render_template(
-                            "aw-root-factory.html", error="Email is required"
+                            "aw-root-factory.html",
+                            error="Email is required",
+                            **factory.sign_in_page_values(self.aw_app.get_config()),
                         )
                     )
                 except Exception:  # folds DbError: no DB access: template rendering

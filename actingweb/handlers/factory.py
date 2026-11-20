@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any
 
 from actingweb import actor
 from actingweb.db.creator_rules import is_refused_from_callers, normalise_creator
@@ -151,48 +152,9 @@ class RootFactoryHandler(base_handler.BaseHandler):
             return self._get_json_config()
 
         if self.config.ui:
-            # Provide OAuth login URLs for 3rd party apps to render "Login with Google/GitHub" buttons
-            oauth_urls = {}
-            oauth_providers = []
-
-            try:
-                from actingweb.oauth2 import (
-                    create_oauth2_authenticator,
-                    get_provider_display_name,
-                )
-
-                providers_cfg = getattr(self.config, "oauth_providers", {})
-                provider_names: list[str] = []
-                if providers_cfg:
-                    provider_names = list(providers_cfg.keys())
-                elif self.config.oauth and self.config.oauth.get("client_id"):
-                    provider_names = [getattr(self.config, "oauth2_provider", "google")]
-
-                for prov_name in provider_names:
-                    auth = create_oauth2_authenticator(self.config, prov_name)
-                    if auth.is_enabled():
-                        auth_url = auth.create_authorization_url()
-                        oauth_urls[prov_name] = auth_url
-                        oauth_providers.append(
-                            {
-                                "name": prov_name,
-                                "display_name": get_provider_display_name(prov_name),
-                                "url": auth_url,
-                            }
-                        )
-                        logger.debug(
-                            f"{prov_name} OAuth URL generated: {auth_url[:100]}..."
-                        )
-
-            except Exception as e:  # folds DbError: OAuth URL build, no DB
-                logger.warning(f"Failed to generate OAuth URLs: {e}")
-
-            self.response.template_values = {
-                "oauth_urls": oauth_urls,  # Dict: {'google': url, 'github': url}
-                "oauth_providers": oauth_providers,  # List of dicts with name, display_name, url
-                "oauth_enabled": bool(oauth_urls),
-                "base_path": self._base_path(),
-            }
+            self.response.template_values = sign_in_page_values(
+                self.config, self._base_path()
+            )
         else:
             self.response.set_status(404)
 
@@ -212,14 +174,15 @@ class RootFactoryHandler(base_handler.BaseHandler):
             }
 
     def post(self):
-        if not getattr(self.config, "open_factory", True):
+        if not self.config.open_factory:
             # The body is not parsed yet: a JSON body (Content-Type) or a
             # client asking for JSON back (Accept) gets the JSON error.
             content_type = self.request.get_header("Content-Type")
             self._refuse(
                 403,
-                "Actor creation is disabled on this server (with_open_factory); "
-                "sign in through OAuth instead",
+                "Actor creation is disabled on this server; sign in through "
+                "OAuth instead (the application opens the factory with "
+                "with_open_factory(True))",
                 as_json="application/json" in content_type or self._wants_json(),
             )
             return
@@ -333,3 +296,71 @@ class RootFactoryHandler(base_handler.BaseHandler):
         self.response.write(out)
         self.response.headers["Content-Type"] = "application/json"
         self.response.set_status(201, "Created")
+
+
+def sign_in_page_values(config: Any, base_path: str | None = None) -> dict[str, Any]:
+    """The default root page's template values: the provider buttons, and
+    whether the email form is shown.
+
+    With a sign-in provider, the email form signs in (a form ``POST /`` is
+    redirected to the provider with the address as a hint) and never
+    reaches the factory, so it is shown whether or not the factory is open.
+    Without one, the form posts to the factory and is shown only when the
+    factory is open (a closed factory answers 403)."""
+    from actingweb.oauth2 import (
+        create_oauth2_authenticator,
+        get_provider_display_name,
+    )
+
+    oauth_urls: dict[str, str] = {}
+    oauth_providers: list[dict[str, str]] = []
+    providers_cfg = getattr(config, "oauth_providers", {})
+    provider_names: list[str] = []
+    if providers_cfg:
+        provider_names = list(providers_cfg.keys())
+    elif config.oauth and config.oauth.get("client_id"):
+        provider_names = [getattr(config, "oauth2_provider", "google")]
+
+    for prov_name in provider_names:
+        try:
+            auth = create_oauth2_authenticator(config, prov_name)
+            if not auth.is_enabled():
+                continue
+            auth_url = auth.create_authorization_url()
+        except Exception as e:  # folds DbError: OAuth URL build, no DB
+            # One provider that fails is left out; the others still show.
+            logger.warning(f"Failed to generate the {prov_name} OAuth URL: {e}")
+            continue
+        oauth_urls[prov_name] = auth_url
+        oauth_providers.append(
+            {
+                "name": prov_name,
+                "display_name": get_provider_display_name(prov_name),
+                "url": auth_url,
+            }
+        )
+    # The email form signs in through the authenticator a form POST uses
+    # (the default one), so it is offered only when that one works.
+    try:
+        form_signs_in = bool(
+            provider_names and create_oauth2_authenticator(config).is_enabled()
+        )
+    except Exception as e:  # folds DbError: no DB, a bad default provider
+        logger.warning(f"Failed to check the default OAuth provider: {e}")
+        form_signs_in = False
+    if base_path is None:
+        try:
+            from urllib.parse import urlparse
+
+            base_path = urlparse(getattr(config, "root", "") or "").path.rstrip("/")
+        except (ValueError, AttributeError):
+            base_path = ""
+    factory_open = bool(config.open_factory)
+    return {
+        "oauth_urls": oauth_urls,  # Dict: {'google': url, 'github': url}
+        "oauth_providers": oauth_providers,  # name, display_name, url
+        "oauth_enabled": bool(oauth_urls),
+        "base_path": base_path,
+        "factory_open": factory_open,
+        "email_form": factory_open or form_signs_in,
+    }

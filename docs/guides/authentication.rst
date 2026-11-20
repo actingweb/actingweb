@@ -366,6 +366,22 @@ Every actor records how it came to exist in ``auth_method`` (in the
 Any marker counts as unvouched while ``email_verified`` is ``"false"``: the
 address is still waiting for its proof.
 
+To ask whether an actor is vouched, call ``ActorInterface.is_vouched()``
+(4.0) rather than reading the marker. A marker being present is not the
+test: ``factory`` and ``email_unverified`` are markers that do not vouch,
+and a creator renamed since the vouch (``Actor.modify(creator=...)``) reads
+unvouched. ``is_vouched()`` is ``True`` when a provider sign-in, the
+operator (``actingweb-mark-actors-vouched``) or the application vouched
+for the actor's *current* creator and email verification is not pending.
+It reads the ``_internal`` store afresh and raises ``DbError`` when the
+marker could not be read, so a fault never reads as unvouched or vouched:
+
+.. code-block:: python
+
+   actor = ActorInterface.get_by_id(actor_id, config)
+   if actor and not actor.is_vouched():
+       ...  # the creator address is asserted, not proven
+
 ``PUT`` and ``DELETE /<id>/trust/trustee`` (the trustee root, and with
 ``creator`` the creator) are the creator's and the trustee's only (4.0): a
 peer of any relationship, ``admin`` included, gets 403. An ``admin`` peer
@@ -1059,7 +1075,9 @@ Email verification behavior is controlled by the ``force_email_prop_as_creator``
 
    Since 4.0 ``with_unique_creator()`` is on by default and enforced by the database: a second
    actor for a creator raises ``CreatorTaken`` (409; the factory answers
-   403), and the application refuses to start until
+   403). A store with no actors enables it itself at the first start (on
+   DynamoDB with ``AWS_DB_PREFIX`` set explicitly); a store that already
+   holds actors refuses to start until
    ``actingweb-unique-creators enable --apply`` has run. Run ``report`` and
    ``resolve --apply`` first if actors already share a creator. See
    :doc:`../migration/v4.0` ("Creator uniqueness").

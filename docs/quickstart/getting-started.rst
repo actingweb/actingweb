@@ -156,8 +156,10 @@ Creating and managing actors is straightforward:
    (``POST /`` with a JSON ``{"creator": "..."}`` body), which is how a browser
    sign-up flow or an external client creates them. See
    :doc:`overview` for the HTTP request/response. The factory path runs the
-   ``actor_created`` lifecycle hook automatically. An OAuth-only deployment
-   closes it with ``.with_open_factory(False)``.
+   ``actor_created`` lifecycle hook automatically. Since 4.0 the factory is
+   closed by default once a sign-in provider builder (such as ``with_oauth``)
+   is called, as in the configuration below; ``.with_open_factory(True)``
+   opens it.
 
 Configuration
 -------------
@@ -189,14 +191,19 @@ The modern interface uses a fluent configuration API that's much simpler than th
 First run
 ---------
 
-Creator uniqueness is on by default, so the first start on a fresh database
-creates the tables and stops with ``UniqueCreatorNotReady``. Run the command
-once and start again::
+Creator uniqueness is on by default. On a store that holds no actors yet the
+first start enables it itself and serves: on DynamoDB it records the creators
+backfill, which it does only when ``AWS_DB_PREFIX`` is set explicitly; on
+PostgreSQL it builds the unique index ``ux_actors_creator``, which needs a
+role that may create an index. Otherwise the start is refused (with
+``AWS_DB_PREFIX`` unset or empty, the refusal names the prefix) and names the
+command to run before starting again::
 
-    python app.py                                    # creates the tables, then stops
     actingweb-unique-creators enable --apply
-    python app.py                                    # serves
 
+A database that already holds actors without enforcement is refused until
+``actingweb-unique-creators report``, ``resolve --apply`` and
+``enable --apply`` have run (see :doc:`../migration/v4.0`).
 ``.with_unique_creator(False)`` opts out and keeps the older, duplicate-tolerant
 behaviour.
 
@@ -226,7 +233,7 @@ Configuration methods:
 - ``.with_devtest(enable=True)`` - Enable/disable development endpoints (MUST be False in production)
 - ``.with_bot(token, email, secret, admin_room)`` - Configure bot integration
 - ``.with_unique_creator(enable=True)`` - One actor per creator, enforced by the database. **On by default**; ``False`` opts out. See the first-run note below and :doc:`../migration/v4.0`
-- ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``); close it for OAuth-only deployments
+- ``.with_open_factory(enable=True)`` - Open or close the actor factory (``POST /``). Without a call it is closed when a sign-in provider is configured and open otherwise (4.0)
 - ``.with_email_as_creator(enable=True)`` - A vouched actor's creator follows its stored ``_internal`` email, renamed where the email is written (off on ``ActingWebApp`` until called). See the first-run note below
 - ``.add_actor_type(name, factory, relationship)`` - Add known actor type
 

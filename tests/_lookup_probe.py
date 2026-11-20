@@ -85,6 +85,29 @@ def _stub_unique_creator_probe() -> None:
     ActingWebApp._check_unique_creator_ready = lambda self: None  # type: ignore[method-assign]  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.fixture(autouse=True)
+def _no_self_enable_on_the_shared_store(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared unit-test stores are never enabled: they hold deliberate
+    duplicate creators, and a PostgreSQL worker's schema is empty early in a
+    run, so a real probe there would let the empty-store self-enable (4.0)
+    build ``ux_actors_creator`` for every later test. Outside
+    ``tests/integration`` (whose stores are isolated) the enable step
+    refuses; a test about it patches it."""
+    if "/integration/" in f"/{request.node.nodeid}":
+        return
+    from actingweb.maintenance import unique_creators
+
+    def refuse(config: Any) -> None:
+        del config
+        raise unique_creators.EnableRefused(
+            "the shared unit-test store is never enabled"
+        )
+
+    monkeypatch.setattr(unique_creators, "enable_empty_store", refuse)
+
+
 @pytest.fixture
 def real_unique_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run the real creator-uniqueness readiness probe in this test."""

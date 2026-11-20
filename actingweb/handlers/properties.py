@@ -13,6 +13,7 @@ from actingweb.handlers import base_handler
 from actingweb.list_core import ListNameTakenError
 from actingweb.property_list import (
     ListCorruptionError,
+    ListItemNewerFormatError,
     ListItemSpanError,
     ListItemTooLargeError,
     ListMetadataContentionError,
@@ -28,7 +29,7 @@ from ..access_decision import (
     log_evaluator_unavailable,
     peer_of,
 )
-from ..db.exceptions import DbError
+from ..db.exceptions import DbError, after_write
 from ..identifiers import first_control_character
 from ..permission_evaluator import (
     TOO_DEEP,
@@ -125,6 +126,23 @@ def _write_list_corrupted_response(response: Any, name: str, error: Exception) -
             "remedy": getattr(error, "remedy", "compact"),
         },
     )
+
+
+def _write_list_newer_format_response(
+    response: Any, name: str, error: Exception
+) -> None:
+    """The 409 for a list, or an item of it, a later library version stored:
+    a fixed code and no detail (the detail goes to the log)."""
+    logger.warning(f"List '{name}' holds data a later version stored: {error}")
+    _write_list_error(
+        response,
+        409,
+        "List stored by a later version",
+        {"error": "list_item_newer_format", "code": "list_item_newer_format"},
+    )
+
+
+NEWER_FORMAT_MARKER: dict[str, str] = {"error": "list_item_newer_format"}
 
 
 def _write_list_item_too_large_response(
@@ -334,11 +352,12 @@ def register_list_diff(
     """Register a list diff (``build_list_diff``) for ``name`` on the
     subtarget that is the list's own name (4.0: list edits over REST and
     the web UI send list diffs, not the scalars they sent before)."""
-    myself.register_diffs(
-        target="properties",
-        subtarget=name,
-        blob=json.dumps(build_list_diff(name, operation, config=config, **fields)),
-    )
+    with after_write("diff registration after a write", getattr(myself, "id", None)):
+        myself.register_diffs(
+            target="properties",
+            subtarget=name,
+            blob=json.dumps(build_list_diff(name, operation, config=config, **fields)),
+        )
 
 
 _ITEM_INDEX_RE = re.compile(r"(?:0|[1-9][0-9]{0,17})")  # under 10**18
@@ -709,11 +728,14 @@ class PropertiesHandler(_PropertyHandlerBase):
         lists = getattr(self, "_post_lists", {})
         scalars = {k: v for k, v in pair.items() if k not in lists}
         if scalars:
-            myself.register_diffs(
-                target="properties",
-                blob=json.dumps(scalars),
-                **previous_kw(getattr(self, "_post_previous", None)),
-            )
+            with after_write(
+                "diff registration after a write", getattr(myself, "id", None)
+            ):
+                myself.register_diffs(
+                    target="properties",
+                    blob=json.dumps(scalars),
+                    **previous_kw(getattr(self, "_post_previous", None)),
+                )
         for recorder in lists.values():
             recorder.register(myself, self.config)
 
@@ -812,6 +834,9 @@ class PropertiesHandler(_PropertyHandlerBase):
         except ListMetadataContentionError as e:
             self._respond_list_metadata_contended(e)
             return
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
             return
@@ -867,6 +892,9 @@ class PropertiesHandler(_PropertyHandlerBase):
             return
         except ListItemTooLargeError as e:
             self._respond_list_item_too_large(name, e)
+            return
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
             return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
@@ -1084,6 +1112,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.write(out)
                 return
 
+            except ListItemNewerFormatError as e:
+                _write_list_newer_format_response(self.response, name, e)
+                return
             except ListCorruptionError as e:
                 self._respond_list_corrupted(name, e)
                 return
@@ -1376,6 +1407,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                     # marker, as format=full does, not a 409 for all.
                     try:
                         sizes = list_prop.sizes_from_rows(all_rows)
+                    except ListItemNewerFormatError as e:
+                        logger.warning(f"List '{list_name}': {e}")
+                        lists_info[list_name] = dict(NEWER_FORMAT_MARKER)
+                        continue
                     except ListItemSpanError as e:
                         logger.error(f"List '{list_name}' has a malformed head: {e}")
                         lists_info[list_name] = {
@@ -1404,6 +1439,10 @@ class PropertiesHandler(_PropertyHandlerBase):
                     list_prop.prime_from_rows(all_rows)
                     try:
                         items = list_prop.to_list_from_rows(all_rows)
+                    except ListItemNewerFormatError as e:
+                        logger.warning(f"List '{list_name}': {e}")
+                        pair[list_name] = {"_list": True, **NEWER_FORMAT_MARKER}
+                        continue
                     except ListItemSpanError as e:
                         # One broken span must not fail the whole response:
                         # that list is reported with an error marker.
@@ -1445,10 +1484,16 @@ class PropertiesHandler(_PropertyHandlerBase):
                 for list_name in list_names:
                     list_prop = getattr(actor_interface.property_lists, list_name)
                     list_prop.prime_from_rows(all_rows)
-                    pair[list_name] = {
-                        "_list": True,
-                        "count": len(list_prop),
-                    }
+                    try:
+                        count = len(list_prop)
+                    except ListItemNewerFormatError:
+                        # A layout a later version wrote: this list only.
+                        pair[list_name] = {"_list": True, **NEWER_FORMAT_MARKER}
+                        continue
+                    pair[list_name] = {"_list": True, "count": count}
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, e.list_name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(e.list_name, e)
             return
@@ -1650,6 +1695,9 @@ class PropertiesHandler(_PropertyHandlerBase):
             except ListItemTooLargeError as e:
                 self._respond_list_item_too_large(name, e)
                 return
+            except ListItemNewerFormatError as e:
+                _write_list_newer_format_response(self.response, name, e)
+                return
             except ListItemSpanError as e:
                 # An IndexError subclass: caught ahead of the generic arm so
                 # a broken or malformed item answers 409 with its remedy.
@@ -1732,12 +1780,15 @@ class PropertiesHandler(_PropertyHandlerBase):
                 return
             # The value stored, after the hooks (4.0; the request body
             # before them); an empty text is the encoded ``""`` a delete is.
-            myself.register_diffs(
-                target="properties",
-                subtarget=name,
-                blob=stored if stored != "" else json.dumps(""),
-                **previous_kw(previous),
-            )
+            with after_write(
+                "diff registration after a write", getattr(myself, "id", None)
+            ):
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=stored if stored != "" else json.dumps(""),
+                    **previous_kw(previous),
+                )
             self.response.set_status(204)
             return
         # Keep text blob for later diff registration
@@ -1791,13 +1842,16 @@ class PropertiesHandler(_PropertyHandlerBase):
                 # list is ListNameTakenError, answered 409 above.
                 self.response.set_status(400, str(e))
                 return
-        myself.register_diffs(
-            target="properties",
-            subtarget=name,
-            resource=resource,
-            blob=_resource_blob(final_res, path, blob),
-            whole=res,
-        )
+        with after_write(
+            "diff registration after a write", getattr(myself, "id", None)
+        ):
+            myself.register_diffs(
+                target="properties",
+                subtarget=name,
+                resource=resource,
+                blob=_resource_blob(final_res, path, blob),
+                whole=res,
+            )
         self.response.set_status(204)
 
     def _reject_control_characters(self, names: list[str]) -> bool:
@@ -2567,6 +2621,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                         ):
                             return
 
+                    except ListItemNewerFormatError as e:
+                        _write_list_newer_format_response(self.response, key, e)
+                        return
                     except ListCorruptionError as e:
                         self._respond_list_corrupted(key, e)
                         return
@@ -2722,6 +2779,9 @@ class PropertiesHandler(_PropertyHandlerBase):
                     self.response.set_status(204)
                     return
 
+                except ListItemNewerFormatError as e:
+                    _write_list_newer_format_response(self.response, name, e)
+                    return
                 except ListCorruptionError as e:
                     self._respond_list_corrupted(name, e)
                     return
@@ -2755,16 +2815,19 @@ class PropertiesHandler(_PropertyHandlerBase):
                 myself.property[name] = None
             # The encoded ``""`` (4.0): a raw one was dropped, so a REST
             # delete reached no subscription on the name itself.
-            myself.register_diffs(
-                target="properties",
-                subtarget=name,
-                blob=json.dumps(""),
-                **previous_kw(
-                    myself.previous_for_resource_subscribers(
-                        "properties", name, lambda: old_prop
-                    )
-                ),
-            )
+            with after_write(
+                "diff registration after a write", getattr(myself, "id", None)
+            ):
+                myself.register_diffs(
+                    target="properties",
+                    subtarget=name,
+                    blob=json.dumps(""),
+                    **previous_kw(
+                        myself.previous_for_resource_subscribers(
+                            "properties", name, lambda: old_prop
+                        )
+                    ),
+                )
             self.response.set_status(204)
             return
         orig = myself.property[name] if myself and myself.property else None
@@ -2798,13 +2861,16 @@ class PropertiesHandler(_PropertyHandlerBase):
         res = json.dumps(orig)
         if myself and myself.property:
             myself.property[name] = res
-        myself.register_diffs(
-            target="properties",
-            subtarget=name,
-            resource=resource,
-            blob=_resource_blob(orig, path, ""),
-            whole=res,
-        )
+        with after_write(
+            "diff registration after a write", getattr(myself, "id", None)
+        ):
+            myself.register_diffs(
+                target="properties",
+                subtarget=name,
+                resource=resource,
+                blob=_resource_blob(orig, path, ""),
+                whole=res,
+            )
         self.response.set_status(204)
 
 
@@ -2990,6 +3056,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
         list_prop = getattr(myself.property_lists, name)
         try:
             indexed = list_prop.to_indexed_list()
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             self._respond_list_corrupted(name, e)
             return
@@ -3145,6 +3214,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                     else:
                         list_prop[index] = item_value
                         update_fields = {"length": list_length_hint(list_prop)}
+                except ListItemNewerFormatError as e:
+                    _write_list_newer_format_response(self.response, name, e)
+                    return
                 except ListItemSpanError as e:
                     # A ListCorruptionError, so an IndexError too: caught
                     # here, ahead of the out-of-range arm, so a broken span
@@ -3195,6 +3267,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                 except _ConcurrentlyModified as e:
                     self._respond_list_metadata_contended(RuntimeError(str(e)))
                     return
+                except ListItemNewerFormatError as e:
+                    _write_list_newer_format_response(self.response, name, e)
+                    return
                 except ListItemSpanError as e:
                     # A ListCorruptionError, so an IndexError too: caught
                     # here, so a broken span answers 409 with its remedy,
@@ -3216,6 +3291,9 @@ class PropertyListItemsHandler(_PropertyHandlerBase):
                     self.response.set_status(400, f"Unknown action: {action}")
                 return
 
+        except ListItemNewerFormatError as e:
+            _write_list_newer_format_response(self.response, name, e)
+            return
         except ListCorruptionError as e:
             # Parity with /items GET and every other list-serving path: a
             # corrupted list is a structured 409 with a repair hint, never a

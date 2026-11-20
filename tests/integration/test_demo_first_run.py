@@ -1,10 +1,11 @@
 """The demo's README first-run sequence, on a store of its own.
 
-``examples/demo/README.md`` ("Local QA account") gives the sequence for
-every fresh deployment: start (the tables are created and the start stops
-with ``UniqueCreatorNotReady``), ``actingweb-unique-creators enable
---apply``, start again. Every other demo test stubs the readiness check, so
-nothing ran the sequence as written (release validation, 2026-11-18).
+``examples/demo/README.md`` ("Local QA account") gives the sequence for a
+fresh deployment. Since 4.0 an empty store with ``AWS_DB_PREFIX`` set
+enables creator uniqueness itself, so the first start serves (before, it
+stopped with ``UniqueCreatorNotReady`` until ``actingweb-unique-creators
+enable --apply`` ran). Every other demo test stubs the readiness check, so
+this runs the sequence as written.
 
 Each step is its own process, as an operator runs it: the DynamoDB models
 bind their table names at import, so one process cannot play a fresh store
@@ -102,16 +103,9 @@ def test_readme_first_run_sequence() -> None:
         )
 
     try:
-        first = run(str(DEMO / "application.py"))
-        assert first.returncode != 0, "the first start served; it must stop"
-        assert "UniqueCreatorNotReady" in first.stderr, first.stderr[-2000:]
-        assert "actingweb-unique-creators enable --apply" in first.stderr
-
-        enable = run("-m", "actingweb.maintenance.unique_creators", "enable", "--apply")
-        assert enable.returncode == 0, enable.stderr[-2000:]
-
-        # The second start serves (QA mode runs as the development server
-        # only, so it is started as the README starts it).
+        # The first start serves: the empty store enables uniqueness itself
+        # (QA mode runs as the development server only, so it is started as
+        # the README starts it).
         # stderr goes to a file: a pipe nobody reads fills and stalls the
         # server. Its own process group, so the reloader child stops with it.
         log = tempfile.TemporaryFile()
@@ -139,7 +133,7 @@ def test_readme_first_run_sequence() -> None:
                     # Not answering yet: refused, or accepted but too slow
                     # to answer (a busy CI runner).
                     pass
-                assert time.monotonic() < deadline, "the second start did not serve"
+                assert time.monotonic() < deadline, "the first start did not serve"
                 time.sleep(0.5)
             created = requests.post(
                 f"{url}/", json={"creator": "qa@example.test"}, timeout=30

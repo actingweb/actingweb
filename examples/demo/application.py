@@ -43,7 +43,7 @@ logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 # Create ActingWeb app with fluent configuration
 # Property-list item limits (see with_list_item_limits below).
 LIST_ITEM_SPAN_THRESHOLD = 390_000
-LIST_ITEM_MAX_BYTES = 4 * 2**20
+LIST_ITEM_MAX_BYTES = 2 * 2**20
 
 aw_app = (
     ActingWebApp(
@@ -64,10 +64,6 @@ aw_app = (
         secret=os.getenv("APP_BOT_SECRET", ""),
         admin_room=os.getenv("APP_BOT_ADMIN_ROOM", ""),
     )
-    # Open by default so the quickstart curl against POST / works. An OAuth-only
-    # production deployment sets OPEN_FACTORY=false: the unauthenticated actor
-    # factory is the only way to squat an address.
-    .with_open_factory(enable=os.getenv("OPEN_FACTORY", "true").lower() == "true")
     .with_unique_creator(enable=True)  # Each user gets one actor
     .with_email_as_creator(enable=True)  # Use email from OAuth as creator
     # ActingWebApp enables MCP by default; explicitly disabled here since
@@ -114,6 +110,13 @@ if DEMO_QA_BASIC_AUTH:
             "DEMO_QA_BASIC_AUTH is for the development server only: run "
             "python examples/demo/application.py"
         )
+# The actor factory (POST /) follows the library default unless OPEN_FACTORY
+# is set: closed with OAuth (the unauthenticated factory is the only way to
+# squat an address), open in local QA mode, where no provider is configured.
+_open_factory = os.getenv("OPEN_FACTORY", "").strip().lower()
+if _open_factory in ("true", "false"):
+    aw_app.with_open_factory(enable=_open_factory == "true")
+
 if not DEMO_QA_BASIC_AUTH:
     # OAuth2 configuration - supports Google and GitHub providers
     aw_app.with_oauth(

@@ -56,6 +56,20 @@ def is_exempt(creator: str | None) -> bool:
     return (creator or "").lower() in EXEMPT_CREATORS
 
 
+def is_system_actor(actor_id: str | None, creator: str | None) -> bool:
+    """Whether this is one of the library's system actors at its fixed id
+    with its own creator (``_actingweb_system``/``system``,
+    ``_actingweb_oauth2``/``oauth2-system``). Such an actor is created on
+    first use, possibly before an empty store is enabled, and may then be
+    written without a creator record; the enable records it."""
+    from actingweb.constants import ACTINGWEB_SYSTEM_ACTOR, OAUTH2_SYSTEM_ACTOR
+
+    return (actor_id, normalise_creator(creator)) in (
+        (ACTINGWEB_SYSTEM_ACTOR, "system"),
+        (OAUTH2_SYSTEM_ACTOR, "oauth2-system"),
+    )
+
+
 def is_reserved(creator: str | None) -> bool:
     """Whether a caller may not choose this creator: ``#…`` or ``#dup-`` in
     the value as stored (an ``@`` value is lowercased first, so ``#DUP-``

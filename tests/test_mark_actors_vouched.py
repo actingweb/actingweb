@@ -175,3 +175,179 @@ class TestEmailAsCreator:
         assert istore(Actor(actor_id=aid(actor), config=config)).email == (
             "planted@example.com"
         )
+
+
+class TestScopeAndDetail:
+    """4.0.0rc1 adoption findings: system actors are never marked (AC-2), a dry
+    run shows what it would mark on stdout (AC-3), and ``--ids-file`` limits
+    the run (AC-4)."""
+
+    def _fake_list(self, rows: list[dict[str, str]]) -> Any:
+        class _List:
+            def iter_rows(self, **kwargs: Any) -> Any:
+                yield from rows
+
+        return _List()
+
+    def _ids_file(self, tmp_path: Any, ids: list[str]) -> str:
+        path = tmp_path / "ids.txt"
+        path.write_text("\n".join(ids) + "\n")
+        return str(path)
+
+    def test_system_actors_are_never_marked(self, tmp_path: Any) -> None:
+        rows = [
+            {"id": "_actingweb_oauth2", "creator": "oauth2-system"},
+            {"id": "_actingweb_system", "creator": "system"},
+            {"id": "u1", "creator": "me@example.com"},
+        ]
+        seen: list[str] = []
+        with (
+            patch("actingweb.db.get_actor_list", lambda config: self._fake_list(rows)),
+            patch.object(
+                script,
+                "_mark_one",
+                lambda config, actor_id, **kw: seen.append(actor_id),
+            ),
+        ):
+            counts = script.mark_actors(make_config(), ids=["_actingweb_oauth2", "u1"])
+            assert seen == ["u1"]
+            assert counts["system"] == 1
+            all_counts = script.mark_actors(make_config())
+        assert "_actingweb_oauth2" not in seen[1:] and "_actingweb_system" not in seen
+        assert all_counts["system"] == 2
+
+    def test_dry_run_prints_marker_and_hides_addresses(self, capsys: Any) -> None:
+        config = make_config()
+        creator = uuid_email()
+        actor = create_core_actor(config, creator, auth_method=None)
+        script.mark_actors(config, creator=creator, dry_run=True)
+        out = capsys.readouterr().out
+        line = next(ln for ln in out.splitlines() if aid(actor) in ln)
+        assert "marker=-" in line
+        assert creator not in out
+
+    def test_show_addresses_prints_creator_and_email(self, capsys: Any) -> None:
+        config = make_config()
+        creator = uuid_email()
+        actor = create_core_actor(config, creator, auth_method="factory")
+        script.mark_actors(
+            config,
+            creator=creator,
+            dry_run=True,
+            include_factory=True,
+            show_addresses=True,
+        )
+        out = capsys.readouterr().out
+        line = next(ln for ln in out.splitlines() if aid(actor) in ln)
+        assert "marker=factory" in line
+        assert f"creator={creator}" in line
+        assert "email=" in line
+
+    def test_ids_file_limits_the_run(self, tmp_path: Any) -> None:
+        config = make_config()
+        mine, other = uuid_email(), uuid_email()
+        a = create_core_actor(config, mine, auth_method=None)
+        b = create_core_actor(config, other, auth_method=None)
+        counts = script.mark_actors(config, ids=[aid(a)])
+        assert counts["scanned"] == 1 and counts["marked"] == 1
+        assert _marker(config, aid(a)) == "operator"
+        assert _marker(config, aid(b)) is None
+
+    def test_a_listed_id_not_in_the_store_is_counted_missing(
+        self, tmp_path: Any
+    ) -> None:
+        rows = [{"id": "u1", "creator": "me@example.com"}]
+        seen: list[str] = []
+        with (
+            patch("actingweb.db.get_actor_list", lambda config: self._fake_list(rows)),
+            patch.object(
+                script,
+                "_mark_one",
+                lambda config, actor_id, **kw: seen.append(actor_id),
+            ),
+        ):
+            assert (
+                script.main(
+                    [
+                        "--dry-run",
+                        "--ids-file",
+                        self._ids_file(tmp_path, ["u1", "gone"]),
+                    ]
+                )
+                == 0
+            )
+            counts = script.mark_actors(make_config(), ids=["u1", "gone"])
+        assert seen == ["u1", "u1"]
+        assert counts["missing"] == 1
+
+    def test_unreadable_ids_file_is_a_usage_error(self, tmp_path: Any) -> None:
+        def _no_read(config: Any) -> Any:
+            raise AssertionError("the store was read")
+
+        with patch("actingweb.db.get_actor_list", _no_read):
+            with pytest.raises(SystemExit) as exc:
+                script.main(["--dry-run", "--ids-file", str(tmp_path / "nope.txt")])
+        assert exc.value.code == 2
+
+    def test_ids_file_and_creator_are_exclusive(self, tmp_path: Any) -> None:
+        with pytest.raises(SystemExit) as exc:
+            script.main(
+                [
+                    "--dry-run",
+                    "--creator",
+                    "me@example.com",
+                    "--ids-file",
+                    self._ids_file(tmp_path, ["u1"]),
+                ]
+            )
+        assert exc.value.code == 2
+
+
+class TestApplyFlag:
+    """Iteration 7 (verification issue 18): like every other writing
+    command, the marking writes only with ``--apply``; without it the run
+    is a dry run. ``--dry-run`` is still accepted."""
+
+    def _run(self, monkeypatch: Any, argv: list[str]) -> dict[str, Any]:
+        monkeypatch.setenv("DATABASE_BACKEND", "dynamodb")
+        monkeypatch.setenv("AWS_DB_PREFIX", "markapply")
+        seen: dict[str, Any] = {}
+
+        def mark_actors(config: Any, **kwargs: Any) -> dict[str, int]:
+            from collections import defaultdict
+
+            seen.update(kwargs)
+            return defaultdict(int)
+
+        monkeypatch.setattr(script, "mark_actors", mark_actors)
+        seen["status"] = script.main(argv)
+        return seen
+
+    def test_without_apply_nothing_is_written(self, monkeypatch: Any) -> None:
+        assert self._run(monkeypatch, [])["dry_run"] is True
+        assert self._run(monkeypatch, ["--dry-run"])["dry_run"] is True
+
+    def test_apply_writes(self, monkeypatch: Any) -> None:
+        assert self._run(monkeypatch, ["--apply"])["dry_run"] is False
+
+    def test_apply_and_dry_run_together_are_refused(self, monkeypatch: Any) -> None:
+        with pytest.raises(SystemExit) as exc:
+            self._run(monkeypatch, ["--apply", "--dry-run"])
+        assert exc.value.code == 2
+
+
+def test_a_dry_run_says_so_in_its_summary(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Iteration 16 (second verification, issue 3): the summary of a run
+    without ``--apply`` says nothing was written and how to write."""
+    import logging
+
+    run = TestApplyFlag()
+    with caplog.at_level(logging.INFO):
+        run._run(monkeypatch, [])  # pyright: ignore[reportPrivateUsage]
+    assert "dry run: nothing written; re-run with --apply" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        run._run(monkeypatch, ["--apply"])  # pyright: ignore[reportPrivateUsage]
+    assert "dry run" not in caplog.text

@@ -50,6 +50,13 @@ deployable on its own.
 4. Visit `http://localhost:5000` and log in. The API explorer for the demo's
    hooks is at `/{actor_id}/www/demo` once an actor exists.
 
+On a fresh table prefix the first start enables creator uniqueness itself
+(the `.env.example` sets `AWS_DB_PREFIX` explicitly, which DynamoDB needs for
+that). With OAuth configured the actor factory (`POST /`) is closed by
+default (403, and `/` shows no creation form); set `OPEN_FACTORY=true` to
+open it, or `OPEN_FACTORY=false` to close it in local QA mode, where it is
+otherwise open.
+
 ## Local QA account
 
 A browser test of the web UI cannot sign in through a real OAuth2 provider,
@@ -68,11 +75,8 @@ export AWS_DB_HOST=http://localhost:8001 AWS_DB_PREFIX=demoqa \
   AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local AWS_DEFAULT_REGION=us-east-1
 export PORT=5055 APP_HOST_FQDN=localhost:5055 APP_HOST_PROTOCOL=http:// \
   DEMO_QA_BASIC_AUTH=true
-# The sequence for every fresh deployment, not only the demo: creator
-# uniqueness is on by default, so the first start creates the tables and
-# stops with UniqueCreatorNotReady; enforce uniqueness, then start again.
-poetry run python examples/demo/application.py
-poetry run actingweb-unique-creators enable --apply
+# Creator uniqueness is on by default. On a fresh prefix (no actors yet,
+# AWS_DB_PREFIX set explicitly) the first start enables it itself and serves.
 poetry run python examples/demo/application.py
 
 # In another shell: a throwaway account. The response carries the id and

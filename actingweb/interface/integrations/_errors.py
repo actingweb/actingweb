@@ -18,7 +18,12 @@ import logging
 from typing import Any
 
 from actingweb.constants import ERROR_CODE_HEADER
-from actingweb.db.exceptions import CreatorTaken, DbError, DeletionInProgress
+from actingweb.db.exceptions import (
+    CreatorTaken,
+    DbError,
+    DbErrorAfterWrite,
+    DeletionInProgress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,41 @@ CONFLICT_BODY: dict[str, str] = {
     "error": "conflict",
     "message": "Creator already exists",
 }
+
+STORED_NOT_NOTIFIED_BODY: dict[str, str] = {
+    "error": "stored_not_notified",
+    "message": "The change was stored; its subscribers were not notified",
+}
+
+NEWER_FORMAT_BODY: dict[str, str] = {
+    "error": "list_item_newer_format",
+    "message": "This list holds data a later library version stored",
+}
+
+
+def newer_format_answer() -> tuple[int, dict[str, str], dict[str, str]]:
+    """The fixed 409 for ``ListItemNewerFormatError``: no stored text, no
+    list or rank name (the detail goes to the log)."""
+    return (
+        409,
+        {ERROR_CODE_HEADER: NEWER_FORMAT_BODY["error"]},
+        {**NEWER_FORMAT_BODY, "code": NEWER_FORMAT_BODY["error"]},
+    )
+
+
+def find_newer_format(exc: BaseException) -> BaseException | None:
+    """The ``ListItemNewerFormatError`` this is or was raised from."""
+    from actingweb.list_core import ListItemNewerFormatError
+
+    current: BaseException | None = exc
+    for _ in range(4):
+        if current is None:
+            return None
+        if isinstance(current, ListItemNewerFormatError):
+            return current
+        current = current.__cause__
+    return None
+
 
 INTERNAL_BODY: dict[str, str] = {
     "error": "internal_error",
@@ -100,6 +140,14 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
             },
             {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
         )
+    if isinstance(exc, DbErrorAfterWrite):
+        # The change is stored: no Retry-After, which would invite a retry
+        # that, for an unkeyed append, adds a second item.
+        return (
+            503,
+            {ERROR_CODE_HEADER: STORED_NOT_NOTIFIED_BODY["error"]},
+            {**STORED_NOT_NOTIFIED_BODY, "code": STORED_NOT_NOTIFIED_BODY["error"]},
+        )
     if isinstance(exc, DbError):
         if is_permanent(exc):
             return (
@@ -155,11 +203,17 @@ def map_db_error(
     False, touching nothing, when ``exc`` is not a database fault, so the
     caller's own mapping runs.
     """
-    fault = find_db_error(exc)
-    if fault is None:
+    newer = find_newer_format(exc)
+    fault = find_db_error(exc) if newer is None else None
+    if newer is None and fault is None:
         return False
-    status, headers, body = db_error_answer(fault)
-    log_db_error(fault)
+    if newer is not None:
+        logger.warning(f"Refused data a later library version stored: {newer}")
+        status, headers, body = newer_format_answer()
+    else:
+        assert fault is not None
+        status, headers, body = db_error_answer(fault)
+        log_db_error(fault)
     response.set_status(status, reason_phrase(status))
     # Whatever the handler queued before the fault does not go out with it:
     # a redirect would replace the fault answer with a 302, and a cookie set

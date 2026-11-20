@@ -212,7 +212,9 @@ records. If the permission system itself fails, the result is empty
 actor has no such lists". Everything else about the three methods --
 ``prefix`` semantics, the cost contrast with the whole-partition read, and
 that ``list_prefix_with_rows()`` raises ``ValueError`` on an empty prefix
-and ``DbError`` on a backend fault -- is exactly as documented for the
+and that both ``*_with_rows()`` methods raise ``DbError`` on a store fault
+(only a permission-system error folds to the empty result) -- is exactly as
+documented for the
 unauthenticated store in :doc:`/guides/property-lists`.
 
 Before 3.14.3 these calls fell through ``__getattr__`` and raised

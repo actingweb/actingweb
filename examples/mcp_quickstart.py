@@ -10,9 +10,10 @@ code.
 
 Run with: python examples/mcp_quickstart.py
 
-First run on a fresh database: creator uniqueness is on by default, so the
-first start creates the tables and stops with ``UniqueCreatorNotReady``. Run
-``actingweb-unique-creators enable --apply`` and start again. (Add
+First run on a fresh database: creator uniqueness is on by default, and the
+first start on a store with no actors enables it itself. On DynamoDB set
+``AWS_DB_PREFIX`` explicitly; without it the start is refused and names
+``actingweb-unique-creators enable --apply``. (Add
 ``.with_unique_creator(False)`` to the app to opt out.)
 """
 

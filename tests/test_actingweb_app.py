@@ -535,6 +535,32 @@ class TestSpaCorsOrigins:
 
         assert app._mcp_instructions == "Call how_to_use()"
 
+    def test_a_second_with_mcp_keeps_earlier_options(self):
+        """AC-51: a later with_mcp() changes only the options it names."""
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            app = ActingWebApp(aw_type="urn:actingweb:test:mcp")
+            app.with_mcp(
+                server_name="emm",
+                instructions="Call how_to_use()",
+                require_auth_for_initialize=True,
+                require_pkce=False,
+            )
+            app.with_mcp()
+            config = app.get_config()
+
+        assert config.mcp is True
+        assert config.mcp_server_name == "emm"
+        assert config.mcp_instructions == "Call how_to_use()"
+        assert config.mcp_require_auth_for_initialize is True
+        assert config.mcp_require_pkce is False
+
+    def test_mcp_option_defaults(self):
+        with patch.object(ActingWebApp, "_initialize_permission_system"):
+            config = ActingWebApp(aw_type="urn:actingweb:test:mcp").get_config()
+
+        assert config.mcp_require_auth_for_initialize is False
+        assert config.mcp_require_pkce is True
+
     def test_with_unique_creator(self):
         """Test with_unique_creator enables unique creator constraint."""
         with patch.object(ActingWebApp, "_initialize_permission_system"):
@@ -752,7 +778,7 @@ class TestListItemLimits:
     def test_omitted_arguments_keep_backend_defaults(self):
         dynamo = self._app("dynamodb").with_list_item_limits()
         assert dynamo.get_config().list_item_span_threshold == 390_000
-        assert dynamo.get_config().list_item_max_bytes == 4 * 2**20
+        assert dynamo.get_config().list_item_max_bytes == 2 * 2**20
         pg = self._app("postgresql").with_list_item_limits()
         assert pg.get_config().list_item_span_threshold is None
         assert pg.get_config().list_item_max_bytes is None
@@ -781,7 +807,7 @@ class TestListItemLimits:
         with pytest.raises(ValueError, match="at least"):
             app.with_list_item_limits(max_bytes=100_000)
         # Nothing was stored by the refused call.
-        assert app.get_config().list_item_max_bytes == 4 * 2**20
+        assert app.get_config().list_item_max_bytes == 2 * 2**20
         # Lowering both together is fine.
         app.with_list_item_limits(span_threshold=50_000, max_bytes=100_000)
         assert app.get_config().list_item_max_bytes == 100_000

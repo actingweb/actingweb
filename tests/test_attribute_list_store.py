@@ -87,7 +87,7 @@ class TestExistsAndListAll:
         assert counts.get("get_attr_range", 0) == 0
         assert counts.get("get_last_attr_in_range", 0) <= 3 * 2 + 1
 
-    def test_a_fault_answers_empty_or_raises_when_strict(self, env):
+    def test_a_fault_raises_when_strict(self, env):
         from actingweb.db.exceptions import DbError
 
         config, _ = env
@@ -99,9 +99,27 @@ class TestExistsAndListAll:
                 raise DbError("throttled")
 
         config.DbAttribute.DbAttribute = Faulty
-        assert _store(config).list_all() == []
         with pytest.raises(DbError):
             _store(config).list_all(strict=True)
+
+    def test_list_all_raises_on_a_fault(self, env):
+        """AC-44 (4.0): raises by default, as PropertyListStore.list_all()
+        does; ``strict`` is an accepted no-op keyword."""
+        from actingweb.db.exceptions import DbError
+
+        config, _ = env
+        _lst(config, "a").append("x")
+        base = config.DbAttribute.DbAttribute
+
+        class Faulty(base):  # type: ignore[misc,valid-type]
+            def get_last_attr_in_range(self, *a: Any, **k: Any) -> Any:
+                raise DbError("throttled")
+
+        config.DbAttribute.DbAttribute = Faulty
+        with pytest.raises(DbError):
+            _store(config).list_all()
+        with pytest.raises(DbError):
+            _store(config).list_all(strict=False)
 
     def test_list_all_never_reads_a_whole_bucket(self):
         """A source guard beside the existing ones: no get_bucket() in the

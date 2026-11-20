@@ -42,6 +42,36 @@ def _shown_host(redirect_uri: str) -> str:
     return f"{host}:{port}" if host and port else host
 
 
+def pkce_required(config: Any) -> bool:
+    """Whether the built-in authorisation server requires PKCE from every
+    client (``with_mcp(require_pkce=...)``, default True)."""
+    return bool(getattr(config, "mcp_require_pkce", True))
+
+
+def warn_missing_challenge(
+    client_id: str, stage: str, *, form_post: bool = False
+) -> None:
+    """The server-side WARNING for a refusal for a missing PKCE challenge:
+    the 400 a client sees cannot say what the operator has to do."""
+    if form_post:
+        logger.warning(
+            f"Authorization for client {client_id} refused: the authorise form "
+            "was posted without a code_challenge. A custom "
+            "aw-oauth-authorization-form.html must carry the hidden fields "
+            "code_challenge and code_challenge_method from the request it was "
+            "shown for (the default template does). "
+            "with_mcp(require_pkce=False) restores the 4.0.0rc1 rule while the "
+            "form is fixed."
+        )
+        return
+    logger.warning(
+        f"Authorization for client {client_id} refused at {stage}: no PKCE "
+        "code_challenge. PKCE is required from every client; "
+        "with_mcp(require_pkce=False) restores the 4.0.0rc1 rule (public "
+        "clients only)."
+    )
+
+
 class ActingWebOAuth2Server:
     """
     ActingWeb OAuth2 Authorization Server for MCP clients.
@@ -239,10 +269,17 @@ class ActingWebOAuth2Server:
                         "invalid_request",
                         "code_challenge must be 43-128 characters of [A-Za-z0-9._~-]",
                     )
-            elif client_data.get("token_endpoint_auth_method") == "none":
-                # For public clients (auth method "none"), PKCE is required
+            elif (
+                pkce_required(self.config)
+                or client_data.get("token_endpoint_auth_method") == "none"
+            ):
+                # PKCE from every client (4.0); with_mcp(require_pkce=False)
+                # keeps the 4.0.0rc1 rule: public clients only.
+                warn_missing_challenge(
+                    str(client_id), "authorize", form_post=method == "POST"
+                )
                 return self._error_response(
-                    "invalid_request", "code_challenge required for public clients"
+                    "invalid_request", "code_challenge is required (PKCE, S256)"
                 )
 
             if method == "GET":
@@ -441,6 +478,13 @@ class ActingWebOAuth2Server:
             if not client_id or not redirect_uri:
                 return self._error_response(
                     "invalid_request", "Invalid MCP context in state"
+                )
+            if not code_challenge and pkce_required(self.config):
+                # A state minted before PKCE was required, or by a process
+                # with the opt-out: refused before the provider code is used.
+                warn_missing_challenge(str(client_id), "callback")
+                return self._error_response(
+                    "invalid_request", "code_challenge is required (PKCE, S256)"
                 )
 
             # Select the correct authenticator based on provider in MCP state
@@ -657,12 +701,14 @@ class ActingWebOAuth2Server:
         if not client_data:
             return self._error_response("invalid_client", "Invalid client credentials")
 
-        # PKCE validation for public clients
-        if client_data.get("token_endpoint_auth_method") == "none":
-            if not code_verifier:
-                return self._error_response(
-                    "invalid_request", "code_verifier required for public clients"
-                )
+        # PKCE: a verifier from every client (4.0); with the opt-out, from
+        # public clients only (the 4.0.0rc1 rule). The verifier is checked
+        # against the code's challenge in exchange_authorization_code.
+        if not code_verifier and (
+            pkce_required(self.config)
+            or client_data.get("token_endpoint_auth_method") == "none"
+        ):
+            return self._error_response("invalid_request", "code_verifier is required")
 
         # Exchange authorization code for ActingWeb token
         token_response = self.token_manager.exchange_authorization_code(
@@ -807,10 +853,12 @@ class ActingWebOAuth2Server:
             # scope being listed would otherwise re-prompt for authorization.
             "scopes_supported": ["mcp", "offline_access"],
             "response_types_supported": ["code"],
+            # client_credentials is not offered: an anonymous registration
+            # may not use it (an actor's owner creates such a client with
+            # OAuth2ClientManager.create_client, and that client still can).
             "grant_types_supported": [
                 "authorization_code",
                 "refresh_token",
-                "client_credentials",
             ],
             "token_endpoint_auth_methods_supported": [
                 "client_secret_post",
@@ -1102,6 +1150,11 @@ class ActingWebOAuth2Server:
         from ..oauth2 import create_oauth2_trust_relationship
 
         client_id = str(record["client_id"])
+        if not record.get("code_challenge") and pkce_required(self.config):
+            warn_missing_challenge(client_id, "code creation")
+            return self._error_response(
+                "invalid_request", "code_challenge is required (PKCE, S256)"
+            )
         email = str(record.get("email") or "")
         trust_type = str(record["trust_type"])
         registry = getattr(self.config, "service_registry", None)
@@ -1213,7 +1266,12 @@ class ActingWebOAuth2Server:
         application's ``oauth2_trust_requested`` hooks; ``decide_trust``
         replaces them with a callable of the caller's (a route that already
         asked its hooks passes ``decide_trust=lambda actor, trust_type,
-        **info: trust_type``, or they run twice)."""
+        **info: trust_type``, or they run twice).
+
+        ``code_challenge`` and ``code_challenge_method`` are the ones the
+        client sent to the route: PKCE is required from every client, so
+        without a challenge the call answers ``invalid_request`` before any
+        hook or write, unless ``with_mcp(require_pkce=False)``."""
         from .. import session_generation
         from ..permission_integration import (
             client_trust_type_acceptable,
@@ -1226,6 +1284,11 @@ class ActingWebOAuth2Server:
             return self._error_response("invalid_client", "Unknown client")
         if not self.client_registry.validate_redirect_uri(client_id, redirect_uri):
             return self._error_response("invalid_request", "Invalid redirect_uri")
+        if not code_challenge and pkce_required(self.config):
+            warn_missing_challenge(client_id, "complete_client_authorization")
+            return self._error_response(
+                "invalid_request", "code_challenge is required (PKCE, S256)"
+            )
         requested = trust_type or default_client_trust_type(self.config)
         per_client = client_data.get("allowed_trust_types")
         if not client_trust_type_acceptable(self.config, requested) or (

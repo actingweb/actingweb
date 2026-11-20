@@ -277,6 +277,18 @@ class TestTheSweep:
         assert counts["moved"] == 0 and counts["changed"] == 0
         assert _creator(enforced_store, aid) == creator
 
+    def test_sweep_counts_unvouched(self, enforced_store: Any) -> None:
+        """An actor the sweep passes because it is not vouched for its
+        creator is counted: the marking comes first (AC-5)."""
+        creator = _email()
+        aid = _actor(enforced_store, creator, email=_email(), auth="factory")
+        counts = _sweep(enforced_store, only=creator)
+        assert counts["unvouched"] == 1 and counts["moved"] == 0
+        assert _creator(enforced_store, aid) == creator
+        vouched = _email()
+        _actor(enforced_store, vouched, email=vouched)
+        assert _sweep(enforced_store, only=vouched)["unvouched"] == 0
+
     def test_no_address_is_printed_unless_asked(
         self, enforced_store: Any, caplog: pytest.LogCaptureFixture
     ) -> None:

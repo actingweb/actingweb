@@ -74,22 +74,17 @@ class AttributeListStore:
         A skip-scan, never a whole-bucket read: one "greatest name below
         the cursor" read per list (and per row of a list still in the old
         layout's metadata), jumping past a list's item rows as a block.
-        ``strict=True`` raises ``DbError`` on a fault instead of answering
-        ``[]`` (a caller deleting what it lists must not read a fault as
-        "nothing to delete").
+        A fault raises ``DbError`` (4.0, as ``PropertyListStore.list_all()``;
+        it answered ``[]``, and a caller deleting what it lists must not read
+        a fault as "nothing to delete"). ``strict`` is accepted and ignored.
 
         Known gap: a list whose name continues another list's name with
         ``-#`` (``a-#x``, possible only for a pre-4.0 list) or ``:<digit>``
         (``a:1x``, of either layout) beside that list has its rows inside the
         other list's item block, which the walk jumps, and is not listed.
         """
-        try:
-            return self._skip_scan()
-        except Exception as e:  # folds DbError: documented [] unless strict
-            if strict:
-                raise
-            logger.error(f"Error in list_all(): {e}")
-            return []
+        del strict  # accepted for callers written before 4.0
+        return self._skip_scan()
 
     def _skip_scan(self, on_read: Callable[[], None] | None = None) -> list[str]:
         """``list_all()``'s walk; ``on_read`` runs before each read (the
@@ -130,17 +125,13 @@ class AttributeListStore:
         Reads every row whose name starts ``list:`` (that is what the rows
         are for). A list still in the old layout is named, but its rows are
         not in the format ``to_list_from_rows()`` reads until its first
-        change converts it. On a fault this returns ``([], {})``, as
-        ``PropertyListStore.list_all_with_rows()`` does."""
+        change converts it. A fault raises ``DbError``, as
+        ``PropertyListStore.list_all_with_rows()`` does (4.0)."""
         storage = self._storage()
         if storage is None:
             return [], {}
-        try:
-            rows = storage.get_prefix("list:")
-            names = self._skip_scan()
-        except Exception as e:  # folds DbError: documented ([], {}) on error
-            logger.error(f"Error in list_all_with_rows(): {e}")
-            return [], {}
+        rows = storage.get_prefix("list:")
+        names = self._skip_scan()
         return names, rows
 
     def list_prefix_with_rows(self, prefix: str) -> tuple[list[str], dict[str, str]]:

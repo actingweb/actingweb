@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from actingweb.db.exceptions import DbError, DeletionInProgress
+from actingweb.maintenance._common import preflight
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +423,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     args = _build_parser().parse_args(argv)
+    refused = preflight(PROG, writing=bool(getattr(args, "apply", False)))
+    if refused is not None:
+        return refused
     handlers = {"report": cmd_report, "resume": cmd_resume, "clear": cmd_clear}
     try:
         return handlers[args.command](args)

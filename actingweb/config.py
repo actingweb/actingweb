@@ -113,6 +113,30 @@ class Config:
     DbSubscriptionDiff: "ModuleType"
     DbSubscriptionSuspension: "ModuleType"
 
+    @property
+    def open_factory(self) -> bool:
+        """Whether the actor factory (``POST /``) accepts requests.
+
+        An assigned value (``with_open_factory()``, ``Config(open_factory=)``
+        or an assignment) wins. Unset, the factory is closed when a sign-in
+        provider is configured (4.0): an unauthenticated factory is the only
+        way to create an actor for an address nobody has proven, and with a
+        provider the sign-in creates actors. Resolved when read, so a
+        provider builder called after the Config was built still closes it.
+        """
+        if self._open_factory_setting is not None:
+            return self._open_factory_setting
+        return not self.provider_configured
+
+    @open_factory.setter
+    def open_factory(self, value: bool) -> None:
+        self._open_factory_setting = bool(value)
+
+    @property
+    def open_factory_is_default(self) -> bool:
+        """True when nobody set ``open_factory``: the value is the default."""
+        return self._open_factory_setting is None
+
     def __init__(self, **kwargs: Any) -> None:
         #########
         # Basic settings for this app
@@ -134,10 +158,14 @@ class Config:
         self.devtest = True
         # Will enforce unique creator field across all actors
         self.unique_creator = True
-        # Whether the actor factory (``POST /``) accepts requests. Set False for
-        # an OAuth-only deployment: the unauthenticated factory is the only way
-        # to create an actor for an address nobody has proven.
-        self.open_factory = True
+        # Whether the actor factory (``POST /``) accepts requests: see the
+        # ``open_factory`` property. None = not set; the factory is then
+        # closed when a sign-in provider was configured (4.0).
+        self._open_factory_setting: bool | None = None
+        # Set by ActingWebApp when any provider builder was called
+        # (with_oauth, with_github, with_apple_sign_in, with_google_native),
+        # whatever the credential values.
+        self.provider_configured = False
         # Use "email" internal value to set creator value (after creation and property set)
         self.force_email_prop_as_creator = True
         # basic or oauth: basic for creator + bearer tokens
@@ -216,7 +244,7 @@ class Config:
         #########
         # Defaults depend on the backend: one with a row cap (DynamoDB) spans
         # an item over 390,000 encoded bytes across several rows and refuses
-        # one over 4 MiB; one without (PostgreSQL) never spans and sets no
+        # one over 2 MiB; one without (PostgreSQL) never spans and sets no
         # ceiling. The backend is the one the kwargs below select, so the
         # defaults are resolved against it before the kwargs loop can
         # override either value. Set them with
@@ -455,6 +483,13 @@ class Config:
         self.mcp: bool = kwargs.get("mcp", False)
         self.mcp_server_name = kwargs.get("mcp_server_name", "actingweb")
         self.mcp_instructions: str | None = kwargs.get("mcp_instructions", None)
+        # An unauthenticated MCP initialize answers 401 (with_mcp option).
+        self.mcp_require_auth_for_initialize: bool = bool(
+            kwargs.get("mcp_require_auth_for_initialize", False)
+        )
+        # PKCE from every client of the built-in authorisation server; False
+        # restores the 4.0.0rc1 rule (public clients at authorise only).
+        self.mcp_require_pkce: bool = bool(kwargs.get("mcp_require_pkce", True))
 
         # These are the supported formats
         self.aw_formats = "json"
@@ -510,7 +545,7 @@ class Config:
         """The largest encoded property-list item, in bytes, the library
         stores (``None``: no ceiling). A **storage** bound, checked before
         any write; the request-size limit at the deployment's edge is the
-        ingress guard. Defaults to 4 MiB on a backend with a row cap and
+        ingress guard. Defaults to 2 MiB on a backend with a row cap and
         ``None`` on one without."""
         return self._list_item_max_bytes
 

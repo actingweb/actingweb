@@ -48,7 +48,14 @@ from .list_core import (
     ListLayoutConflictError,
     _v2_is_rank,
 )
-from .property_list_span import AUX_SUFFIX, encode_item, parse, value_digest, wrap
+from .property_list_span import (
+    AUX_SUFFIX,
+    NewerFormatError,
+    encode_item,
+    parse,
+    value_digest,
+    wrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +589,7 @@ class ListAttribute(ListCore):
                 return True
         try:
             env = parse(raw)
-        except ValueError:
+        except (ValueError, NewerFormatError):
             return False
         if env is None or env.span is None or env.span.sha256 is None:
             return False
@@ -596,7 +603,7 @@ class ListAttribute(ListCore):
             return False
         try:
             env = parse(stored)
-        except ValueError:
+        except (ValueError, NewerFormatError):
             return False
         theirs = env.span if env is not None else None
         return theirs is not None and theirs.sha256 == span.sha256
@@ -784,6 +791,9 @@ class ListAttribute(ListCore):
         included), leaving an empty list in the core's layout."""
         if not self._db:
             raise RuntimeError("No database connection available")
+        # A layout a later version wrote is refused before the old-layout
+        # sweep below can read its rows as residue.
+        self._read_meta_row()
         # The core's clear() sweeps the old layout through _foreign_rows().
         self._layout = "v2"
         super().clear()
@@ -794,6 +804,9 @@ class ListAttribute(ListCore):
         if not self._db:
             raise RuntimeError("No database connection available")
         self._invalidate_cache()
+        # A layout a later version wrote is refused before anything goes;
+        # a damaged meta row is not (any stored list can be deleted).
+        self._refuse_newer_layout_only()
         self._foreign_rows(sweep=True)
         self._v2_delete()
         self._layout = None

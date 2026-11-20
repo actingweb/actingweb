@@ -223,24 +223,23 @@ class TestMCPResourceTemplates:
         """
         initialize_mcp_session(oauth2_client)
 
-        # List resources to find templated ones
+        # resources/templates/list answers with the templated resources
+        # (AC-33); resources/list keeps listing them too.
         response = oauth2_client.post(
             "/mcp",
-            json={"jsonrpc": "2.0", "method": "resources/list", "id": 8},
+            json={"jsonrpc": "2.0", "method": "resources/templates/list", "id": 8},
             headers={"Content-Type": "application/json"},
         )
 
         assert response.status_code == 200
         data = response.json()
-
-        if "result" in data and "resourceTemplates" in data["result"]:
-            templates = data["result"]["resourceTemplates"]
-            assert isinstance(templates, list)
-
-            for template in templates:
-                assert "uriTemplate" in template
-                assert "name" in template
-                # mimeType is optional
+        assert "result" in data, data
+        templates = data["result"]["resourceTemplates"]
+        assert isinstance(templates, list)
+        for template in templates:
+            assert "{" in template["uriTemplate"]
+            assert "name" in template
+            assert "uri" not in template
 
 
 class TestMCPResourceSubscriptions:

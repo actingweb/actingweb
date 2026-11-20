@@ -33,8 +33,15 @@ def env() -> tuple[ActingWebOAuth2Server, MemoryStore]:
 
 def _tokens_for(server: ActingWebOAuth2Server, client_id: str) -> dict[str, Any]:
     tm = server.token_manager
-    code = tm.create_authorization_code("actor-1", client_id, {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, client_id)
+    # PKCE is required from every client (4.0): the code carries a challenge.
+    code = tm.create_authorization_code(
+        "actor-1",
+        client_id,
+        {"access_token": "g"},
+        code_challenge=VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(code, client_id, code_verifier=VERIFIER)
     assert tokens
     return tokens
 
@@ -202,6 +209,35 @@ class TestGrants:
                 }
             )
         assert load.call_count == 1
+
+
+class TestDiscovery:
+    """AC-36: discovery does not offer client_credentials (an anonymous
+    registration may not use it); an owner-created client still can."""
+
+    def test_discovery_does_not_offer_client_credentials(self, env: Any) -> None:
+        server, _ = env
+        doc = server.handle_discovery_request()
+        assert "client_credentials" not in doc["grant_types_supported"]
+        assert "authorization_code" in doc["grant_types_supported"]
+
+    def test_an_owner_created_client_still_uses_the_grant(self, env: Any) -> None:
+        server, _ = env
+        manager = OAuth2ClientManager("actor-owner", server.config)
+        with no_actor_store():
+            client = manager.create_client("SDK")
+        with mock.patch(
+            "actingweb.oauth2_server.oauth2_server.get_actingweb_oauth2_server",
+            return_value=server,
+        ):
+            resp = server.handle_token_request(
+                {
+                    "grant_type": "client_credentials",
+                    "client_id": client["client_id"],
+                    "client_secret": client["client_secret"],
+                }
+            )
+        assert resp.get("access_token"), resp
 
 
 class TestClientManager:

@@ -15,6 +15,7 @@ import pytest
 from actingweb import config as config_module
 from actingweb.constants import OAUTH2_SYSTEM_ACTOR, REFRESH_TOKEN_INDEX_BUCKET
 from actingweb.oauth2_server.token_manager import ActingWebTokenManager
+from tests.mcp_token_double import PKCE_VERIFIER
 
 DATABASE_BACKEND = os.environ.get("DATABASE_BACKEND", "dynamodb")
 CLIENT = "mcp_backend_rotation"
@@ -26,10 +27,19 @@ def tm() -> ActingWebTokenManager:
 
 
 def _login(tm: ActingWebTokenManager, actor_id: str) -> dict:
-    code = tm.create_authorization_code(actor_id, CLIENT, {"access_token": "g"})
-    tokens = tm.exchange_authorization_code(code, CLIENT)
+    code = tm.create_authorization_code(
+        actor_id,
+        CLIENT,
+        {"access_token": "g"},
+        code_challenge=PKCE_VERIFIER,
+        code_challenge_method="plain",
+    )
+    tokens = tm.exchange_authorization_code(code, CLIENT, code_verifier=PKCE_VERIFIER)
     assert tokens is not None
-    assert tm.exchange_authorization_code(code, CLIENT) is None  # single-use
+    assert (
+        tm.exchange_authorization_code(code, CLIENT, code_verifier=PKCE_VERIFIER)
+        is None
+    )  # single-use
     return tokens
 
 

@@ -389,7 +389,12 @@ Event Details
     that proved the creator address (a provider login or the emailed
     verification link) replaced or cleaned an actor nobody vouched for. May
     fire more than once for one actor: two concurrent first sign-ins both run
-    the rule.
+    the rule. Whether or not the hook is registered, each adoption also logs
+    one WARNING line an operator can grep, with ids and markers only (never
+    the creator or an email address): ``ACTOR_ADOPTED: actor=<id>
+    mode=<cleaned|replaced> previous_auth_method=<marker>
+    previous_actor=<id|-> provider=<name>``, followed by the counts; an
+    adoption announced by a later sign-in carries ``announced_later=true``.
 
     **Signature**: ``func(actor: ActorInterface, previous_auth_method: str,
     previous_actor_id: str | None, provider: str | None, mode: str,

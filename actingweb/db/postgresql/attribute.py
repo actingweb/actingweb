@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from actingweb.db.exceptions import AttributeKeyCollision, DbError
+from actingweb.db.exceptions import AttributeKeyCollision, DbError, require_json
 from actingweb.db.postgresql.connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -420,6 +420,7 @@ class DbAttribute:
         Raises:
             DbError: on a backend fault
         """
+        require_json(data, "attribute data")
         if not actor_id or not name or not bucket:
             return False
 
@@ -613,6 +614,7 @@ class DbAttribute:
         Returns:
             True if update succeeded (current matched old_data), False otherwise
         """
+        require_json(new_data, "attribute data")
         if not actor_id or not bucket or not name:
             return False
 
@@ -686,6 +688,7 @@ class DbAttribute:
         written) is followed by one read: JSONB-equal stored data means the
         row is this call's own.
         """
+        require_json(data, "attribute data")
         if not actor_id or not bucket or not name:
             raise ValueError("create_attr_if_absent needs actor_id, bucket and name")
 
@@ -872,6 +875,7 @@ class DbAttribute:
         actor_id: str, bucket: str, name: str, data: Any
     ) -> bool:
         """Create the row; True only when this call created it."""
+        require_json(data, "attribute data")
         return name in DbAttribute.create_attrs_if_not_exist(
             actor_id, bucket, {name: data}
         )
@@ -885,6 +889,7 @@ class DbAttribute:
         ``AttributeKeyCollision``, and the statement is rolled back: none of
         the batch is created (DynamoDB creates row by row and may have
         created some before it raises)."""
+        require_json(rows, "attribute data")
         if not rows:
             return set()
         values = []
@@ -933,6 +938,7 @@ class DbAttribute:
         actor_id: str, bucket: str, name: str, expected: str, data: Any
     ) -> bool:
         """Replace the row's data when it equals ``expected`` exactly."""
+        require_json(data, "attribute data")
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -1002,6 +1008,7 @@ class DbAttribute:
     def put_attr(actor_id: str, bucket: str, name: str, data: Any) -> None:
         """Write the row unconditionally within the bucket. A falsy ``data``
         is refused (``ValueError``), never turned into a delete."""
+        require_json(data, "attribute data")
         if not data:
             raise ValueError("put_attr does not store falsy data")
         try:

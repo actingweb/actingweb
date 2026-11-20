@@ -1933,7 +1933,9 @@ class Actor:
                     timeout=(5, 10),
                     headers={"Content-Type": "application/json"},
                 )
-                if response:
+                # Not ``if response``: a requests Response is falsy for any
+                # 4xx or 5xx, which would leave the code of an earlier call.
+                if response is not None:
                     self.last_response_code = response.status_code
                     self.last_response_message = (
                         response.content.decode("utf-8", "ignore")
@@ -1944,6 +1946,14 @@ class Actor:
                 logger.debug("Not able to create new peer actor")
                 self.last_response_code = 408
             logger.info(f"Created peer actor, response code: {self.last_response_code}")
+            if self.last_response_code in (401, 403):
+                # A 4.0 peer with a sign-in provider closes its factory by
+                # default: its operator opens it with with_open_factory(True).
+                logger.warning(
+                    f"The peer factory {factory} refused the trustee creation "
+                    f"({self.last_response_code}): its factory is closed; the "
+                    "peer's application opens it with with_open_factory(True)"
+                )
             if self.last_response_code < 200 or self.last_response_code > 299:
                 return None
             try:
@@ -2043,7 +2053,7 @@ class Actor:
                     headers=headers,
                     timeout=(5, 10),
                 )
-                if response:
+                if response is not None:  # a 4xx Response is falsy
                     self.last_response_code = response.status_code
                     self.last_response_message = (
                         response.content.decode("utf-8", "ignore")

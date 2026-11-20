@@ -75,6 +75,18 @@ def _logout_outcome(handler_response: Any) -> tuple[bool, str]:
 # Pydantic Models for Type Safety
 
 
+async def _newer_format_handler(request: Request, exc: Exception) -> JSONResponse:
+    """The app-level answer for ``ListItemNewerFormatError``."""
+    from ._errors import newer_format_answer
+
+    del request
+    logging.getLogger(__name__).warning(
+        f"Refused data a later library version stored: {exc}"
+    )
+    status, headers, body = newer_format_answer()
+    return JSONResponse(content=body, status_code=status, headers=headers)
+
+
 def _db_error_handler(aw_app: Any) -> Callable[..., Any]:
     """The app-level answer for a ``DbError`` (see ``_errors.py``).
 
@@ -636,6 +648,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         # consumer route calling ActorInterface, answers 503 (409 for
         # CreatorTaken) instead of a 500.
         self.fastapi_app.add_exception_handler(DbError, _db_error_handler(aw_app))
+        # Data a later library version stored: a fixed 409, never str(e).
+        from ...list_core import ListItemNewerFormatError
+
+        self.fastapi_app.add_exception_handler(
+            ListItemNewerFormatError, _newer_format_handler
+        )
 
     async def _run_in_executor_with_context(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -978,11 +996,12 @@ class FastAPIIntegration(BaseActingWebIntegration):
         @self.fastapi_app.get("/mcp")
         @self.fastapi_app.post("/mcp")
         async def app_mcp(request: Request) -> Response:  # pyright: ignore[reportUnusedFunction]
-            # POST initialize, ping, any ``notifications/*`` message sent
-            # without an ``id`` and a client's JSON-RPC response (both answered
-            # 202 with no body) are the only unauthenticated MCP requests;
-            # everything else — including a GET — is answered with the 401
-            # challenge by the handler.
+            # POST initialize (unless with_mcp(require_auth_for_initialize=
+            # True)), ping, any ``notifications/*`` message sent without an
+            # ``id`` and a client's JSON-RPC response (both answered 202 with
+            # no body) are the only unauthenticated MCP requests; everything
+            # else — including a GET — is answered with the 401 challenge by
+            # the handler.
             return await self._handle_mcp_request(request)
 
         # OAuth2 Discovery endpoints using OAuth2EndpointsHandler
@@ -992,6 +1011,14 @@ class FastAPIIntegration(BaseActingWebIntegration):
             """OAuth2 Authorization Server Discovery endpoint (RFC 8414)."""
             return await self._handle_oauth2_discovery_endpoint(
                 request, ".well-known/oauth-authorization-server"
+            )
+
+        @self.fastapi_app.get("/.well-known/openid-configuration")
+        @self.fastapi_app.options("/.well-known/openid-configuration")
+        async def oauth_openid_configuration(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+            """The authorisation server document at the OpenID location."""
+            return await self._handle_oauth2_discovery_endpoint(
+                request, ".well-known/openid-configuration"
             )
 
         @self.fastapi_app.get("/.well-known/oauth-protected-resource")
@@ -1756,7 +1783,11 @@ class FastAPIIntegration(BaseActingWebIntegration):
                 context=webobj.response.template_values,
             )
         elif self.templates:
-            return self.templates.TemplateResponse(request, "aw-root-factory.html")
+            return self.templates.TemplateResponse(
+                request,
+                "aw-root-factory.html",
+                context=factory.sign_in_page_values(self.aw_app.get_config()),
+            )
         else:
             # Fallback for when templates are not available
             return Response(
@@ -1804,7 +1835,10 @@ class FastAPIIntegration(BaseActingWebIntegration):
                     return self.templates.TemplateResponse(
                         request,
                         "aw-root-factory.html",
-                        context={"error": "Email is required"},
+                        context={
+                            **factory.sign_in_page_values(self.aw_app.get_config()),
+                            "error": "Email is required",
+                        },
                     )
                 else:
                     raise HTTPException(status_code=400, detail="Email is required")
@@ -2472,95 +2506,17 @@ class FastAPIIntegration(BaseActingWebIntegration):
     async def _handle_spa_session_retrieve(
         self, request: Request, session_id: str
     ) -> Response:
-        """
-        Handle retrieval of pending SPA session data after OAuth callback.
-
-        The OAuth callback handler processes the authorization code and stores
-        the resulting tokens in a pending session. The SPA then retrieves this
-        data using the session_id passed in the redirect URL.
-        """
+        """Retrieve the pending SPA session data an OAuth callback stored
+        (:func:`actingweb.handlers.oauth2_spa.spa_session_retrieve`)."""
         from fastapi.responses import JSONResponse
 
-        # CORS: the spa_cors_origins allowlist decides the origin
-        from ...handlers.oauth2_spa import spa_cors_headers
-        from ...oauth_session import get_oauth2_session_manager
+        from ...handlers.oauth2_spa import spa_session_retrieve
 
         req_data = await self._normalize_request(request)
-        config = self.aw_app.get_config()
-        cors_headers = spa_cors_headers(
-            config, req_data["headers"].get("origin"), methods="GET, OPTIONS"
+        status, body, headers = spa_session_retrieve(
+            self.aw_app.get_config(), session_id, req_data["headers"].get("origin")
         )
-
-        try:
-            session_manager = get_oauth2_session_manager(config)
-
-            # Look up the pending session. Only a success session (one whose
-            # token_data carries actor_id) is retrievable here — a pending
-            # email-entry session (raw provider token response, no actor_id)
-            # returns None just like a missing one, so it cannot be echoed
-            # back through this endpoint. A success session is readable once
-            # freely, and again within a short grace window (covers a
-            # duplicate fetch, e.g. React StrictMode's double effect in
-            # development); past that window the row is deleted.
-            session_data = session_manager.retrieve_spa_session(session_id)
-
-            if not session_data:
-                return JSONResponse(
-                    content={
-                        "error": True,
-                        "message": "Session not found or expired",
-                        "code": "not_found",
-                    },
-                    status_code=404,
-                    headers={**cors_headers, ERROR_CODE_HEADER: "not_found"},
-                )
-
-            # Extract the token data that was stored
-            token_data = session_data.get("token_data", {})
-
-            if not token_data or "access_token" not in token_data:
-                # Defensive fallback: retrieve_spa_session() already requires
-                # actor_id (and a success session always carries access_token
-                # alongside it), so this should be unreachable in practice.
-                return JSONResponse(
-                    content={
-                        "error": True,
-                        "message": "Invalid session data",
-                        "code": "invalid_request",
-                    },
-                    status_code=400,
-                    headers={**cors_headers, ERROR_CODE_HEADER: "invalid_request"},
-                )
-
-            # Return the session data
-            response_data = {
-                "success": True,
-                "access_token": token_data.get("access_token"),
-                "actor_id": token_data.get("actor_id"),
-                "email": token_data.get("email"),
-                "expires_at": token_data.get("expires_at"),
-                "redirect_url": token_data.get("redirect_url"),
-            }
-
-            return JSONResponse(
-                content=response_data,
-                status_code=200,
-                headers=cors_headers,
-            )
-
-        except DbError:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error retrieving SPA session: {e}")
-            return JSONResponse(
-                content={
-                    "error": True,
-                    "message": "Failed to retrieve session",
-                    "code": "server_error",
-                },
-                status_code=500,
-                headers={**cors_headers, ERROR_CODE_HEADER: "server_error"},
-            )
+        return JSONResponse(content=body, status_code=status, headers=headers)
 
     async def _handle_bot_request(self, request: Request) -> Response:
         """Handle bot requests."""

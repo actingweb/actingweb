@@ -69,12 +69,14 @@ import time
 from collections.abc import Iterable, Iterator
 from typing import Any
 
+from actingweb.maintenance._common import preflight
 from actingweb.property_list_span import AUX_SUFFIX
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
 )
+
 logger = logging.getLogger("verify_orphans")
 
 RESERVED_ACTOR_ID_PREFIX = "_actingweb_"
@@ -312,39 +314,7 @@ def _read_actor_ids(backend: str) -> set[str]:
     return _dynamodb_actor_ids()
 
 
-def _log_target(config: Any, rps: float) -> None:
-    """Say out loud which deployment is about to be swept -- see the
-    matching function in verify_property_lists.py for why this matters: a
-    clean report from the wrong tables looks identical to a clean report
-    from the right ones."""
-    backend = getattr(config, "database", "unknown")
-    if backend == "postgresql":
-        target = (
-            f"host={os.getenv('PG_DB_HOST', 'localhost')} "
-            f"db={os.getenv('PG_DB_NAME', 'actingweb')} "
-            f"schema={os.getenv('PG_DB_SCHEMA', 'public')} "
-            f"prefix={os.getenv('PG_DB_PREFIX', '') or '(none)'}"
-        )
-    else:
-        prefix = os.getenv("AWS_DB_PREFIX", "demo_actingweb")
-        target = (
-            f"region={os.getenv('AWS_DEFAULT_REGION', '(default)')} "
-            f"prefix={prefix} "
-            f"endpoint={os.getenv('AWS_DB_HOST', '(aws)')}"
-        )
-        if not os.getenv("AWS_DB_PREFIX"):
-            logger.warning(
-                "AWS_DB_PREFIX is not set -- defaulting to 'demo_actingweb'. "
-                "If your deployment uses a different prefix this sweeps the "
-                "wrong tables and reports clean, because there is nothing "
-                "there to find. Set the same environment the application "
-                "runs with."
-            )
-    logger.info(f"Target: backend={backend} {target}")
-    logger.info(f"Mode: report-only (no --delete exists); rps={rps}")
-
-
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Sweep property, attribute and trust rows for actor ids absent "
@@ -362,13 +332,14 @@ def main() -> int:
         default=".verify_orphans.checkpoint.json",
         help="resume state file (default .verify_orphans.checkpoint.json)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     from actingweb.config import Config
 
+    preflight("actingweb-verify-orphans", writing=False)
     config = Config()
     backend = getattr(config, "database", "dynamodb")
-    _log_target(config, args.rps)
+    logger.info(f"Mode: report-only (no --delete exists); rps={args.rps}")
 
     try:
         actor_ids = _read_actor_ids(backend)

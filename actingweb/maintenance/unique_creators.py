@@ -31,6 +31,8 @@ Subcommands:
   an actor created or renamed during the scan is not listed.
   Also ``@`` addresses stored with capitals: lookups use the lowercase value,
   so such an actor would not be found once the flag is on.
+  On DynamoDB also actors holding a reserved ``#…`` value (informational:
+  never recorded, and nothing can sign in with it; rename or delete them).
 - ``resolve [--apply] [--keep ID]``: keeps one actor per group and renames the
   others to ``{creator}#dup-{hash}``, clearing their stored ``email`` so it
   no longer claims the address (``creator-to-email`` would otherwise move the
@@ -163,6 +165,10 @@ class Report:
     default_creator: list[tuple[str, str]] = field(default_factory=list)
     # default-creator actors whose _internal bucket could not be read
     default_creator_unreadable: list[str] = field(default_factory=list)
+    # DynamoDB: (actor_id, creator) holding a reserved ``#…`` value (not a
+    # ``#dup-`` rename): a legacy or restored row, never recorded
+    # (informational, not part of ``clean``)
+    reserved: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def groups(self) -> dict[str, list[str]]:
@@ -294,6 +300,8 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
         if DUP_MARKER in creator:
             report.dup_actors.append(actor_id)
             continue
+        if is_reserved(creator) and _wanted(creator, only):
+            report.reserved.append((actor_id, creator))
         if is_exempt(creator) or not _wanted(creator, only):
             continue
         by_value.setdefault(creator, []).append(actor_id)
@@ -308,6 +316,7 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
         if len(v) > 1
     }
     report.dup_actors.sort()
+    report.reserved.sort()
     grouped = {i for g in report.groups.values() for i in g}
     report.unnormalised = sorted(
         (i, c)
@@ -449,7 +458,7 @@ def _collect_creators(
                 (i, c)
                 for i, c in report.creators.items()
                 if not is_exempt(c)
-                and DUP_MARKER not in c
+                and not is_reserved(c)
                 and i not in recorded
                 and _wanted(c, only)
                 and _unrecorded_now(normalise_creator(c), i)
@@ -510,6 +519,11 @@ def print_report(report: Report) -> None:
             f"unrecorded actor id={actor_id} creator={creator!r} "
             "(run enable --apply again)"
         )
+    for actor_id, creator in report.reserved:
+        logger.info(
+            f"reserved creator id={actor_id} creator={creator!r} "
+            "(never recorded; nothing can sign in with it; rename or delete it)"
+        )
     for actor_id, email in report.default_creator:
         logger.info(
             f"default creator id={actor_id} email={email!r} "
@@ -520,7 +534,8 @@ def print_report(report: Report) -> None:
         f"case_groups={len(report.case_only)} renamed={len(report.dup_actors)} "
         f"orphans={len(report.orphans)} unrecorded={len(report.unrecorded)} "
         f"capitals={len(report.unnormalised)} "
-        f"default_creator={len(report.default_creator)}"
+        f"default_creator={len(report.default_creator)} "
+        f"reserved={len(report.reserved)}"
     )
 
 
@@ -1070,6 +1085,8 @@ def _record_lone_holder(config: Any, key: str, report: Report) -> None:
     from actingweb.db.dynamodb.actor import Actor, record_for_actor_as_read
 
     key = normalise_creator(key)
+    if is_exempt(key) or is_reserved(key):
+        return  # never recorded
     listed = get_actor(config).get_by_creator(creator=key, consistent=True) or []
     rows: list[dict[str, Any]] = [listed] if isinstance(listed, dict) else listed
     candidates = {str(r["id"]) for r in rows if r and r.get("id")}
@@ -1252,7 +1269,9 @@ def _enable_dynamodb(config: Any, report: Report, apply: bool) -> tuple[str, int
     pending = sorted(
         (normalise_creator(c), i)
         for i, c in report.creators.items()
-        if not is_exempt(c) and DUP_MARKER not in c
+        # A reserved value is never recorded: ``#meta#backfill`` is the
+        # backfill-complete item's key (rc2).
+        if not is_exempt(c) and not is_reserved(c)
     )
     if not apply:
         logger.info(f"[dry-run] would write up to {len(pending)} creator records")
@@ -1489,7 +1508,7 @@ def enable_empty_store(config: Any) -> None:
 
     def record(row: Any) -> bool:
         creator = normalise_creator(str(row.creator or ""))
-        if is_exempt(creator) or DUP_MARKER in creator:
+        if is_exempt(creator) or is_reserved(creator):
             return True
         if record_for_actor_as_read(creator, row):
             return True

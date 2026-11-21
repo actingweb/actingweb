@@ -227,3 +227,29 @@ def test_previous_is_kept_when_the_record_step_fails(
     assert unique_creators.main(argv) == 1
     assert "previous outcome=skipped" in logs.text
     assert _record_of(newer) == actor_id
+
+
+@dynamodb_only
+@pytest.mark.parametrize("creator", ["#meta#backfill", "#imported-legacy"])
+def test_enable_never_records_a_reserved_creator(
+    fresh_store: Any, logs: Any, creator: str
+) -> None:
+    """rc2 iteration: a legacy row with a reserved creator is listed, never
+    recorded (``#meta#backfill`` is the key of the backfill-complete item),
+    and it does not keep ``report`` or ``enable`` from finishing."""
+    actor_id = raw_actor(creator)
+    raw_actor(_email())
+    assert unique_creators.main(["report"]) == 0
+    assert f"reserved creator id={actor_id} creator={creator!r}" in logs.text
+    assert unique_creators.main(["enable", "--apply"]) == 0
+    assert unique_creators.backfill_complete()
+    if creator != "#meta#backfill":
+        assert _record_of(creator) is None
+    else:
+        from actingweb.db.dynamodb.creator import Creator
+
+        marker = Creator.get(creator, consistent_read=True)
+        assert not marker.actor_id
+    logs.clear()
+    assert unique_creators.main(["report"]) == 0
+    assert "unrecorded actor" not in logs.text

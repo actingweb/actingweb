@@ -222,6 +222,58 @@ class TestBasicAuthentication:
         assert auth.response["code"] == 403
 
 
+class TestMalformedBasicAuthorization:
+    """A malformed ``Authorization`` header is refused (403), never a crash
+    (500): the header is peer-controlled (rc2; it raised ``ValueError`` on
+    ``authz.split(" ")`` unpacked into two names)."""
+
+    def _auth(self, header: str, passphrase: str = "secret123") -> Auth:
+        auth, _ = TestBasicAuthentication()._create_auth_with_actor(  # noqa: SLF001
+            passphrase=passphrase, creator="user@example.com"
+        )
+        mock_request = Mock()
+        mock_request.headers = {"Authorization": header}
+        mock_appreq = Mock()
+        mock_appreq.request = mock_request
+        auth.check_authentication(mock_appreq, "/test")
+        return auth
+
+    @staticmethod
+    def _b64(raw: bytes) -> str:
+        return base64.b64encode(raw).decode("ascii")
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "Bearer two words",
+            "Basic",
+            "Basic ",
+            "Basic a b",
+            "Basic !!!not-base64!!!",
+            "Basic " + base64.b64encode(b"no-colon-at-all").decode("ascii"),
+            "Basic " + base64.b64encode(b"user@example.com:\xff\xfe").decode("ascii"),
+            "Basic " + base64.b64encode(b"\xffuser:secret123").decode("ascii"),
+        ],
+    )
+    def test_a_malformed_header_is_refused(self, header: str) -> None:
+        auth = self._auth(header)
+        assert auth.acl["authenticated"] is False
+        assert auth.response["code"] == 403
+
+    def test_a_passphrase_with_a_colon_authenticates(self) -> None:
+        """RFC 7617: the user-id ends at the first colon; the password may
+        hold more."""
+        header = "Basic " + self._b64(b"user@example.com:pass:with:colons")
+        auth = self._auth(header, passphrase="pass:with:colons")
+        assert auth.acl["authenticated"] is True
+        assert auth.response["code"] == 200
+
+    def test_extra_spaces_around_the_credentials_are_tolerated(self) -> None:
+        header = "Basic   " + self._b64(b"user@example.com:secret123") + " "
+        auth = self._auth(header)
+        assert auth.acl["authenticated"] is True
+
+
 class TestTokenAuthentication:
     """Test token/bearer authentication methods."""
 

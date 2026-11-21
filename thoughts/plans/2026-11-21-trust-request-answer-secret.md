@@ -1,6 +1,7 @@
 ---
 status: done
 approved: 2026-11-21 by Greger Wedel
+iterations: thoughts/plans/2026-11-21-trust-request-answer-secret.iterations.md
 ---
 
 # Implementation Plan: 4.0.0rc2 — the trust request's answer, and a consumer's rc1 findings
@@ -251,7 +252,7 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 - **ADDED** (Answer to a trust request) — A creation's answer carries the secret written for that request, whatever the stored row or an application hook does before the answer is sent. (AC-10)
 - **ADDED** (Pairing without a secret) — A requester that sent no secret and serves an approved row naming this actor that accepts the answered secret is approved, verified, by the owner's approval. (AC-4)
 - **ADDED** (Refusals) — A peer's trust request whose `baseuri` is not a plain http(s) URL, or whose `id` is not a plain id, answers 400 and stores nothing. (AC-6)
-- **ADDED** (Refusals) — Each refusal of a trust request carries a JSON `error` naming its reason. (AC-12)
+- **ADDED** (Refusals) — Each refusal of a trust request carries a JSON `error` naming its reason; a re-pair from a peer that proved the secret is told why it was refused, any other caller only that it did not prove it; a body that is not a JSON object, or a field that is not text, answers 400. (AC-12; iterations 2-3)
 - **ADDED** (Approval) — The owner's approval of a request that did not verify, and still does not, answers 403 and leaves the row unapproved. (AC-7)
 - **ADDED** (Pending status) — A pending row's own peer, with its secret as bearer, reads the row: 202, without `verification_token`. (AC-8)
 - **DECISION** — The answer to a trust request carries only a secret its receiver sent or was issued for that request, and never the verification token while unapproved (owner, 2026-11-21).
@@ -276,6 +277,7 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
   - Record step: `recorded`, `written`, `verified` (PostgreSQL), `exempt` (exit 0); `missing`, `held-by <id>`, `not-enforced`, `changed`, `refused` (exit 1).
   - Previous step: `released`, `absent`, `not-kept` (exit 0); `not-this-actor`, `changed`, `skipped` (exit 1, or the record step's code when skipped). An invalid `--previous` is refused before any read (exit 1).
   - A store fault: exit 2.
+- **ADDED** (`actingweb-unique-creators`) — No command records a reserved `#…` creator; `report` lists one as `reserved creator` (informational) on DynamoDB. (iteration 4)
 - **DECISION** — `record` neither lowercases a stored creator, nor writes before `enable`, nor searches for orphans; `resolve`, `enable` and `report` do those (owner, 2026-11-21).
 
 ## Phase 1: the trust request's answer, its refusals, and the peer request path

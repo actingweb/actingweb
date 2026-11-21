@@ -61,11 +61,29 @@ FIXED
   status; a hook that approves the row does so through the trust API, and
   the requester learns it from the approval notification.
 - **A refused trust request gave the peer no readable reason.** The
-  peer-facing refusals of ``POST /<id>/trust/<rel>`` (missing ``baseuri`` or
-  ``id``, a reserved relationship name, an id or base URI that is not plain,
-  a bearer for a peer with no trust, a re-pair not proven) answered with an
+  refusals of ``POST /<id>/trust/<rel>`` (a body that is not JSON, missing
+  ``baseuri`` or ``id``, a reserved relationship name, an id or base URI
+  that is not plain, a bearer for a peer with no trust, a re-pair not
+  proven, a creation that a pending or existing row blocks) answered with an
   empty body. They now carry ``{"error": "<reason>"}`` as
-  ``application/json``, with the same status as before.
+  ``application/json``, with the same status as before. A re-pair whose
+  sender proved the trust's secret is told why it was refused (another
+  relationship, a new secret already in use, a row that changed meanwhile);
+  any other sender is told only that it did not prove it.
+- **A trust request whose body was not a JSON object, or whose fields were
+  not text, could answer 500.** A number as ``secret`` reached the store,
+  and on a re-pair it was written before the request was refused. The body
+  must be a JSON object and ``baseuri``, ``id``, ``secret``, ``desc``,
+  ``verify`` and ``type`` text (``null`` counts as absent); anything else
+  answers 400 with the field named, and nothing is stored.
+- **A malformed ``Authorization`` header answered 500.** Basic
+  authentication split the header on every space and unpacked two parts, so
+  ``Bearer two words`` (a bearer that failed token authentication, then
+  fell to basic), a header with no credentials, credentials that were not
+  base64 or not UTF-8, or a decoded value without a colon raised instead of
+  refusing. They now answer 403. **Behavior change:** a passphrase that
+  contains ``:`` authenticates (RFC 7617: the user id ends at the first
+  colon; it raised before), and credentials must be strict base64.
 - **An MCP authorization code issued just before a disconnect could still
   be exchanged afterwards, also after the user reconnected the client.**
   Deleting a user's connection to an MCP client revoked that user's tokens
@@ -88,6 +106,14 @@ FIXED
   ``oauth2_interactive:``) is now not notified, and the skip logs at DEBUG.
   **Check:** an alert on that WARNING now fires only for a peer that should
   have a base URI.
+- **``actingweb-unique-creators`` tried to record a reserved creator.** An
+  actor row holding a reserved ``#…`` value (a legacy or restored row; the
+  library refuses them since 4.0) was counted as unrecorded by ``report``
+  and given a record by ``enable``, a first start and ``resolve``; on
+  DynamoDB the value ``#meta#backfill`` is the key of the backfill-complete
+  item itself. Such a creator is now never recorded, and ``report`` lists it
+  as ``reserved creator`` (informational: nothing can sign in with it;
+  rename or delete the actor).
 - **The Agent Skill told an agent that a fresh database's first start
   stops, and an agent opted out of creator uniqueness to avoid the step.**
   ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence

@@ -2281,9 +2281,9 @@ the relationship, it MUST NOT carry ``verification_token``.
 B MUST answer 400 Bad Request, and store nothing, when the request lacks
 ``baseuri`` or ``id``, when they are not a plain base URI and a plain actor
 id, or when the relationship type in the URL is reserved (see Types of
-Relationships). These refusals, and the refusal of a re-pair (below),
-SHOULD carry an application/json body ``{"error": "<reason>"}``. The
-requesting actor MUST
+Relationships). Every refusal of a trust request, these and the refusal
+of a re-pair (below) included, SHOULD carry an application/json body
+``{"error": "<reason>"}``. The requesting actor MUST
 send ``secret``, ``baseuri``, ``id`` and ``type``, but B MAY accept a
 request without ``secret`` or ``type``; a relationship requested without a
 secret cannot be verified and so cannot be approved automatically.

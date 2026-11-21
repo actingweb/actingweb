@@ -2730,3 +2730,135 @@ class TestTheRefusalsSayWhy:
         assert out.response.status_code == status
         assert out.response.headers["Content-Type"] == "application/json"
         assert json.loads(out.response.body) == {"error": reason}
+
+
+def test_a_bearer_with_spaces_is_refused_not_a_crash() -> None:
+    """The header a peer sends is its own: ``Bearer not the secret`` failed
+    token auth, then crashed basic auth (``auth.py``, 500); now 403."""
+    w = Receiver()
+    out = w.request(w.b, _new_secret(), bearer="not the secret")
+    assert out.response.status_code == 403
+    assert json.loads(out.response.body) == {"error": "Existing trust not verified"}
+
+
+# ---------------------------------------------------------------------------
+# rc2 iteration: the trust request's input and its last bare refusals
+# ---------------------------------------------------------------------------
+
+
+def _raw_request(w: Receiver, body: str, headers: dict[str, str] | None = None) -> Any:
+    webobj = AWWebObj(
+        url=f"https://test.example.com/{aid(w.a)}/trust/friend",
+        body=body,
+        headers=headers or {},
+    )
+    TrustRelationshipHandler(webobj, w.config).post(aid(w.a), "friend")
+    return webobj
+
+
+class TestTheRequestBodyIsChecked:
+    @pytest.mark.parametrize(
+        ("body", "reason"),
+        [
+            ("not json", "No json content"),
+            ('"a string"', "The body must be a JSON object"),
+            ("[1, 2]", "The body must be a JSON object"),
+        ],
+    )
+    def test_a_body_that_is_not_an_object_is_400(self, body: str, reason: str) -> None:
+        w = Receiver()
+        out = _raw_request(w, body)
+        assert out.response.status_code == 400
+        assert json.loads(out.response.body) == {"error": reason}
+
+    @pytest.mark.parametrize(
+        "field", ["baseuri", "id", "secret", "desc", "type", "verify"]
+    )
+    @pytest.mark.parametrize("value", [5, ["x"], {"a": 1}, True])
+    def test_a_field_that_is_not_text_is_400(self, field: str, value: Any) -> None:
+        w = Receiver()
+        peer = f"peer-t-{uuid.uuid4().hex[:8]}"
+        body: dict[str, Any] = {
+            "baseuri": f"https://{peer}.example.test/{peer}",
+            "id": peer,
+            "type": "urn:test",
+            "secret": _new_secret(),
+            "desc": "d",
+            "verify": "v",
+        }
+        body[field] = value
+        out = _raw_request(w, json.dumps(body))
+        assert out.response.status_code == 400
+        assert json.loads(out.response.body) == {"error": f"{field} must be a string"}
+        assert w.row(peer) == {}
+
+    def test_a_re_pair_with_a_secret_that_is_not_text_changes_nothing(self) -> None:
+        w = Receiver()
+        before = _state(w.row(w.b))
+        body = {
+            "baseuri": f"https://{w.b}.example.test/{w.b}",
+            "id": w.b,
+            "type": "urn:test",
+            "secret": 12345,
+        }
+        out = _raw_request(
+            w, json.dumps(body), {"Authorization": f"Bearer {w.secrets[w.b]}"}
+        )
+        assert out.response.status_code == 400
+        assert _state(w.row(w.b)) == before
+
+
+class TestTheLastRefusalsSayWhy:
+    def test_a_creation_that_is_not_accepted_says_why(self) -> None:
+        """A pending row the request cannot replace (it did not verify)."""
+        w = Receiver()
+        peer, _ = TestIdentityAfterTheAudit._unverified(w)
+        with mock.patch(
+            "actingweb.actor.requests.get",
+            side_effect=_peer_answers(peer, meta_id="someone-else"),
+        ):
+            out = w.request(peer, _new_secret())
+        assert out.response.status_code == 403
+        assert json.loads(out.response.body) == {
+            "error": "A trust for this peer is pending or exists; the request "
+            "did not replace it"
+        }
+
+    @pytest.mark.parametrize(
+        ("case", "reason"),
+        [
+            (
+                "relationship",
+                "The trust is for another relationship; delete it and pair again",
+            ),
+            ("in-use", "The new secret is already in use"),
+            ("changed", "The trust changed meanwhile; try again"),
+        ],
+    )
+    def test_a_proven_re_pair_says_why_it_was_refused(
+        self, case: str, reason: str
+    ) -> None:
+        from actingweb.actor import Actor
+
+        w = Receiver()
+        if case == "relationship":
+            out = w.request(
+                w.b, _new_secret(), bearer=w.secrets[w.b], relationship="admin"
+            )
+        elif case == "in-use":
+            out = w.request(w.b, w.secrets[w.c], bearer=w.secrets[w.b])
+        else:
+            with mock.patch.object(
+                Actor,
+                "replace_trust_secret",
+                return_value=(None, "the row changed since the request authenticated"),
+            ):
+                out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
+        assert out.response.status_code == 403
+        assert json.loads(out.response.body) == {"error": reason}
+
+    def test_an_unproven_re_pair_says_only_not_verified(self) -> None:
+        w = Receiver()
+        out = w.request(w.b, _new_secret(), bearer=uuid.uuid4().hex)
+        assert out.response.status_code == 403
+        assert json.loads(out.response.body) == {"error": "Existing trust not verified"}

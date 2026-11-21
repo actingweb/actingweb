@@ -259,6 +259,20 @@ def _with_boolean_flags(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# What a peer that proved the trust's secret is told when its re-pair is
+# refused, by the reason Actor.replace_trust_secret gives (rc2).
+_RE_PAIR_REASONS = {
+    "a different relationship": (
+        "The trust is for another relationship; delete it and pair again"
+    ),
+    "no new secret": "The request carries no new secret",
+    "the new secret is already in use": "The new secret is already in use",
+    "the row changed since the request authenticated": (
+        "The trust changed meanwhile; try again"
+    ),
+}
+
+
 def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
     """The body of the answer to a trust request (a creation or a re-pair):
     the row, without its verification token while this actor has not
@@ -481,30 +495,26 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             elif body is None:
                 body = "{}"
             params = json.loads(body)
-            if "baseuri" in params:
-                baseuri = params["baseuri"]
-            else:
-                baseuri = ""
-            if "id" in params:
-                peerid = params["id"]
-            else:
-                peerid = ""
-            if "secret" in params:
-                secret = params["secret"]
-            else:
-                secret = ""
-            if "desc" in params:
-                desc = params["desc"]
-            else:
-                desc = ""
-            if "verify" in params:
-                verification_token = params["verify"]
-            else:
-                verification_token = None
         except (ValueError, RecursionError):
             if self.response:
-                self.response.set_status(400, "No json content")
+                self._refuse_request(400, "No json content")
             return
+        if not isinstance(params, dict):
+            self._refuse_request(400, "The body must be a JSON object")
+            return
+        # Every field is text or absent (null counts as absent): anything
+        # else is refused here, before it reaches the store (rc2; a number
+        # as `secret` answered 500, and a re-pair wrote it).
+        for field in ("baseuri", "id", "secret", "desc", "verify", "type"):
+            value = params.get(field)
+            if value is not None and not isinstance(value, str):
+                self._refuse_request(400, f"{field} must be a string")
+                return
+        baseuri = params.get("baseuri") or ""
+        peerid = params.get("id") or ""
+        secret = params.get("secret") or ""
+        desc = params.get("desc") or ""
+        verification_token = params.get("verify")
 
         if len(baseuri) == 0 or len(peerid) == 0:
             self._refuse_request(400, "Missing mandatory attributes")
@@ -586,7 +596,11 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             description=desc,
         )
         if not new_trust:
-            self.response.set_status(403, "Forbidden")
+            self._refuse_request(
+                403,
+                "A trust for this peer is pending or exists; the request did "
+                "not replace it",
+            )
             return
 
         # The answer and its status are fixed from the row as written, before
@@ -680,7 +694,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 f"Refused a re-pair for {peerid} at {myself.id}: {reason}; the "
                 "trust is unchanged"
             )
-            self._refuse_request(403, "Existing trust not verified")
+            # A peer that proved the secret learns why; any other caller
+            # learns only that it did not prove it (rc2).
+            told = _RE_PAIR_REASONS.get(reason) if proven else None
+            self._refuse_request(403, told or "Existing trust not verified")
             return
         logger.info(f"Re-paired {myself.id} with {peerid}: the secret was replaced")
         self.response.headers["Location"] = str(

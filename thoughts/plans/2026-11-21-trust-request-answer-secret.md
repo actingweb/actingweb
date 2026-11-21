@@ -2,7 +2,7 @@
 status: done
 approved: 2026-11-21 by Greger Wedel
 iterations: thoughts/plans/2026-11-21-trust-request-answer-secret.iterations.md
-verified: thoughts/verifications/2026-11-21-trust-request-answer-secret.md
+verified: thoughts/verifications/2026-11-21-trust-request-answer-secret-2.md
 spec_merged: 2026-11-21
 ---
 

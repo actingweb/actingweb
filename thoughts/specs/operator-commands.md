@@ -88,9 +88,10 @@ This partial spec covers what the 2026-11-19 plan changed.
   `tests/test_unique_creators_command.py` (`test_record_*`),
   `tests/integration/test_unique_creators_record.py::test_previous_is_released_for_an_exempt_creator` (plans/2026-11-21-trust-request-answer-secret.md, AC-23 to AC-31, AC-37 to AC-40)
 - **OPC-12** — `enable`, an empty store's first start, `resolve` and
-  `report`'s unrecorded list never record a reserved `#…` creator, and
-  actors sharing one form no duplicate group; `report` lists one as
-  `reserved creator` (informational) on DynamoDB. [plan+test]
+  `report`'s unrecorded list never record a reserved `#…` creator. On
+  DynamoDB actors sharing one form no duplicate group, and `report` lists
+  one as `reserved creator` (informational); on PostgreSQL, which has no
+  records, `resolve` groups them like any other value. [plan+test]
   `tests/integration/test_unique_creators_record.py::test_enable_never_records_a_reserved_creator`,
   `::test_resolve_never_records_a_reserved_creator` (plans/2026-11-21-trust-request-answer-secret.md, iterations entries 4 and 5)
 

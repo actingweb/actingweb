@@ -275,6 +275,8 @@ class TestTheTokenSweepMarksEveryChainFirst:
         manager.tokens_bucket = "mcp_tokens"
         manager.refresh_tokens_bucket = "mcp_refresh_tokens"
         manager.revoked_chains_bucket = "mcp_revoked_chains"
+        # The code bucket the sweep reads first (rc2); empty here.
+        manager.auth_codes_bucket = "mcp_auth_codes"
         manager._snapshot_bucket = Mock(  # type: ignore[method-assign]
             side_effect=lambda _a, bucket: rows.get(bucket, {})
         )

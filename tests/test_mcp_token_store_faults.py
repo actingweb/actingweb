@@ -245,7 +245,7 @@ def test_delete_client_still_deletes_when_tokens_cannot_be_listed(
         mock.patch.object(server.client_registry, "_delete_client_trust_relationship"),
     ):
         assert server.client_registry.delete_client(cid, actor_id="actor-owner")
-    assert "could not list" in caplog.text
+    assert "could not revoke all of its tokens and authorization codes" in caplog.text
     store.raising_buckets.clear()
     assert server.client_registry.load_client_strict(cid) is None
     out = server.handle_token_request(

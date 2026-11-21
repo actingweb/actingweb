@@ -53,6 +53,19 @@ FIXED
   a bearer for a peer with no trust, a re-pair not proven) answered with an
   empty body. They now carry ``{"error": "<reason>"}`` as
   ``application/json``, with the same status as before.
+- **An MCP authorization code issued just before a disconnect could still
+  be exchanged afterwards, also after the user reconnected the client.**
+  Deleting a user's connection to an MCP client revoked that user's tokens
+  for it but left its unexchanged authorization codes (they live ten
+  minutes), and the exchange checks no trust: a client holding such a code
+  got working tokens. A disconnect now removes the client's codes for that
+  user with its tokens, each removal confirmed (a store fault fails the
+  disconnect and keeps the trust row for the retry, as for a token), and an
+  exchange in progress during the disconnect revokes what it minted and
+  answers ``invalid_grant``. A reconnect always needs the user on an
+  ActingWeb page (the sign-in form, or the confirmation page when the client
+  posted the form itself), and starts from a fresh grant: the level chosen
+  then, no permission override from before.
 - **Every permission change logged one WARNING per OAuth2/MCP client.**
   ``Cannot notify peer oauth2_client:… no baseuri in trust`` (or, on the
   sync path, ``Failed to notify peer … status=0``) was logged for each MCP

@@ -210,14 +210,14 @@ All phases
 | AC-16 | 3 | `tests/test_mcp_server_name.py::test_the_app_announces_its_version` (through `ActingWebApp.with_mcp`, so the runtime re-apply is covered) | Passing |
 | AC-17 | 3 | `tests/test_mcp_server_name.py::test_the_default_is_the_library_version` (regression; also with `with_app_version("9.9")`) | Passing |
 | AC-33 | 3 | `tests/test_mcp_server_name.py::test_an_invalid_server_version_is_refused` | Passing |
-| AC-18 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_disconnected_client_needs_the_user_again` (regression: pins today's behaviour) | Not run |
-| AC-19 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_reconnect_starts_from_a_fresh_grant` (regression) | Not run |
-| AC-20 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused` | Not run |
+| AC-18 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_disconnected_client_needs_the_user_again` (regression: pins today's behaviour) | Passing |
+| AC-19 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_reconnect_starts_from_a_fresh_grant` (regression) | Passing |
+| AC-20 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused`; `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_disconnect_removes_the_clients_codes` | Passing |
 | ~~AC-21~~ | — | dropped | — |
-| AC-22 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_an_old_refresh_token_stays_dead_after_a_reconnect` (regression: passes today through the token sweep) | Not run |
-| AC-34 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused_after_a_reconnect` | Not run |
-| AC-35 | 4 | `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_sweep_during_an_exchange_leaves_no_live_token` (the sweep is run from a wrapped `_create_refresh_token`, between the consume and the post-mint check) | Not run |
-| AC-36 | 4 | `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_code_that_cannot_be_removed_keeps_the_row` (`delete_confirmed` patched to fault) | Not run |
+| AC-22 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_an_old_refresh_token_stays_dead_after_a_reconnect` (regression: passes today through the token sweep) | Passing |
+| AC-34 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused_after_a_reconnect` | Passing |
+| AC-35 | 4 | `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_sweep_during_an_exchange_leaves_no_live_token` (the sweep runs from a wrapped `_create_access_token`, after the consume and before any token is written); `::test_a_fault_on_the_re_read_leaves_no_token` | Passing |
+| AC-36 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_that_cannot_be_removed_keeps_the_row` (`delete_confirmed` faulted for the code: `Trust.delete` raises `DbError`, the row stays, the retry finishes); `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_code_that_cannot_be_removed_fails_the_disconnect`, `::test_a_half_removed_code_is_finished_by_the_retry` | Passing |
 | AC-23 | 5 | `tests/integration/test_unique_creators_record.py::test_record_writes_a_missing_record` | Not run |
 | AC-24 | 5 | `tests/integration/test_unique_creators_record.py::test_record_releases_the_previous_address` (the consumer's restore, end to end: `report` clean, `enable` does not refuse) | Not run |
 | AC-25 | 5 | `tests/integration/test_unique_creators_record.py::test_a_dry_run_writes_nothing` | Not run |
@@ -484,7 +484,18 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 
 - [ ] Fast tier; wire suite; Full tier before the phase commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes (implementation, 2026-11-21)
+
+- The sweep (`_revoke_matching_tokens`) reads the code bucket before the token snapshots; `_remove_auth_code_confirmed` deletes the provider-token row, then the index row, then the code row **last** (diff review, codex: with the code row first, a removal stopped half-way left the retry nothing to find and orphaned the provider-token row). An unconfirmed code is counted apart and named in the `TokenStoreUnavailable` text; `client_registry._disable_client`'s non-strict log now names codes too (`tests/test_mcp_token_store_faults.py` asserts the new text).
+- The exchange's check after minting is `_consumed_code_still_there` (a strict read; `_consume(..., consumed_ttl=None)` keeps the row until the exchange's own `_remove_auth_code`). A read fault revokes what was minted and raises. `_remove_minted`'s log says "refused grant" (it serves the exchange now too).
+- AC-35's first test wrapped `_create_refresh_token` and passed before the change (the token pass revoked what was already written); rewritten to sweep before the access token is minted, the window the check exists for.
+- AC-36 at the `Trust.delete` level is an integration test (the unit tests use the in-memory store, which has no trust rows); both delete faults (index, provider-token) are retried in a unit test.
+- `disable_client` (the owner's branch) reaches the sweep through `revoke_client_tokens` (`client_registry.py:476`): confirmed.
+- `revoke_actor_tokens` (client id None: adoption, actor deletion) now sweeps all of the actor's codes, which is right for both (diff review).
+- **Accepted (diff review, low):** a winning exchange can answer `invalid_grant` when an expiry path (a concurrent replay past `expires_at`, or `cleanup_expired_tokens`) removes its code between the consume and the re-read: only in the last instant of a code's ten minutes; the client starts again.
+- Full tier: DynamoDB 8440 passed, PostgreSQL 8209 passed, docs clean; no wire row moved.
 
 ---
 
@@ -628,6 +639,5 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 - A non-string `secret` in the body may answer 500; not run (todo).
 - A CI host serving the discard port would slow `test_006`; not checked against the runner image.
 - `rows.toml:36-38` says "(CI's shallow checkout skips it)", but CI checks out full history (`.github/workflows/tests.yml:195-198`); a stale comment, worth fixing in commit 0.
-- Phase 4: that `disable_client` (the owner's branch) reaches `_revoke_matching_tokens` was claimed by the outside voice from `client_registry.py:408`, not traced; the implementer confirms it.
 - Phase 4: how a TTL-expired code row reads through `get_bucket` on each backend was not checked; the sweep removes such rows too, harmlessly.
 - Phase 2: no pre-4.0 row with an OAuth2 prefix and a real base URI is known; not searched in a production store.

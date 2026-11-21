@@ -483,10 +483,10 @@ class MCPClientRegistry:
                 # (the grants cannot authenticate it any more), so go on; an
                 # access token that was not revoked lives out its TTL (1 h).
                 logger.error(
-                    f"Deleting client {client_id}: could not list all of its "
-                    f"tokens ({e}); deleting the client anyway, which disables "
-                    f"its refresh tokens; unrevoked access tokens expire within "
-                    f"an hour"
+                    f"Deleting client {client_id}: could not revoke all of its "
+                    f"tokens and authorization codes ({e}); deleting the client "
+                    f"anyway, which disables its refresh tokens and codes; "
+                    f"unrevoked access tokens expire within an hour"
                 )
 
             # Delete the index row, then the client row, confirming each (a

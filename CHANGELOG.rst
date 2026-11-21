@@ -5,6 +5,17 @@ CHANGELOG
 Unreleased
 ----------
 
+v4.0.0rc2: November 21, 2026
+----------------------------
+
+.. note::
+
+   **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
+   here") before upgrading.** From 4.0.0rc1 there is no new upgrade step:
+   no migration, no new operator command to run. The answer to a peer's
+   trust request carries its ``secret`` again, and its refusals carry a JSON
+   ``error``; see below.
+
 ADDED
 ~~~~~
 

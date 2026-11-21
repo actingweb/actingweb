@@ -45,7 +45,7 @@ The upgrade, in order
 
 .. note::
 
-   **Installing the release candidate** (this note goes at 4.0.0). 4.0.0rc1
+   **Installing the release candidate** (this note goes at 4.0.0). 4.0.0rc2
    is published on TestPyPI, not PyPI. With Poetry, add TestPyPI as a second
    source that only a pinned package uses, and pin the package to it:
 
@@ -57,7 +57,7 @@ The upgrade, in order
       priority = "explicit"
 
       [tool.poetry.dependencies]
-      actingweb = {version = "4.0.0rc1", source = "testpypi"}
+      actingweb = {version = "4.0.0rc2", source = "testpypi"}
 
    Every other package still resolves from PyPI. With pip, install the
    package alone from TestPyPI, then its dependencies and extras from PyPI
@@ -66,8 +66,8 @@ The upgrade, in order
 
    .. code-block:: bash
 
-      pip install --no-deps --index-url https://test.pypi.org/simple/ actingweb==4.0.0rc1
-      pip install "actingweb[fastapi]==4.0.0rc1"   # the extras you use
+      pip install --no-deps --index-url https://test.pypi.org/simple/ actingweb==4.0.0rc2
+      pip install "actingweb[fastapi]==4.0.0rc2"   # the extras you use
 
 **Dependencies.** Raise a pin on ``pyjwt`` in the application's own
 requirements to 2.15 or later (below 3), or the install does not resolve:

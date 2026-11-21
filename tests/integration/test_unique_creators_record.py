@@ -253,3 +253,47 @@ def test_enable_never_records_a_reserved_creator(
     logs.clear()
     assert unique_creators.main(["report"]) == 0
     assert "unrecorded actor" not in logs.text
+
+
+@dynamodb_only
+def test_resolve_never_records_a_reserved_creator(
+    enforced_store: Any, logs: Any
+) -> None:
+    """rc2 verification, issue 1: two legacy rows sharing
+    ``#meta#backfill`` are listed, not grouped, so ``resolve --apply``
+    neither renames them nor moves the backfill-complete item to one."""
+    first, second = raw_actor("#meta#backfill"), raw_actor("#meta#backfill")
+    assert unique_creators.main(["report"]) == 0
+    for actor_id in (first, second):
+        assert f"reserved creator id={actor_id}" in logs.text
+    assert "exact_groups=0" in logs.text
+    assert unique_creators.main(["resolve", "--apply"]) == 0
+    assert "groups=0" in logs.text
+    from actingweb.db.dynamodb.actor import Actor
+    from actingweb.db.dynamodb.creator import Creator
+
+    assert not Creator.get("#meta#backfill", consistent_read=True).actor_id
+    assert unique_creators.backfill_complete()
+    for actor_id in (first, second):
+        assert Actor.get(actor_id, consistent_read=True).creator == "#meta#backfill"
+
+
+@dynamodb_only
+@pytest.mark.parametrize("ours", [True, False])
+def test_previous_is_released_for_an_exempt_creator(
+    enforced_store: Any, logs: Any, ours: bool
+) -> None:
+    """rc2 verification, issue 3: an actor whose creator is now exempt
+    still gets ``--previous`` released, and a release it cannot do fails
+    the command."""
+    actor_id = raw_actor("trustee")
+    previous = _email()
+    _orphan(previous, actor_id if ours else raw_actor(previous))
+    argv = ["record", "--actor", actor_id, "--previous", previous, "--apply"]
+    assert unique_creators.main(argv) == (0 if ours else 1)
+    assert "outcome=exempt" in logs.text
+    if ours:
+        assert "previous outcome=released" in logs.text
+        assert _record_of(previous) is None
+    else:
+        assert "previous outcome=not-this-actor" in logs.text

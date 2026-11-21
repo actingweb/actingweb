@@ -381,8 +381,10 @@ It prints one line per step (``outcome=…``). The record step answers
 ``holder=<id>``), ``not-enforced``, ``changed`` or ``refused`` (exit 1).
 The previous step answers ``released``, ``absent``, ``not-kept`` or
 ``would-release`` (exit 0); ``not-this-actor`` or ``changed`` (exit 1);
-``skipped`` when the record step did not succeed (the exit code is the
-record step's). An unusable ``--previous`` (the current creator, an exempt
+``skipped`` when the record step did not succeed or before ``enable``
+(exit 1). An actor whose
+creator is now exempt has nothing to record (``exempt``), but its
+``--previous`` is still released. An unusable ``--previous`` (the current creator, an exempt
 or reserved value) is refused before any record is read or written: the
 previous step answers ``refused``, the record step ``skipped``, exit 1. A
 store fault exits 2. Never run ``record`` beside ``disable``.

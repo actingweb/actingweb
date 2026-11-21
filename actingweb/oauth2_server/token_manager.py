@@ -1782,10 +1782,12 @@ class ActingWebTokenManager:
 
     def revoke_client_tokens(self, actor_id: str, client_id: str) -> int:
         """
-        Revoke all tokens (access and refresh) associated with a specific client.
+        Revoke all tokens (access and refresh) associated with a specific client,
+        and remove its unexchanged authorization codes (4.0.0rc2).
 
         This ensures that when a client is deleted, all its tokens are immediately
-        invalidated and cannot be used for further access.
+        invalidated and cannot be used for further access, and no code issued
+        before the disconnect can be exchanged after it.
 
         Args:
             actor_id: The actor the client belongs to
@@ -1795,15 +1797,18 @@ class ActingWebTokenManager:
             Number of tokens confirmed revoked (access + refresh tokens)
 
         Raises:
-            TokenStoreUnavailable: one of the two token buckets could not be
-                read, or a delete could not be confirmed, so some of the
-                client's tokens may be left. Whatever could be revoked is
-                revoked first.
+            TokenStoreUnavailable: one of the two token buckets or the
+                authorization-code bucket could not be read, or a delete
+                (of a token, or of a code's provider-token, index or code
+                row) could not be confirmed, so some of the client's tokens
+                or codes may be left. Whatever could be revoked is revoked
+                first.
         """
         return self._revoke_matching_tokens(actor_id, client_id)
 
     def revoke_actor_tokens(self, actor_id: str) -> int:
-        """Revoke every MCP access and refresh token of an actor, whatever client.
+        """Revoke every MCP access and refresh token and every authorization
+        code of an actor, whatever client.
 
         Same removal helpers as :meth:`revoke_client_tokens` without the client
         filter, so the system actor's index rows and the provider-token rows go
@@ -1818,7 +1823,8 @@ class ActingWebTokenManager:
         return self._revoke_matching_tokens(actor_id, None)
 
     def _revoke_matching_tokens(self, actor_id: str, client_id: str | None) -> int:
-        """Revoke an actor's access and refresh tokens; one client's, or all.
+        """Revoke an actor's access and refresh tokens and remove its
+        authorization codes; one client's, or all.
 
         Raises :class:`TokenStoreUnavailable` as :meth:`revoke_client_tokens`
         documents. Whatever could be revoked is revoked first.

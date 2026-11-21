@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-21)
 **Reviewed:** 2026-11-21 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md (and its iterations log, entries 2-3)
+**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md (and its iterations log, entries 2-3, 7)
 **ID prefix:** TES
 
 ## Summary
@@ -56,10 +56,11 @@ the rest is in `docs/protocol/actingweb-spec.rst` and the wire recordings
   invalid id or base URI, a bearer for a peer with no trust, a re-pair not
   proven, a creation a pending or existing row blocks. A re-pair from a peer
   that proved the trust's secret is told why it was refused (another
-  relationship, no new secret, a secret already in use, a row that changed);
+  relationship, no new secret, a secret already in use, a row that changed,
+  a trust deleted meanwhile: "The trust was deleted meanwhile; pair again");
   any other caller only "Existing trust not verified". [plan+test]
   `tests/test_trust_re_pair.py::TestTheRefusalsSayWhy`,
-  `::TestTheRequestBodyIsChecked`, `::TestTheLastRefusalsSayWhy` (AC-12; iterations entries 2-3)
+  `::TestTheRequestBodyIsChecked`, `::TestTheLastRefusalsSayWhy` (AC-12; iterations entries 2-3, 7)
 - **TES-9** — A trust request whose body is not a JSON object, or whose
   `baseuri`, `id`, `secret`, `desc`, `verify` or `type` is not text (`null`
   is absent), answers 400 naming the field and stores nothing, also on a
@@ -91,7 +92,3 @@ the rest is in `docs/protocol/actingweb-spec.rst` and the wire recordings
 - TES-4's read-back guard is tested with `replace_trust_secret` stubbed; no
   test drives a real delete and re-request between the swap and the
   read-back on either backend.
-- TES-8: the reasons "no trust row" and "the row could not be read back"
-  from `replace_trust_secret` are not mapped; a proven peer is told
-  "Existing trust not verified" for them
-  (verifications/2026-11-21-trust-request-answer-secret.md, issue 2).

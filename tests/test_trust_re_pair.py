@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import uuid
 from typing import Any
 from unittest import mock
@@ -2856,6 +2857,33 @@ class TestTheLastRefusalsSayWhy:
                 out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
         assert out.response.status_code == 403
         assert json.loads(out.response.body) == {"error": reason}
+
+    @pytest.mark.parametrize(
+        ("reason", "logged"),
+        [
+            ("no trust row", "the trust is unchanged"),
+            ("the row could not be read back", "the secret was swapped"),
+        ],
+    )
+    def test_a_trust_deleted_meanwhile_says_pair_again(
+        self, reason: str, logged: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """rc2 verification, issue 2: the row went between the handler's
+        read and the swap, or after the swap; the proven peer is told to
+        pair again, and the log says whether the swap was written."""
+        from actingweb.actor import Actor
+
+        w = Receiver()
+        caplog.set_level(logging.WARNING, logger="actingweb.handlers.trust")
+        with mock.patch.object(
+            Actor, "replace_trust_secret", return_value=(None, reason)
+        ):
+            out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
+        assert out.response.status_code == 403
+        assert json.loads(out.response.body) == {
+            "error": "The trust was deleted meanwhile; pair again"
+        }
+        assert logged in caplog.text
 
     def test_an_unproven_re_pair_says_only_not_verified(self) -> None:
         w = Receiver()

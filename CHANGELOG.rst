@@ -68,8 +68,12 @@ FIXED
   empty body. They now carry ``{"error": "<reason>"}`` as
   ``application/json``, with the same status as before. A re-pair whose
   sender proved the trust's secret is told why it was refused (another
-  relationship, a new secret already in use, a row that changed meanwhile);
-  any other sender is told only that it did not prove it.
+  relationship, a new secret already in use, a row that changed or was
+  deleted meanwhile); any other sender is told only that it did not prove
+  it. **Behavior change:** these refusals have a JSON body and a
+  ``Content-Type`` of ``application/json`` where they had none; a peer that
+  parsed the body or matched on an empty one should read ``error``
+  instead. The status codes are unchanged.
 - **A trust request whose body was not a JSON object, or whose fields were
   not text, could answer 500.** A number as ``secret`` reached the store,
   and on a re-pair it was written before the request was refused. The body
@@ -104,16 +108,18 @@ FIXED
   the peer at its base URI, and an OAuth2 row has none by construction. A
   peer whose id has an OAuth2 prefix (``oauth2:``, ``oauth2_client:``,
   ``oauth2_interactive:``) is now not notified, and the skip logs at DEBUG.
-  **Check:** an alert on that WARNING now fires only for a peer that should
+  **Behavior change:** no permission-change notification is attempted for
+  such a peer, on either path. **Check:** an alert on that WARNING now fires only for a peer that should
   have a base URI.
 - **``actingweb-unique-creators`` tried to record a reserved creator.** An
   actor row holding a reserved ``#…`` value (a legacy or restored row; the
   library refuses them since 4.0) was counted as unrecorded by ``report``
-  and given a record by ``enable``, a first start and ``resolve``; on
-  DynamoDB the value ``#meta#backfill`` is the key of the backfill-complete
-  item itself. Such a creator is now never recorded, and ``report`` lists it
-  as ``reserved creator`` (informational: nothing can sign in with it;
-  rename or delete the actor).
+  and given a record by ``enable``, a first start and ``resolve`` (two
+  actors sharing one formed a duplicate group); on DynamoDB the value
+  ``#meta#backfill`` is the key of the backfill-complete item itself. Such
+  a creator is now never recorded nor grouped, and ``report`` lists it as
+  ``reserved creator`` (informational: nothing can sign in with it; rename
+  or delete the actor).
 - **The Agent Skill told an agent that a fresh database's first start
   stops, and an agent opted out of creator uniqueness to avoid the step.**
   ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence

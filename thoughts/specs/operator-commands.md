@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-19)
 **Reviewed:** 2026-11-19 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md (and its iterations log, entry 4)
+**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md (and its iterations log, entries 4-6)
 **ID prefix:** OPC
 
 ## Summary
@@ -80,14 +80,20 @@ This partial spec covers what the 2026-11-19 plan changed.
   `would-write` (exit 0); `missing`, `held-by`, `not-enforced`, `changed`,
   `refused` (exit 1). Previous step: `released`, `absent`, `not-kept`,
   `would-release` (exit 0); `not-this-actor`, `changed` (exit 1); `skipped`
-  (the record step's code); an unusable `--previous` is refused before any
+  when the record step failed or before `enable` (exit 1); for an actor
+  whose creator is now exempt the record step answers `exempt` and
+  `--previous` is still released (iterations entry 6); an unusable `--previous` is refused before any
   record is read or written (exit 1). A store fault exits 2. [plan+test]
   `tests/integration/test_unique_creators_record.py`,
-  `tests/test_unique_creators_command.py` (`test_record_*`) (plans/2026-11-21-trust-request-answer-secret.md, AC-23 to AC-31, AC-37 to AC-40)
-- **OPC-12** — `enable`, an empty store's first start and `report`'s
-  unrecorded list never record a reserved `#…` creator; `report` lists one
-  as `reserved creator` (informational) on DynamoDB. [plan+test]
-  `tests/integration/test_unique_creators_record.py::test_enable_never_records_a_reserved_creator` (plans/2026-11-21-trust-request-answer-secret.md, iterations entry 4)
+  `tests/test_unique_creators_command.py` (`test_record_*`),
+  `tests/integration/test_unique_creators_record.py::test_previous_is_released_for_an_exempt_creator` (plans/2026-11-21-trust-request-answer-secret.md, AC-23 to AC-31, AC-37 to AC-40)
+- **OPC-12** — `enable`, an empty store's first start, `resolve` and
+  `report`'s unrecorded list never record a reserved `#…` creator, and
+  actors sharing one form no duplicate group; `report` lists one as
+  `reserved creator` (informational) on DynamoDB. [plan+test]
+  `tests/integration/test_unique_creators_record.py::test_enable_never_records_a_reserved_creator`,
+  `::test_resolve_never_records_a_reserved_creator` (plans/2026-11-21-trust-request-answer-secret.md, iterations entries 4 and 5)
+
 ## Decisions in force
 
 - **OPC-D1** — A backfill collision leaves the name unmarked; the start stays
@@ -107,8 +113,3 @@ This partial spec covers what the 2026-11-19 plan changed.
 
 - OPC-9's "writes nothing" rests on a test that patches every probe and on
   the manual run of 2026-11-19.
-- OPC-12 does not hold for `resolve`: two actors sharing a reserved creator
-  form a duplicate group, and `resolve --apply` writes the kept actor's
-  record (verifications/2026-11-21-trust-request-answer-secret.md, issue 1).
-- OPC-11: `--previous` on an actor whose creator is exempt is skipped with
-  exit 0 (issue 3 of the same verification).

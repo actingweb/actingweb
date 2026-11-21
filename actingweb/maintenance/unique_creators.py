@@ -300,8 +300,12 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
         if DUP_MARKER in creator:
             report.dup_actors.append(actor_id)
             continue
-        if is_reserved(creator) and _wanted(creator, only):
-            report.reserved.append((actor_id, creator))
+        if is_reserved(creator):
+            # Never grouped: resolve would record it (#meta#backfill is the
+            # backfill-complete item's key).
+            if _wanted(creator, only):
+                report.reserved.append((actor_id, creator))
+            continue
         if is_exempt(creator) or not _wanted(creator, only):
             continue
         by_value.setdefault(creator, []).append(actor_id)
@@ -658,8 +662,8 @@ def _settle_record(key: str, kept: str, ids: list[str]) -> str:
     )
     from actingweb.db.dynamodb.creator import Creator
 
-    if not Creator.exists():
-        return "skip"  # before enable: it writes the records
+    if not Creator.exists() or is_reserved(key):
+        return "skip"  # before enable: it writes the records; never a reserved key
     try:
         kept_row = Actor.get(kept, consistent_read=True)
     except DoesNotExist:
@@ -712,7 +716,8 @@ class RecordOutcome:
     ``changed``, ``refused``. ``previous`` is the ``--previous`` step's:
     ``released``, ``absent``, ``not-kept`` (PostgreSQL),
     ``would-release``, or ``not-this-actor``, ``changed``, ``skipped``
-    (the record step did not succeed), ``refused`` (an address that cannot
+    (the record step did not succeed, or records are not enforced yet: a
+    failure either way), ``refused`` (an address that cannot
     be released); None without one. ``reason`` says why for a refusal.
     """
 
@@ -729,8 +734,10 @@ class RecordOutcome:
             return 1
         if self.record not in RECORD_OK:
             return 1
-        if self.previous in (None, "skipped"):
+        if self.previous is None:
             return 0
+        # A requested release that was skipped (record not enforced yet)
+        # did not happen: it fails like any other step.
         return 0 if self.previous in PREVIOUS_OK else 1
 
 
@@ -906,8 +913,18 @@ def _record_creator(
         if why:
             return RecordOutcome("skipped", previous="refused", reason=why)
     if is_exempt(creator) or DUP_MARKER in key:
+        # Nothing to record, but the address it held before can still be
+        # released: the actor no longer holds it.
         out = RecordOutcome("exempt")
-        out.previous = "skipped" if wanted_previous else None
+        if wanted_previous:
+            if not _uniqueness_enforced(config):
+                out.previous = "skipped"
+            elif config.database == "postgresql":
+                out.previous = "not-kept"
+            else:
+                out.previous = _dynamodb_previous_step(
+                    actor_id, wanted_previous, apply=apply
+                )
         return out
     why = _creator_refused(actor_id, creator)
     if why:

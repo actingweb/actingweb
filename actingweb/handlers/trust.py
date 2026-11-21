@@ -270,6 +270,8 @@ _RE_PAIR_REASONS = {
     "the row changed since the request authenticated": (
         "The trust changed meanwhile; try again"
     ),
+    "no trust row": "The trust was deleted meanwhile; pair again",
+    "the row could not be read back": "The trust was deleted meanwhile; pair again",
 }
 
 
@@ -690,9 +692,14 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             return
         if not new_trust:
             # Never the body's base URI in the log: it is the requester's.
+            # Only a read-back that found no row follows a written swap.
+            outcome = (
+                "the secret was swapped, then the row went"
+                if reason == "the row could not be read back"
+                else "the trust is unchanged"
+            )
             logger.warning(
-                f"Refused a re-pair for {peerid} at {myself.id}: {reason}; the "
-                "trust is unchanged"
+                f"Refused a re-pair for {peerid} at {myself.id}: {reason}; {outcome}"
             )
             # A peer that proved the secret learns why; any other caller
             # learns only that it did not prove it (rc2).

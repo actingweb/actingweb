@@ -685,9 +685,9 @@ class TestPeerTrustRequest:
     trust_url: str | None = None
     secret: str | None = None
 
-    def test_001_create_actor(self, http_client):
+    def test_001_create_actor(self, http_client: requests.Session) -> None:
         response = http_client.post(
-            f"{http_client.base_url}/",
+            f"{http_client.base_url}/",  # type: ignore[attr-defined]  # set by the fixture
             json={"creator": self.creator},
             headers={"Content-Type": "application/json"},
         )
@@ -696,7 +696,9 @@ class TestPeerTrustRequest:
         TestPeerTrustRequest.actor_id = response.json()["id"]
         TestPeerTrustRequest.passphrase = response.json()["passphrase"]
 
-    def test_002_request_with_invalid_peer_is_refused(self, http_client):
+    def test_002_request_with_invalid_peer_is_refused(
+        self, http_client: requests.Session
+    ) -> None:
         """AC-6, AC-12: a base URI or id that is not plainly one is 400 with
         a reason, and stores nothing."""
         for body in (
@@ -713,7 +715,9 @@ class TestPeerTrustRequest:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_003_request_without_secret_answers_its_secret(self, http_client):
+    def test_003_request_without_secret_answers_its_secret(
+        self, http_client: requests.Session
+    ) -> None:
         """AC-1: the actor generates the secret and answers it."""
         response = requests.post(
             f"{self.actor_url}/trust/friend",
@@ -733,7 +737,9 @@ class TestPeerTrustRequest:
         TestPeerTrustRequest.trust_url = response.headers["Location"]
         TestPeerTrustRequest.secret = data["secret"]
 
-    def test_004_peer_reads_its_pending_row(self, http_client):
+    def test_004_peer_reads_its_pending_row(
+        self, http_client: requests.Session
+    ) -> None:
         """AC-8: the pending row's own peer reads it: 202, no token."""
         response = requests.get(
             self.trust_url,  # type: ignore[arg-type]
@@ -745,14 +751,16 @@ class TestPeerTrustRequest:
         assert data["approved"] in (False, "false")
         assert "verification_token" not in data
 
-    def test_005_wrong_secret_is_refused(self, http_client):
+    def test_005_wrong_secret_is_refused(self, http_client: requests.Session) -> None:
         response = requests.get(
             self.trust_url,  # type: ignore[arg-type]
             headers={"Authorization": f"Bearer {uuid.uuid4().hex}"},
         )
         assert response.status_code == 403
 
-    def test_006_owner_cannot_approve_unverified_request(self, http_client):
+    def test_006_owner_cannot_approve_unverified_request(
+        self, http_client: requests.Session
+    ) -> None:
         """AC-7: the request never verified, and its base URI serves
         nothing: 403, the row stays unapproved."""
         response = requests.put(
@@ -767,7 +775,7 @@ class TestPeerTrustRequest:
         )
         assert response.json()["approved"] in (False, "false")
 
-    def test_007_delete_actor(self, http_client):
+    def test_007_delete_actor(self, http_client: requests.Session) -> None:
         """The peer cannot be told; the actor goes anyway."""
         response = requests.delete(
             self.actor_url,  # type: ignore[arg-type]

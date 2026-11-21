@@ -115,7 +115,7 @@ This plan is what 4.0.0rc2 takes for them.
 - `actingweb/trust.py:136` `Trust.get` - on a creation it returns the dict `create` built (`actor.py:3163`).
 - `actingweb/actor.py:3236-3238` `replace_trust_secret` - a re-pair reads its row back after the conditional swap.
 - `actingweb/actor.py:2737` `reverify_pending_trust` - the check repeated at approval (GET with the stored secret, an approved row naming this actor, then `/meta` at `:2776`); unchanged.
-- `actingweb/trust_lookup.py:15` `OAUTH2_SOURCES` - the OAuth2 peer-id prefixes phase 2 skips (`trust_permissions.py:163` `is_client_peer` covers only `oauth2_client:`).
+- `actingweb/oauth2_server/trust_lookup.py:15` `OAUTH2_SOURCES` - the OAuth2 peer-id prefixes phase 2 skips (`trust_permissions.py:163` `is_client_peer` covers only `oauth2_client:`).
 - `actingweb/trust_permissions.py` `_notify_peer` (`:406`, warns at `:466` through `aw_proxy.py:275`) and `_notify_peer_async` (`:482`, warns at `:524-530`) - the two paths phase 2 changes.
 - `actingweb/interface/app.py:675` `with_mcp` - stores its options as `_mcp_*` attributes, re-applied in `_apply_runtime_changes_to_config` (`:287-290`); phase 3 adds one the same way. `with_app_version` (`:429`) has the validation phase 3 reuses.
 - `actingweb/oauth2_server/token_manager.py:1766` `_revoke_matching_tokens` - the disconnect sweep (reached from `Trust.delete` through `revoke_connection_tokens` and `disable_client`, before the row goes); phase 4 adds the code bucket to it. `:231` `exchange_authorization_code` with its post-mint check `_generation_still_matches` (`:1064`), the pattern phase 4's check follows. `delete_confirmed` (`:2067`) is the fail-closed delete; `_remove_auth_code` (`:1211`) swallows faults and is not used by the sweep.
@@ -205,8 +205,8 @@ All phases
 | AC-11 | 1 | `tests/test_trust_re_pair.py::TestTheAnswerCarriesTheSecret::test_a_re_pair_answers_only_its_own_secret` (handler-only: the read-back is stubbed) | Passing |
 | AC-12 | 1 | `tests/test_trust_re_pair.py::TestTheRefusalsSayWhy::test_each_refusal_has_an_error_body` (parametrized over the five refusals); `TestPeerTrustRequest::test_002_…` asserts the body end to end | Passing |
 | AC-13 | 1 | manual: read the spec, CHANGELOG and hooks-reference passages — prose | Done: passages read against the AC; `sphinx-build -W` passes |
-| AC-14 | 2 | `tests/test_trust_permissions_notify.py::test_an_oauth2_peer_is_not_notified` (parametrized: three prefixes × sync/async path; a trust row that exists with no base URI; caplog: nothing above DEBUG; no HTTP call) | Not run |
-| AC-15 | 2 | `tests/test_trust_permissions_notify.py::test_a_peer_without_baseuri_still_warns` (regression; both paths) | Not run |
+| AC-14 | 2 | `tests/test_trust_permissions_notify.py::test_an_oauth2_peer_is_not_notified` (parametrized: three prefixes × sync/async path; a trust row that exists with no base URI; caplog: nothing above DEBUG; no HTTP call) | Passing |
+| AC-15 | 2 | `tests/test_trust_permissions_notify.py::test_a_peer_without_baseuri_still_warns` (regression; both paths) | Passing |
 | AC-16 | 3 | `tests/test_mcp_server_name.py::test_the_app_announces_its_version` (through `ActingWebApp.with_mcp`, so the runtime re-apply is covered) | Not run |
 | AC-17 | 3 | `tests/test_mcp_server_name.py::test_the_default_is_the_library_version` (regression; also with `with_app_version("9.9")`) | Not run |
 | AC-33 | 3 | `tests/test_mcp_server_name.py::test_an_invalid_server_version_is_refused` | Not run |
@@ -388,7 +388,7 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 
 ### Changes
 
-- `actingweb/trust_permissions.py` - a helper (next to `is_client_peer`, `:163`) that matches any `OAUTH2_SOURCES` prefix (`trust_lookup.py:15`). Both `_notify_peer` (`:406`) and `_notify_peer_async` (`:482`) return after a DEBUG line at their top for such a peer, before the trust read and the proxy. Each store notifies one peer; there is no loop to move the skip into. The WARNINGs at `:466` (sync, via `aw_proxy.py:275`) and `:524-530` (async) stay for every other peer.
+- `actingweb/trust_permissions.py` - a helper (next to `is_client_peer`, `:163`) that matches any `OAUTH2_SOURCES` prefix (`oauth2_server/trust_lookup.py:15`). Both `_notify_peer` (`:406`) and `_notify_peer_async` (`:482`) return after a DEBUG line at their top for such a peer, before the trust read and the proxy. Each store notifies one peer; there is no loop to move the skip into. The WARNINGs at `:466` (sync, via `aw_proxy.py:275`) and `:524-530` (async) stay for every other peer.
 - `CHANGELOG.rst` `Unreleased` - FIXED: one WARNING per OAuth2/MCP client on every permission change; the cause; now skipped at DEBUG. A consumer who alerts on that WARNING sees it only for peers that should have a base URI.
 
 ### New Tests
@@ -404,7 +404,13 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 
 - [ ] Fast tier; Full tier before the phase commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes (implementation, 2026-11-21)
+
+- `trust_permissions.is_oauth2_peer(peer_id)` matches `prefix:` with the prefix in `oauth2_server.trust_lookup.OAUTH2_SOURCES` (imported inside the function: `trust_permissions` is imported by the OAuth2 server). `_notify_peer` and `_notify_peer_async` return after a DEBUG line at their top, before the proxy or the trust read.
+- The AC-15 test also covers `my-oauth2:peer` (contains `oauth2`, not as the prefix).
+- Full tier: PostgreSQL 8190 passed; DynamoDB 8420 passed and one failure, `tests/performance/test_backend_performance.py::TestActorPerformance::test_actor_update_performance`, a timing test under the parallel run, which passed when re-run alone.
 
 ---
 

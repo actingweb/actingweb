@@ -42,6 +42,15 @@ FIXED
   a bearer for a peer with no trust, a re-pair not proven) answered with an
   empty body. They now carry ``{"error": "<reason>"}`` as
   ``application/json``, with the same status as before.
+- **Every permission change logged one WARNING per OAuth2/MCP client.**
+  ``Cannot notify peer oauth2_client:… no baseuri in trust`` (or, on the
+  sync path, ``Failed to notify peer … status=0``) was logged for each MCP
+  client connection whose permissions changed: a permission change notifies
+  the peer at its base URI, and an OAuth2 row has none by construction. A
+  peer whose id has an OAuth2 prefix (``oauth2:``, ``oauth2_client:``,
+  ``oauth2_interactive:``) is now not notified, and the skip logs at DEBUG.
+  **Check:** an alert on that WARNING now fires only for a peer that should
+  have a base URI.
 - **The Agent Skill told an agent that a fresh database's first start
   stops, and an agent opted out of creator uniqueness to avoid the step.**
   ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence

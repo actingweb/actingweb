@@ -16,6 +16,19 @@ ADDED
   ``initialize`` is answered without authentication by default, so the
   version is public.
 
+- **One actor's creator record can be written without a scan.**
+  ``actingweb-unique-creators record --actor ID [--previous ADDR]
+  [--apply]`` and ``actingweb.maintenance.unique_creators.record_creator()``
+  record one actor's current creator: for an actor restored from a backup
+  or renamed back, whose creator has no ``creators`` record on DynamoDB
+  while a record of its earlier address still names it. Before, ``enable``
+  refused ``--creator``, and settling one actor took ``resolve --apply``
+  and ``enable --apply``, two full scans. ``record`` writes the record
+  conditioned on the actor row as read, releases ``--previous`` only after
+  that succeeded, refuses capitals, reserved values and system creators,
+  and only checks on PostgreSQL. Run it with sign-ins for that address
+  quiet; see the deployment guide ("Restoring one actor").
+
 FIXED
 ~~~~~
 

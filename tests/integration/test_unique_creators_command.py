@@ -20,6 +20,7 @@ from actingweb.db.creator_rules import dup_value
 from actingweb.db.exceptions import CreatorTaken
 from actingweb.maintenance import unique_creators
 
+from ._creator_rows import raw_actor
 from .conftest import DATABASE_BACKEND
 
 pytestmark = pytest.mark.xdist_group(name="unique_creator")
@@ -63,26 +64,7 @@ def _seed(
     return actor.id
 
 
-def _raw_actor(creator: str) -> str:
-    """An actor row written as stored, bypassing the lowercasing (a legacy
-    mixed-case address)."""
-    actor_id = uuid.uuid4().hex
-    if DYNAMODB:
-        from actingweb.db.dynamodb.actor import Actor as ActorModel
-
-        ActorModel(id=actor_id, creator=creator, passphrase="pw").save()
-    else:
-        from actingweb.db.postgresql.connection import get_connection
-
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO actors (id, creator, passphrase, created_at) "
-                    "VALUES (%s, %s, 'pw', NOW())",
-                    (actor_id, creator),
-                )
-            conn.commit()
-    return actor_id
+_raw_actor = raw_actor
 
 
 def _creator(config: Any, actor_id: str) -> str | None:

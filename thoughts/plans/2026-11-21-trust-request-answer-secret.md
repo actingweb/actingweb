@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 approved: 2026-11-21 by Greger Wedel
 ---
 
@@ -180,7 +180,7 @@ Phase 5 — one actor's creator record
 - **AC-30** (main: PostgreSQL) — On PostgreSQL, `record` answers `verified` when no other actor has the same lowercased creator and `held-by <id>` when one does, and never writes.
 - **AC-31** (edge: race) — When the actor row changes between `record`'s read and its write, `record` answers `changed`, writes nothing and exits 1.
 - **AC-37** (added in plan: phase-5 review) — When the actor does not exist, `record` answers `missing` and exits 1. When its creator is exempt or a `#dup-` value, it answers `exempt`, writes nothing and exits 0.
-- **AC-38** (added in plan: phase-5 review, `--previous`) — `--previous` is normalised as creators are. When it equals the actor's current creator, or is exempt or reserved, `record` refuses before it reads anything (exit 1). When no record exists for it, the previous step answers `absent` (exit 0). When its record names another actor, it answers `not-this-actor`, removes nothing and exits 1.
+- **AC-38** (added in plan: phase-5 review, `--previous`) — `--previous` is normalised as creators are. When it equals the actor's current creator, or is exempt or reserved, `record` refuses before any record is read or written (exit 1; the actor is read first, to compare with its creator; implementation, diff review). When no record exists for it, the previous step answers `absent` (exit 0). When its record names another actor, it answers `not-this-actor`, removes nothing and exits 1.
 - **AC-39** (added in plan: phase-5 review) — When the record step answers anything but `recorded` or `written`, `--previous` is not released (`skipped`), and the exit code is the record step's.
 - **AC-40** (added in plan: phase-5 review) — When the store faults (`DbError` or `StoreUnavailable`), `record` exits 2 and prints the fault.
 
@@ -218,20 +218,20 @@ All phases
 | AC-34 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused_after_a_reconnect` | Passing |
 | AC-35 | 4 | `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_sweep_during_an_exchange_leaves_no_live_token` (the sweep runs from a wrapped `_create_access_token`, after the consume and before any token is written); `::test_a_fault_on_the_re_read_leaves_no_token` | Passing |
 | AC-36 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_that_cannot_be_removed_keeps_the_row` (`delete_confirmed` faulted for the code: `Trust.delete` raises `DbError`, the row stays, the retry finishes); `tests/test_oauth2_disconnect_sweeps_codes.py::test_a_code_that_cannot_be_removed_fails_the_disconnect`, `::test_a_half_removed_code_is_finished_by_the_retry` | Passing |
-| AC-23 | 5 | `tests/integration/test_unique_creators_record.py::test_record_writes_a_missing_record` | Not run |
-| AC-24 | 5 | `tests/integration/test_unique_creators_record.py::test_record_releases_the_previous_address` (the consumer's restore, end to end: `report` clean, `enable` does not refuse) | Not run |
-| AC-25 | 5 | `tests/integration/test_unique_creators_record.py::test_a_dry_run_writes_nothing` | Not run |
-| AC-26 | 5 | `tests/integration/test_unique_creators_record.py::test_a_held_address_is_reported` | Not run |
-| AC-27 | 5 | `tests/integration/test_unique_creators_record.py::test_before_enable_it_is_not_enforced` (both backends) | Not run |
-| AC-28 | 5 | `tests/integration/test_unique_creators_record.py::test_capitals_are_refused` | Not run |
-| AC-29 | 5 | `tests/test_unique_creators_command.py::test_record_refuses_reserved_and_system_creators` | Not run |
-| AC-30 | 5 | `tests/integration/test_unique_creators_record.py::test_postgresql_checks_only` (PostgreSQL leg) | Not run |
-| AC-31 | 5 | `tests/integration/test_unique_creators_record.py::test_a_changed_row_is_not_recorded` (`record_for_actor_as_read` wrapped to rewrite the actor row before it calls through) | Not run |
-| AC-37 | 5 | `tests/test_unique_creators_command.py::test_record_missing_and_exempt` | Not run |
-| AC-38 | 5 | `tests/integration/test_unique_creators_record.py::test_previous_is_checked` (parametrized: equal to current, reserved, capitals normalised, absent, names another actor) | Not run |
-| AC-39 | 5 | `tests/integration/test_unique_creators_record.py::test_previous_is_kept_when_the_record_step_fails` (a held address with `--previous`) | Not run |
-| AC-40 | 5 | `tests/test_unique_creators_command.py::test_record_store_fault_exits_2` (a helper patched to raise `DbError`) | Not run |
-| AC-32 | all | manual: read the CHANGELOG entries and the two docs passages; `sphinx-build -W` passes — prose | Not run |
+| AC-23 | 5 | `tests/integration/test_unique_creators_record.py::test_record_writes_a_missing_record`, `::test_record_moves_a_stale_record` (a record naming a deleted or renamed actor) | Passing |
+| AC-24 | 5 | `tests/integration/test_unique_creators_record.py::test_record_releases_the_previous_address` (the consumer's restore, end to end: `report` clean, `enable` does not refuse) | Passing |
+| AC-25 | 5 | `tests/integration/test_unique_creators_record.py::test_a_dry_run_writes_nothing` | Passing |
+| AC-26 | 5 | `tests/integration/test_unique_creators_record.py::test_a_held_address_is_reported` | Passing |
+| AC-27 | 5 | `tests/integration/test_unique_creators_record.py::test_before_enable_it_is_not_enforced` (both backends) | Passing |
+| AC-28 | 5 | `tests/integration/test_unique_creators_record.py::test_capitals_are_refused` | Passing |
+| AC-29 | 5 | `tests/test_unique_creators_command.py::test_record_refuses_reserved_and_system_creators` | Passing |
+| AC-30 | 5 | `tests/integration/test_unique_creators_record.py::test_postgresql_checks_only` (PostgreSQL leg) | Passing |
+| AC-31 | 5 | `tests/integration/test_unique_creators_record.py::test_a_changed_row_is_not_recorded` (`record_for_actor_as_read` wrapped to rewrite the actor row before it calls through) | Passing |
+| AC-37 | 5 | `tests/test_unique_creators_command.py::test_record_missing_and_exempt` | Passing |
+| AC-38 | 5 | `tests/integration/test_unique_creators_record.py::test_previous_is_checked` (parametrized: equal to current, reserved, capitals normalised, absent, names another actor) | Passing |
+| AC-39 | 5 | `tests/integration/test_unique_creators_record.py::test_previous_is_kept_when_the_record_step_fails` (a held address with `--previous`) | Passing |
+| AC-40 | 5 | `tests/test_unique_creators_command.py::test_record_store_fault_exits_2` (a helper patched to raise `DbError`) | Passing |
+| AC-32 | all | manual: read the CHANGELOG entries and the two docs passages; `sphinx-build -W` passes — prose | Done: the four CHANGELOG entries (phases 2-5), `docs/quickstart/configuration.rst` (`server_version`, public through `initialize`) and `docs/quickstart/deployment.rst` ("Restoring one actor": outcomes, exit codes, quiet sign-ins) read against the AC; `sphinx-build -W` passes |
 
 The unit tests run on DynamoDB only (`tests/_adoption_helpers.py:30`). The
 integration tests run on both backends in the Full tier and are each
@@ -553,7 +553,24 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 - [ ] Fast tier; Full tier before the phase commit (both backends)
 - [ ] Manual: `actingweb-unique-creators record --help` shows the options
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes (implementation, 2026-11-21)
+
+- **Deviation:** `record` does not reuse `_settle_record`. That helper settles a duplicate group (it moves a record away from group members `resolve` is renaming); refactoring it for one actor would have changed `resolve`'s path. `record` uses the same conditional DynamoDB writers directly (`record_for_actor_as_read`, `move_stale_record`, `release_stale_record`) and the `creator_rules` helpers. `unique_creators` has no `__all__`; `record_creator` and `RecordOutcome` are public names documented in the module docstring and the deployment guide.
+- Outcome lines: `record actor=<id> apply=<bool> outcome=<o>[ holder=<id>][ reason=…]` and `record actor=<id> previous outcome=<o>`. A refused `--previous` answers previous `refused` and record `skipped`. Dry run: `would-write`, `would-release`.
+- `_raw_actor` moved to `tests/integration/_creator_rows.py` (`raw_actor`), imported by both integration files.
+- Diff review (codex and fresh-context Claude) folded:
+  - PostgreSQL's holder check lowercases only `@` values; a provider id compares exactly (`Alice` and `alice` are two creators), tested in `test_postgresql_checks_only`.
+  - The DynamoDB step applies the refusal rules again to the row its writes are conditioned on (a rewrite to capitals between the two reads was let through).
+  - A lost race whose record now names this actor answers `recorded`; a record with an empty `actor_id` is refused with a pointer to `report`.
+  - Tests added: the move branch (`test_record_moves_a_stale_record`), AC-29 through `_run` (exit 1, no write, the system actors at their fixed ids not refused), AC-40 on the write path and the printed fault.
+  - The deployment guide names every outcome, the dry-run ones and the exact `held-by` output.
+- **Accepted (diff review):**
+  - `record` beside `disable`: the write is not conditioned on the backfill-complete item, so a `record` running while `disable` empties the store can leave a record behind. `disable` runs only after every process with uniqueness on has stopped (its documented precondition); the docstring and the guide say never to run `record` beside it. Closing it means a marker condition in the shared DynamoDB writers.
+  - `recorded` is answered without re-reading the actor row (an enforced rename moves the record itself).
+  - A double restore: releasing `--previous` when another live actor stores that address without a record leaves that actor unrecorded; `report` lists it.
+- Full tier: DynamoDB 8464 passed, PostgreSQL 8220 passed, docs clean.
 
 ---
 
@@ -641,3 +658,21 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 - `rows.toml:36-38` says "(CI's shallow checkout skips it)", but CI checks out full history (`.github/workflows/tests.yml:195-198`); a stale comment, worth fixing in commit 0.
 - Phase 4: how a TTL-expired code row reads through `get_bucket` on each backend was not checked; the sweep removes such rows too, harmlessly.
 - Phase 2: no pre-4.0 row with an OAuth2 prefix and a real base URI is known; not searched in a production store.
+
+## Implementation Summary
+
+**Completed:** 2026-11-21
+**All phases:** Complete (commit 0 `97ca3a9`; phases 1-4 `0b54881`, `bd88328`, `6123223`, `7686be8`; phase 5 in the commit that carries this summary)
+**Test status:** All passing: Full tier on both backends and the docs build before each phase commit; each phase's AC tests seen failing on the behaviour first (regression tests marked as such).
+
+### Deviations from Plan
+- Phase 1: one todo file (`handler-refusal-bodies-and-input-robustness.md`) instead of two; the spec keeps "MUST send `secret`" and adds "SHOULD therefore send a secret"; the read-back guard answers `{"error": "Trust was replaced; pair again"}`; the spec's error-body sentence covers only the refusals that carry one.
+- Phase 3: `server_version` uses the `_UNSET` sentinel like the other `with_mcp` options; `None` is refused.
+- Phase 4: `_remove_auth_code_confirmed` deletes the code row last; AC-36 at the `Trust.delete` level is an integration test.
+- Phase 5: `_settle_record` is not reused (its group semantics differ); AC-38's wording ("before any record is read or written"); the race with `disable` is accepted and documented.
+
+### Learnings
+- `auth.py:156` crashes on an `Authorization` header with more than one space (500 on routes that fall back to basic auth); filed in the todo.
+- The demo's BlazeMeter selfproxy steps need `ENABLE_DEVTEST=true`; step 34 answers `200 {}` locally (research note).
+- A race test that runs the interfering step after the writes it wants to catch passes without the fix (phase 4's first AC-35 test): put the interference in the window the fix exists for.
+- The `make test-all-parallel` targets stop the database containers; restart DynamoDB Local before the next unit run.

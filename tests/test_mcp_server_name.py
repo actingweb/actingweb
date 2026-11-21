@@ -6,6 +6,10 @@ These reach MCP clients via the live ``initialize`` response built by
 ``config.mcp_instructions`` (set by ``ActingWebApp.with_mcp(...)``).
 """
 
+from typing import Any
+
+import pytest
+
 from actingweb import config
 from tests.mcp_helpers import make_mcp_config, make_mcp_handler
 
@@ -154,3 +158,47 @@ def test_initialize_advertises_no_list_change_notifications() -> None:
     capabilities = result["capabilities"]
     for kind in ("tools", "resources", "prompts"):
         assert capabilities[kind]["listChanged"] is False, kind
+
+
+class TestServerVersionInInitialize:
+    """``with_mcp(server_version=...)`` (4.0.0rc2,
+    plans/2026-11-21-trust-request-answer-secret.md phase 3)."""
+
+    def _app(self) -> Any:
+        from actingweb.interface import ActingWebApp
+
+        return ActingWebApp(
+            aw_type="urn:actingweb:test:mcpversion",
+            database="dynamodb",
+            fqdn="localhost:5000",
+        )
+
+    def test_the_app_announces_its_version(self) -> None:
+        """AC-16: through the builder, so the runtime re-apply is covered."""
+        cfg = self._app().with_mcp(enable=True, server_version="2.3.1").get_config()
+        assert _initialize(cfg)["result"]["serverInfo"]["version"] == "2.3.1"
+
+    def test_a_later_call_keeps_the_version(self) -> None:
+        app = self._app().with_mcp(enable=True, server_version="2.3.1")
+        cfg = app.with_mcp(enable=True, server_name="other").get_config()
+        assert _initialize(cfg)["result"]["serverInfo"]["version"] == "2.3.1"
+
+    def test_the_default_is_the_library_version(self) -> None:
+        """AC-17 (regression): unset, the library's version, also when the
+        application sets its own with with_app_version()."""
+        from actingweb import __version__
+
+        plain = self._app().with_mcp(enable=True).get_config()
+        assert _initialize(plain)["result"]["serverInfo"]["version"] == __version__
+        app = self._app().with_app_version("9.9").with_mcp(enable=True)
+        versioned = app.get_config()
+        assert versioned.version == "9.9"
+        assert _initialize(versioned)["result"]["serverInfo"]["version"] == __version__
+
+    @pytest.mark.parametrize("value", ["", "   ", 5, None])
+    def test_an_invalid_server_version_is_refused(self, value: Any) -> None:
+        """AC-33: as with_app_version() refuses the same value."""
+        with pytest.raises(ValueError):
+            self._app().with_app_version(value)
+        with pytest.raises(ValueError):
+            self._app().with_mcp(enable=True, server_version=value)

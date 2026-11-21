@@ -1407,6 +1407,12 @@ MCP Capability
   on the MCP ``InitializeResult.instructions`` field and shown to the LLM on
   initial connection — useful for pointing a new client at an entry-point tool.
   Like ``server_name``, the first call wins for the process-wide singleton.
+- Set the version announced as ``serverInfo.version`` in the initialise
+  handshake with ``with_mcp(server_version="2.3.1")`` (4.0; any non-empty
+  string). Unset, it is the ActingWeb library's version, and
+  ``with_app_version()`` does not change it. ``initialize`` is answered
+  without authentication unless ``require_auth_for_initialize=True``, so the
+  version is public.
 - A later ``with_mcp()`` call changes only the options it names; the others
   keep what an earlier call set.
 - ``with_mcp(require_auth_for_initialize=True)`` challenges an

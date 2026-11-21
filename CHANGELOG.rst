@@ -5,6 +5,17 @@ CHANGELOG
 Unreleased
 ----------
 
+ADDED
+~~~~~
+
+- **An application can announce its own MCP server version.**
+  ``with_mcp(server_version="2.3.1")`` sets ``serverInfo.version`` in the
+  MCP ``initialize`` answer, which was always the ActingWeb library's
+  version. Unset, it still is, and ``with_app_version()`` does not change
+  it. A value that is not a non-empty string raises ``ValueError``.
+  ``initialize`` is answered without authentication by default, so the
+  version is public.
+
 FIXED
 ~~~~~
 

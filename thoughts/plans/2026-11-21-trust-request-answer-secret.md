@@ -207,9 +207,9 @@ All phases
 | AC-13 | 1 | manual: read the spec, CHANGELOG and hooks-reference passages — prose | Done: passages read against the AC; `sphinx-build -W` passes |
 | AC-14 | 2 | `tests/test_trust_permissions_notify.py::test_an_oauth2_peer_is_not_notified` (parametrized: three prefixes × sync/async path; a trust row that exists with no base URI; caplog: nothing above DEBUG; no HTTP call) | Passing |
 | AC-15 | 2 | `tests/test_trust_permissions_notify.py::test_a_peer_without_baseuri_still_warns` (regression; both paths) | Passing |
-| AC-16 | 3 | `tests/test_mcp_server_name.py::test_the_app_announces_its_version` (through `ActingWebApp.with_mcp`, so the runtime re-apply is covered) | Not run |
-| AC-17 | 3 | `tests/test_mcp_server_name.py::test_the_default_is_the_library_version` (regression; also with `with_app_version("9.9")`) | Not run |
-| AC-33 | 3 | `tests/test_mcp_server_name.py::test_an_invalid_server_version_is_refused` | Not run |
+| AC-16 | 3 | `tests/test_mcp_server_name.py::test_the_app_announces_its_version` (through `ActingWebApp.with_mcp`, so the runtime re-apply is covered) | Passing |
+| AC-17 | 3 | `tests/test_mcp_server_name.py::test_the_default_is_the_library_version` (regression; also with `with_app_version("9.9")`) | Passing |
+| AC-33 | 3 | `tests/test_mcp_server_name.py::test_an_invalid_server_version_is_refused` | Passing |
 | AC-18 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_disconnected_client_needs_the_user_again` (regression: pins today's behaviour) | Not run |
 | AC-19 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_reconnect_starts_from_a_fresh_grant` (regression) | Not run |
 | AC-20 | 4 | `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused` | Not run |
@@ -438,7 +438,14 @@ carries `skipif(DYNAMODB)`; AC-27 runs on both.
 
 - [ ] Fast tier; Full tier before the phase commit
 
-### Implementation Status: Not Started
+### Implementation Status: Complete
+
+### Notes (implementation, 2026-11-21)
+
+- `server_version` is keyword-only with the `_UNSET` sentinel, like the other `with_mcp` options (not `str | None = None`): a later `with_mcp()` call keeps it (`test_a_later_call_keeps_the_version`), and `None` is refused with the other invalid values. `Config.mcp_server_version` defaults to None; the handler answers `config.mcp_server_version or __version__`. Also passed to `Config(...)` at construction (`app.py`, next to `mcp_instructions`).
+- `GET /mcp` and `/mcp/info` report no version; only `initialize` changes.
+- Documented in `docs/quickstart/configuration.rst` (the MCP section); CHANGELOG ADDED. A new keyword with a default: additive, no migration-guide entry.
+- Full tier: DynamoDB 8428 passed, PostgreSQL 8197 passed, docs clean.
 
 ---
 

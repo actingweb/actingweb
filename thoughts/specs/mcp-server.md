@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
+**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md
 **ID prefix:** MCP
 
 ## Summary
@@ -52,13 +52,44 @@ capabilities it advertises.
   `initialize` is challenged with 401 (503 on a token-store fault); off, it
   is answered. [plan+test] `tests/test_mcp_auth_challenge.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-30, AC-31)
 
+
+## Handshake
+
+- **MCP-9** — `initialize` announces `serverInfo.version` from
+  `with_mcp(server_version=…)`, or the library's version when it is not set;
+  `with_app_version()` does not change it. An empty or non-string value
+  raises `ValueError` at configuration. [plan+test]
+  `tests/test_mcp_server_name.py::TestServerVersionInInitialize` (plans/2026-11-21-trust-request-answer-secret.md, AC-16, AC-17, AC-33)
+
+## Authorization
+
+- **MCP-10** — A client whose connection was deleted gets a new code only
+  after the user acts on an ActingWeb page, and the reconnect starts from a
+  fresh grant (the level chosen then, no override from before). [plan+test]
+  `tests/integration/test_oauth2_trust_binding.py::test_a_disconnected_client_needs_the_user_again`,
+  `::test_a_reconnect_starts_from_a_fresh_grant` (AC-18, AC-19)
+- **MCP-11** — A disconnect removes the actor's unexchanged authorization
+  codes for the client with its tokens, each removal confirmed (a fault
+  fails the disconnect and keeps the trust row); a code from before the
+  disconnect answers `invalid_grant`, also after a reconnect; an exchange in
+  flight during the disconnect leaves no working token; a refresh token from
+  before the disconnect stays dead after a reconnect. [plan+test]
+  `tests/integration/test_oauth2_trust_binding.py::test_a_code_from_before_the_disconnect_is_refused`,
+  `::test_a_code_from_before_the_disconnect_is_refused_after_a_reconnect`,
+  `::test_an_old_refresh_token_stays_dead_after_a_reconnect`,
+  `::test_a_code_that_cannot_be_removed_keeps_the_row`,
+  `tests/test_oauth2_disconnect_sweeps_codes.py` (AC-20, AC-22, AC-34, AC-35, AC-36)
 ## Decisions in force
 
 - **MCP-D1** — Templated resources stay in `resources/list` until the
   connectors are seen calling `resources/templates/list`. (plans/2026-11-19-emm-4-0-adoption-findings.md)
 - **MCP-D2** — Calling `with_mcp()` again changes only the options it names.
   [test] `tests/test_actingweb_app.py::test_a_second_with_mcp_keeps_earlier_options` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-51)
+- **MCP-D3** — The disconnect sweeps codes; the code exchange and the
+  refresh grant do not look up a trust. (plans/2026-11-21-trust-request-answer-secret.md, owner 2026-11-21)
 
 ## Untested
 
-- None of the above.
+- MCP-11: a code an authorization issues after the sweep's code snapshot and
+  before the trust row goes is not swept; the user acted on an ActingWeb page
+  for it.

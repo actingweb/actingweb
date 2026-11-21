@@ -2,6 +2,8 @@
 status: done
 approved: 2026-11-21 by Greger Wedel
 iterations: thoughts/plans/2026-11-21-trust-request-answer-secret.iterations.md
+verified: thoughts/verifications/2026-11-21-trust-request-answer-secret.md
+spec_merged: 2026-11-21
 ---
 
 # Implementation Plan: 4.0.0rc2 — the trust request's answer, and a consumer's rc1 findings

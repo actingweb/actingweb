@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-19)
 **Reviewed:** 2026-11-19 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
+**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md (and its iterations log, entry 4)
 **ID prefix:** OPC
 
 ## Summary
@@ -64,6 +64,30 @@ This partial spec covers what the 2026-11-19 plan changed.
   of its own (`NEWER FORMAT`), neither repaired nor swept, and the exit
   status is 3 when nothing else is wrong. [plan+test] `tests/test_verify_property_lists.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-27, AC-45)
 
+
+## Creator uniqueness
+
+- **OPC-11** — `actingweb-unique-creators record --actor ID [--previous
+  ADDR] [--apply]` records one actor's current creator without a scan. On
+  DynamoDB it writes the missing record (or moves a stale one), conditioned
+  on the actor row as read; with `--previous`, after the record step
+  succeeded, it releases that address's record when it names this actor. On
+  PostgreSQL it only checks (`verified`; `@` values compared
+  case-insensitively, provider ids exactly), and `--previous` answers
+  `not-kept`. It refuses capitals, reserved values and a system creator on
+  another actor, answers `not-enforced` before `enable`, and a dry run writes
+  nothing. Record step: `recorded`, `written`, `verified`, `exempt`,
+  `would-write` (exit 0); `missing`, `held-by`, `not-enforced`, `changed`,
+  `refused` (exit 1). Previous step: `released`, `absent`, `not-kept`,
+  `would-release` (exit 0); `not-this-actor`, `changed` (exit 1); `skipped`
+  (the record step's code); an unusable `--previous` is refused before any
+  record is read or written (exit 1). A store fault exits 2. [plan+test]
+  `tests/integration/test_unique_creators_record.py`,
+  `tests/test_unique_creators_command.py` (`test_record_*`) (plans/2026-11-21-trust-request-answer-secret.md, AC-23 to AC-31, AC-37 to AC-40)
+- **OPC-12** — `enable`, an empty store's first start and `report`'s
+  unrecorded list never record a reserved `#…` creator; `report` lists one
+  as `reserved creator` (informational) on DynamoDB. [plan+test]
+  `tests/integration/test_unique_creators_record.py::test_enable_never_records_a_reserved_creator` (plans/2026-11-21-trust-request-answer-secret.md, iterations entry 4)
 ## Decisions in force
 
 - **OPC-D1** — A backfill collision leaves the name unmarked; the start stays
@@ -74,8 +98,17 @@ This partial spec covers what the 2026-11-19 plan changed.
 - **OPC-D3** — A command cannot see what an application sets in its
   builder; each such setting has a flag, and the command prints what it
   assumed. (plans/2026-11-19-emm-4-0-adoption-findings.md)
+- **OPC-D4** — `record` neither lowercases a stored creator, nor writes
+  before `enable`, nor searches for orphans; `resolve`, `enable` and `report`
+  do those. It is never run beside `disable` (its write is not conditioned on
+  the backfill-complete item). (plans/2026-11-21-trust-request-answer-secret.md, owner 2026-11-21)
 
 ## Untested
 
 - OPC-9's "writes nothing" rests on a test that patches every probe and on
   the manual run of 2026-11-19.
+- OPC-12 does not hold for `resolve`: two actors sharing a reserved creator
+  form a duplicate group, and `resolve --apply` writes the kept actor's
+  record (verifications/2026-11-21-trust-request-answer-secret.md, issue 1).
+- OPC-11: `--previous` on an actor whose creator is exempt is skipped with
+  exit 0 (issue 3 of the same verification).

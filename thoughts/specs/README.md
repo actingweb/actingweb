@@ -5,9 +5,10 @@ developers and maintainers. Format and rules:
 `~/.claude/shared/conventions.md` ("Living specs"). This repository's
 sources: `.claude/workflow/create_spec.md`.
 
-Nine capabilities have a `partial` spec, created from the Spec Deltas of
-`plans/2026-11-17-3-16-pre-rc1-fixes.md` and
-`plans/2026-11-19-emm-4-0-adoption-findings.md`; the capability map has not been
+Ten capabilities have a `partial` spec, created from the Spec Deltas of
+`plans/2026-11-17-3-16-pre-rc1-fixes.md`,
+`plans/2026-11-19-emm-4-0-adoption-findings.md` and
+`plans/2026-11-21-trust-request-answer-secret.md`; the capability map has not been
 proposed. `/create_spec` with no argument proposes the map and fills the
 table below; `/create_spec <capability>` then writes or completes one spec at
 a time. `/create_plan`
@@ -24,6 +25,7 @@ offers it when a plan touches a capability with no spec.
 | Start-up readiness | [startup-readiness.md](startup-readiness.md) | SRD | partial | 2026-11-19 |
 | Actor creation | [actor-creation.md](actor-creation.md) | ACR | partial | 2026-11-19 |
 | Property lists | [property-lists.md](property-lists.md) | PLS | partial | 2026-11-19 |
+| Trust establishment | [trust-establishment.md](trust-establishment.md) | TES | partial | 2026-11-21 |
 
 Until a capability has a spec, its behaviour is recorded where it was before:
 `docs/` (what a consumer is told), `docs/protocol/actingweb-spec.rst` (the

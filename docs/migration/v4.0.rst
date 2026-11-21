@@ -2840,7 +2840,8 @@ URL. A re-pair applies only to a verified or approved row.
 request verifies only when the requester answers with its token from the
 relationship it created, approved, before sending the request; every
 released library creates it so. A pending row's own peer reads its status
-(202) without its verification token. A third party could otherwise file a
+(202), and the answer to its request carries its secret, both without the
+verification token (**Behavior change:** 3.15.1 answered the token). A third party could otherwise file a
 request at each of two actors under the other's id with one secret, and
 each verification read the row filed at the other.
 
@@ -3173,7 +3174,11 @@ Other trust answers changed with them: ``approved`` in a trust ``PUT`` accepts
 changed; ``false`` answered 204 and did nothing); the answer to a trust
 request carries ``approved``, ``peer_approved`` and ``verified`` as JSON
 booleans, as a GET of the row does (a client that compared them with the
-string ``"true"`` compares with ``true``); and ``GET /permissions/<peer>``
+string ``"true"`` compares with ``true``), and carries ``secret`` (the one
+sent, or the one generated for a request without one) but, while the row is
+not approved, no ``verification_token`` (**Behavior change:** a requester
+that read the token from it reads its own row instead); its refusals carry
+a JSON ``{"error": …}`` body; and ``GET /permissions/<peer>``
 answers 404, not 500, for a relationship whose trust type is not registered.
 In code, pass ``approved``, ``verified`` and ``peer_approved`` to
 ``Trust.modify``, ``TrustManager.modify_trust`` and
@@ -3478,8 +3483,8 @@ affected and the section that says what to check:
      - client
      - `The passphrase and the trustee`_
    * - The answer to a trust request
-     - flags as strings
-     - flags as booleans
+     - the whole row: flags as strings, ``secret``, ``verification_token``
+     - flags as booleans, ``secret``; no ``verification_token`` while unapproved
      - peer
      - `The passphrase and the trustee`_
    * - ``GET /permissions/<peer>``, unregistered type

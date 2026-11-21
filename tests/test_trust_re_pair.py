@@ -98,23 +98,26 @@ class Receiver:
     def request(
         self,
         peer: str,
-        new_secret: str,
+        new_secret: str | None,
         *,
         relationship: str = "friend",
         bearer: str | None = None,
         baseuri: str | None = None,
     ) -> AWWebObj:
+        """A trust request from ``peer``; ``new_secret=None`` sends no
+        ``secret`` key at all (spec 1.5: B then generates one)."""
         headers: dict[str, str] = {}
         if bearer is not None:
             headers["Authorization"] = f"Bearer {bearer}"
-        body = {
+        body: dict[str, Any] = {
             "baseuri": baseuri or f"https://{peer}.example.test/{peer}",
             "id": peer,
             "type": "urn:test",
-            "secret": new_secret,
             "verify": "whatever",
             "desc": "from the body",
         }
+        if new_secret is not None:
+            body["secret"] = new_secret
         webobj = AWWebObj(
             url=f"https://test.example.com/{aid(self.a)}/trust/{relationship}",
             body=json.dumps(body),
@@ -888,6 +891,18 @@ class TestALostAnswerIsProbed:
 # ---------------------------------------------------------------------------
 # Verification of 2026-11-08 (reverify-1)
 # ---------------------------------------------------------------------------
+
+
+def _owner_put(w: Receiver, rel: str, peer: str, body: Any) -> AWWebObj:
+    """The owner's ``PUT /<id>/trust/<rel>/<peer>`` with a JSON body."""
+    token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
+    webobj = AWWebObj(
+        url=f"https://test.example.com/{aid(w.a)}/trust/{rel}/{peer}",
+        body=json.dumps(body),
+        headers={"Authorization": f"Basic {token}"},
+    )
+    TrustPeerHandler(webobj, w.config).put(aid(w.a), rel, peer)
+    return webobj
 
 
 def _create(w: Receiver, peer: str, meta_id: str | None = None) -> AWWebObj:
@@ -2131,14 +2146,7 @@ class TestTheEdgesAfterReverify8:
         assert w.row(peer)["approved"] is False
 
     def _put(self, w: Receiver, rel: str, peer: str, body: Any) -> AWWebObj:
-        token = base64.b64encode(f"{w.a.creator}:{PASSPHRASE}".encode()).decode()
-        webobj = AWWebObj(
-            url=f"https://test.example.com/{aid(w.a)}/trust/{rel}/{peer}",
-            body=json.dumps(body),
-            headers={"Authorization": f"Basic {token}"},
-        )
-        TrustPeerHandler(webobj, w.config).put(aid(w.a), rel, peer)
-        return webobj
+        return _owner_put(w, rel, peer, body)
 
     def test_a_put_for_another_relationship_is_404_and_checks_nothing(self) -> None:
         """Issue 6."""
@@ -2164,7 +2172,9 @@ class TestTheEdgesAfterReverify8:
         out = _create(w, peer, meta_id="someone-else")
         assert out.response.status_code == 202
         body = json.loads(out.response.body)
-        assert "verification_token" not in body and "secret" not in body
+        assert "verification_token" not in body
+        # The secret is the requester's own and is answered (rc2).
+        assert body["secret"] == w.row(peer)["secret"]
 
 
 class TestFlagsAfterReverify9:
@@ -2503,10 +2513,13 @@ class TestTheRePairAnswerAfterReverify9:
         """Reverify-9 Issue 4: the re-pair's 202 follows the same rule as a
         creation's (one answer body for both)."""
         w = Receiver(approved=False)  # verified, not approved
-        out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
+        new = _new_secret()
+        out = w.request(w.b, new, bearer=w.secrets[w.b])
         assert out.response.status_code == 202
         body = json.loads(out.response.body)
-        assert "verification_token" not in body and "secret" not in body
+        assert "verification_token" not in body
+        # The new secret the re-pair sent (rc2, AC-5).
+        assert body["secret"] == new
 
 
 class TestFlagsAfterReverify10:
@@ -2535,3 +2548,185 @@ class TestFlagsAfterReverify10:
                 relationship="friend", peerid=w.b, approved=value
             )
         assert w.row(w.b)["approved"] is True
+
+
+# ---------------------------------------------------------------------------
+# 4.0.0rc2: the answer carries the secret (plans/2026-11-21-trust-request-
+# answer-secret.md, phase 1)
+# ---------------------------------------------------------------------------
+
+
+def _bearer_answers(peer: str, actor_id: str, secret: str) -> Any:
+    """``requests.get`` as a requester that stored ``secret`` in its own,
+    approved row toward ``actor_id``: the reverse URL answers that row only
+    for ``Bearer <secret>`` (404 otherwise), and ``/meta`` names ``peer``."""
+
+    def get(url: str, **kw: Any) -> Any:
+        headers = kw.get("headers") or {}
+        if url.rstrip("/").endswith("/meta"):
+            body = json.dumps({"id": peer, "type": "urn:test"})
+        elif headers.get("Authorization") == f"Bearer {secret}":
+            body = json.dumps({"peerid": actor_id, "approved": True})
+        else:
+            return mock.Mock(
+                status_code=404,
+                content=b"",
+                json=lambda: {},
+                iter_content=lambda chunk_size=1: iter([b""]),
+            )
+        return mock.Mock(
+            status_code=200,
+            content=body.encode(),
+            json=lambda: json.loads(body),
+            iter_content=lambda chunk_size=1: iter([body.encode()]),
+        )
+
+    return get
+
+
+class TestTheAnswerCarriesTheSecret:
+    """AC-1, AC-2, AC-4, AC-10, AC-11."""
+
+    def test_a_request_without_a_secret_gets_the_generated_one(self) -> None:
+        w = Receiver()
+        peer = f"peer-g-{uuid.uuid4().hex[:8]}"
+        with mock.patch("actingweb.actor.requests.get") as fetch:
+            out = w.request(peer, None)
+        fetch.assert_not_called()  # nothing to verify with
+        assert out.response.status_code == 202
+        body = json.loads(out.response.body)
+        assert body["secret"]
+        assert body["secret"] == w.row(peer)["secret"]
+        assert "verification_token" not in body
+
+    def test_a_request_with_a_secret_gets_it_back(self) -> None:
+        w = Receiver()
+        assert not w.config.auto_accept_default_relationship
+        peer = f"peer-s-{uuid.uuid4().hex[:8]}"
+        sent = _new_secret()
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
+        ):
+            out = w.request(peer, sent)
+        assert out.response.status_code == 202
+        body = json.loads(out.response.body)
+        assert body["secret"] == sent
+        assert "verification_token" not in body
+
+    def test_a_generated_secret_pairs_on_approval(self) -> None:
+        w = Receiver()
+        peer = f"peer-t-{uuid.uuid4().hex[:8]}"
+        out = w.request(peer, None)
+        assert out.response.status_code == 202
+        answered = json.loads(out.response.body)["secret"]
+        told = mock.Mock(status_code=204, reason="No Content", content=b"")
+        with (
+            mock.patch(
+                "actingweb.actor.requests.get",
+                side_effect=_bearer_answers(peer, aid(w.a), answered),
+            ),
+            mock.patch("actingweb.actor.requests.post", return_value=told),
+        ):
+            put = _owner_put(w, "friend", peer, {"approved": True})
+        assert put.response.status_code == 204
+        row = w.row(peer)
+        assert row["approved"] is True and row["verified"] is True
+
+    def test_a_requester_without_the_answered_secret_is_not_approved(self) -> None:
+        """AC-4's negative leg: the host holds another secret."""
+        w = Receiver()
+        peer = f"peer-u-{uuid.uuid4().hex[:8]}"
+        assert w.request(peer, None).response.status_code == 202
+        with (
+            mock.patch(
+                "actingweb.actor.requests.get",
+                side_effect=_bearer_answers(peer, aid(w.a), "another secret"),
+            ),
+            mock.patch("actingweb.actor.requests.post") as told,
+        ):
+            put = _owner_put(w, "friend", peer, {"approved": True})
+        assert put.response.status_code == 403
+        told.assert_not_called()
+        assert w.row(peer)["approved"] is False
+
+    def test_the_answer_is_the_row_written(self) -> None:
+        hooks = HookRegistry()
+        replaced = "a secret written after the creation"
+
+        def meddle(*_args: Any, **kwargs: Any) -> None:
+            data = kwargs["trust_data"]
+            assert Trust(
+                actor_id=aid(w.a), peerid=data["peerid"], config=w.config
+            ).modify(secret=replaced)
+            data["secret"] = "changed by the hook"
+            data["approved"] = "true"
+
+        hooks.register_lifecycle_hook("trust_request_received", meddle)
+        w = Receiver(hooks=hooks)
+        peer = f"peer-h-{uuid.uuid4().hex[:8]}"
+        sent = _new_secret()
+        with mock.patch(
+            "actingweb.actor.requests.get", side_effect=_peer_answers(peer)
+        ):
+            out = w.request(peer, sent)
+        assert w.row(peer)["secret"] == replaced
+        assert out.response.status_code == 202
+        body = json.loads(out.response.body)
+        assert body["secret"] == sent
+        assert body["approved"] is False
+        assert "verification_token" not in body
+
+    def test_a_re_pair_answers_only_its_own_secret(self) -> None:
+        """Handler-only: the read-back after the swap is stubbed to a row
+        another request wrote."""
+        from actingweb.actor import Actor
+
+        w = Receiver(approved=False)
+        strangers = dict(w.row(w.b), secret="a stranger's secret")
+        with mock.patch.object(
+            Actor, "replace_trust_secret", return_value=(strangers, "")
+        ):
+            out = w.request(w.b, _new_secret(), bearer=w.secrets[w.b])
+        assert out.response.status_code == 403
+        assert "a stranger's secret" not in str(out.response.body)
+        assert json.loads(out.response.body) == {
+            "error": "Trust was replaced; pair again"
+        }
+
+
+class TestTheRefusalsSayWhy:
+    """AC-12: each peer-facing refusal of a trust request has a JSON body."""
+
+    @pytest.mark.parametrize(
+        ("case", "status", "reason"),
+        [
+            ("missing", 400, "Missing mandatory attributes"),
+            ("reserved", 400, "Reserved relationship name"),
+            ("invalid", 400, "Invalid id or baseuri"),
+            ("no-row", 403, "No trust to re-pair"),
+            ("unproven", 403, "Existing trust not verified"),
+        ],
+    )
+    def test_each_refusal_has_an_error_body(
+        self, case: str, status: int, reason: str
+    ) -> None:
+        w = Receiver()
+        stranger = f"peer-r-{uuid.uuid4().hex[:8]}"
+        if case == "missing":
+            out = AWWebObj(
+                url=f"https://test.example.com/{aid(w.a)}/trust/friend",
+                body=json.dumps({"id": stranger}),
+                headers={},
+            )
+            TrustRelationshipHandler(out, w.config).post(aid(w.a), "friend")
+        elif case == "reserved":
+            out = w.request(stranger, _new_secret(), relationship="creator")
+        elif case == "invalid":
+            out = w.request(stranger, _new_secret(), baseuri="testurl")
+        elif case == "no-row":
+            out = w.request(stranger, _new_secret(), bearer="anything")
+        else:
+            out = w.request(w.b, _new_secret(), bearer=uuid.uuid4().hex)
+        assert out.response.status_code == status
+        assert out.response.headers["Content-Type"] == "application/json"
+        assert json.loads(out.response.body) == {"error": reason}

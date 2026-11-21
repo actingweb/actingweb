@@ -550,6 +550,7 @@ expected = "A creation request for B's id with no credentials and wire_other_app
 reason = [
   "2026-11-08 first recording (peer-authorisation-fixes:3)",
   "2026-11-08 B's stored permission copy carries the sender's timestamp (extra_attributes.sender_timestamp; verification Issue 7) (peer-authorisation-fixes:1)",
+  "2026-11-21 the answer to a trust request carries its secret, never the verification token while unapproved; its refusals carry an error body (trust-request-answer-secret:1)",
 ]
 
 [rows."WT3"]
@@ -567,6 +568,7 @@ reason = [
   "2026-11-15 the answer to a trust request carries its flags as booleans (spec-1-5:2)",
   "2026-11-15 the announced specification version is 1.5 (spec-1-5:5)",
   "2026-11-18 the library version recorded as <library-version> (an actor's /meta, the MCP serverInfo): a release bump is not a wire change (3-16-release-validation:1)",
+  "2026-11-21 the answer to a trust request carries its secret, never the verification token while unapproved; its refusals carry an error body (trust-request-answer-secret:1)",
 ]
 
 [rows."WT4"]
@@ -1373,4 +1375,7 @@ test = "test_wire_v315.py::test_wv4_second_trust_request"
 owners = ["trust-request-answer-secret:1"]
 exposure = false
 expected = "A second trust request for a peer A already trusts, as 3.15.1 sends it (no bearer, a new secret): 403, no verification request to B, A's row unchanged (approved, the old secret). 3.15.1 then deletes its own row; that side is the live pair's."
-reason = ["2026-11-18 first recording (3-16-release-validation:2)"]
+reason = [
+  "2026-11-18 first recording (3-16-release-validation:2)",
+  "2026-11-21 the answer to a trust request carries its secret, never the verification token while unapproved; its refusals carry an error body (trust-request-answer-secret:1)",
+]

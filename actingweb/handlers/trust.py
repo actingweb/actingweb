@@ -1,3 +1,4 @@
+import copy
 import html
 import json
 import logging
@@ -260,14 +261,17 @@ def _with_boolean_flags(row: dict[str, Any]) -> dict[str, Any]:
 
 def _trust_request_answer(row: dict[str, Any]) -> dict[str, Any]:
     """The body of the answer to a trust request (a creation or a re-pair):
-    the row, without its verification token and secret while this actor
-    has not approved it (4.0). Whoever filed a request under another
-    actor's id could otherwise answer that actor's verification with the
-    token; the secret is the requester's own."""
+    the row, without its verification token while this actor has not
+    approved it (4.0). Whoever filed a request under another actor's id
+    could otherwise answer that actor's verification with the token.
+
+    The secret stays: it is the one the request sent, or the one this actor
+    generated for a request that sent none (protocol spec 1.5), and a
+    requester that sent none can store it in its own row only from here.
+    The callers make sure the row is the one written for this request."""
     answer = _with_boolean_flags(row)
     if not answer.get("approved"):
         answer.pop("verification_token", None)
-        answer.pop("secret", None)
     return answer
 
 
@@ -449,6 +453,13 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
         if self.response:
             self.response.set_status(204, "No content")
 
+    def _refuse_request(self, status: int, reason: str) -> None:
+        """Refuse a trust request with a reason the peer can read: the
+        status line and a JSON ``{"error": reason}`` body (4.0)."""
+        self.response.set_status(status, reason)
+        self.response.headers["Content-Type"] = "application/json"
+        self.response.write(json.dumps({"error": reason}))
+
     def post(self, actor_id, relationship):
         # This endpoint does not require authentication - trust creation can be done by peers
         # Load actor without any authentication or authorization checks
@@ -496,12 +507,12 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             return
 
         if len(baseuri) == 0 or len(peerid) == 0:
-            self.response.set_status(400, "Missing mandatory attributes")
+            self._refuse_request(400, "Missing mandatory attributes")
             return
         if is_reserved_relationship(relationship):
             # ``creator``, ``trustee``, ``owner`` and ``any`` name roles and
             # access-table keywords, never a peer (4.0).
-            self.response.set_status(400, "Reserved relationship name")
+            self._refuse_request(400, "Reserved relationship name")
             return
         from actingweb.trust import is_valid_peer_baseuri, is_valid_peer_id
 
@@ -509,7 +520,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             # Both are shown to the owner and built into links on the
             # owner's own pages: refuse anything that is not plainly an id
             # and plainly a base URL.
-            self.response.set_status(400, "Invalid id or baseuri")
+            self._refuse_request(400, "Invalid id or baseuri")
             return
         # A peer that already has a row re-pairs: a credential swap, never a
         # replacement of the row (read once here). A pending row (neither
@@ -541,7 +552,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             logger.warning(
                 f"Refused a re-pair for {peerid} at {myself.id}: no trust row"
             )
-            self.response.set_status(403, "No trust to re-pair")
+            self._refuse_request(403, "No trust to re-pair")
             return
 
         if (
@@ -578,6 +589,24 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             self.response.set_status(403, "Forbidden")
             return
 
+        # The answer and its status are fixed from the row as written, before
+        # the hook runs: the hook gets a copy, and nothing it or a concurrent
+        # request does to the stored row reaches this requester's answer
+        # (the secret answered is the one written for this request). The
+        # created row carries its flags as the strings "true"/"false"
+        # (Trust.create); auto-accept approves only a request that verified
+        # (create_verified_trust).
+        answer = _trust_request_answer(new_trust)
+        location = str(
+            self.config.root
+            + (myself.id or "")
+            + "/trust/"
+            + str(new_trust["relationship"])
+            + "/"
+            + str(new_trust["peerid"])
+        )
+        created = str(new_trust.get("approved")).lower() == "true"
+
         # Trigger trust_request_received lifecycle hook to notify application of incoming trust request
         if self.hooks:
             try:
@@ -590,7 +619,7 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                     actor=actor_interface,
                     peer_id=peerid,
                     relationship=relationship,
-                    trust_data=new_trust,
+                    trust_data=copy.deepcopy(new_trust),
                 )
                 logger.info(
                     f"trust_request_received hook triggered for {actor_id} <- {peerid}"
@@ -598,21 +627,10 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
             except Exception as e:  # folds DbError: hook after the trust committed
                 logger.error(f"Error triggering trust_request_received hook: {e}")
 
-        self.response.headers["Location"] = str(
-            self.config.root
-            + (myself.id or "")
-            + "/trust/"
-            + new_trust["relationship"]
-            + "/"
-            + new_trust["peerid"]
-        )
-        out = json.dumps(_trust_request_answer(new_trust))
-        self.response.write(out)
+        self.response.headers["Location"] = location
+        self.response.write(json.dumps(answer))
         self.response.headers["Content-Type"] = "application/json"
-        # The stored approval: auto-accept approves only a request that
-        # verified (create_verified_trust). The created row's copy carries its
-        # flags as the strings "true"/"false" (Trust.create).
-        if str(new_trust.get("approved")).lower() == "true":
+        if created:
             self.response.set_status(201, "Created")
         else:
             self.response.set_status(202, "Accepted")
@@ -644,13 +662,25 @@ class TrustRelationshipHandler(base_handler.BaseHandler):
                 secret=secret,
                 proven_secret=bearer or None,
             )
+        if new_trust and not secret_equals(str(new_trust.get("secret") or ""), secret):
+            # The row read back after the swap holds another secret: the
+            # owner deleted the row and another request filed a new one in
+            # between. Its secret is not this requester's to be answered.
+            # The swap was written; the row was replaced since.
+            logger.warning(
+                f"Refused a re-pair answer for {peerid} at {myself.id}: the "
+                "secret was swapped, but the row read back holds another "
+                "secret (it was deleted and requested again meanwhile)"
+            )
+            self._refuse_request(403, "Trust was replaced; pair again")
+            return
         if not new_trust:
             # Never the body's base URI in the log: it is the requester's.
             logger.warning(
                 f"Refused a re-pair for {peerid} at {myself.id}: {reason}; the "
                 "trust is unchanged"
             )
-            self.response.set_status(403, "Existing trust not verified")
+            self._refuse_request(403, "Existing trust not verified")
             return
         logger.info(f"Re-paired {myself.id} with {peerid}: the secret was replaced")
         self.response.headers["Location"] = str(

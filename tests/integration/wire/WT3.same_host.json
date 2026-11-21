@@ -309,6 +309,7 @@
       "peer_approved": true,
       "peerid": "<N>",
       "relationship": "friend",
+      "secret": "<secret:trust:N-A>",
       "type": "urn:actingweb:test:integration",
       "verified": true
      },

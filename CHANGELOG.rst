@@ -8,6 +8,40 @@ Unreleased
 FIXED
 ~~~~~
 
+- **In 4.0.0rc1 the answer to a peer's trust request carried no**
+  ``secret`` **, so a request sent without one could never be approved.**
+  ``POST /<id>/trust/<rel>`` without a ``secret`` makes the actor generate
+  one (protocol spec 1.5 allows it), and the requester can store it in its
+  own relationship only from the 201 or 202 answer. rc1 removed ``secret``
+  from that answer together with the verification token, so the requester
+  never learned the secret and the owner's approval, which repeats the
+  verification with it, always failed (403). The answer now carries
+  ``secret`` again: the one the request sent, or the one generated for it.
+  It still carries no ``verification_token`` while the owner has not
+  approved the row. **Behavior change:** relative to 4.0.0rc1 only; 3.15.1
+  also answered the secret (and the token, which stays out). **Check:**
+  pending rows rc1 created from requests without a secret cannot be
+  approved; the owner deletes them and the peer asks again. A requester
+  should send a secret: if the answer to a request without one is lost, a
+  repeated request does not replace the pending row, and only the owner
+  can clear it.
+- **The answer to a trust request could reflect what the**
+  ``trust_request_received`` **hook or a concurrent request did to the
+  row.** The answer was built after the hook ran, from the dict the hook
+  received, and a re-pair's answer was read back after its swap. The answer
+  and its status (201 or 202) are now fixed from the row as written, before
+  the hook runs; the hook gets a copy. A re-pair whose read-back row holds
+  a secret other than the one it sent (the row was deleted and another
+  request filed meanwhile) answers 403 and no secret. **Behavior change:**
+  a hook that changes ``trust_data`` no longer changes the answer or its
+  status; a hook that approves the row does so through the trust API, and
+  the requester learns it from the approval notification.
+- **A refused trust request gave the peer no readable reason.** The
+  peer-facing refusals of ``POST /<id>/trust/<rel>`` (missing ``baseuri`` or
+  ``id``, a reserved relationship name, an id or base URI that is not plain,
+  a bearer for a peer with no trust, a re-pair not proven) answered with an
+  empty body. They now carry ``{"error": "<reason>"}`` as
+  ``application/json``, with the same status as before.
 - **The Agent Skill told an agent that a fresh database's first start
   stops, and an agent opted out of creator uniqueness to avoid the step.**
   ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence

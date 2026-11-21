@@ -22,6 +22,7 @@ Tests that share class-level state and must run in order.
 |-------|-------------|-------|
 | `basic_flow` | Basic actor lifecycle | test_basic_flow.py |
 | `trust_flow` | Trust relationship operations | test_trust_flow.py |
+| `trust_peer_request` | A peer's trust request under 4.0 rules (the demo's BlazeMeter flow) | test_trust_flow.py |
 | `subscription_flow` | Subscription creation and callbacks | test_subscription_flow.py |
 | `attributes_flow` | Advanced attribute operations | test_attributes.py |
 | `peer_profile_flow` | Peer profile operations | test_peer_profile.py |

@@ -22,12 +22,14 @@ def _row(approved: str) -> dict[str, Any]:
     }
 
 
-def test_an_unapproved_answer_has_booleans_and_no_secret() -> None:
+def test_an_unapproved_answer_has_booleans_and_no_token() -> None:
     answer = _trust_request_answer(_row("false"))
     assert answer["approved"] is False
     assert answer["peer_approved"] is True
     assert answer["verified"] is False
-    assert "secret" not in answer and "verification_token" not in answer
+    assert "verification_token" not in answer
+    # The secret is the requester's own, or the one generated for it (rc2).
+    assert answer["secret"] == "s"
 
 
 def test_an_approved_answer_has_booleans_and_its_secret() -> None:

@@ -1204,7 +1204,11 @@ class MCPHandler(BaseHandler):
         result: dict[str, Any] = {
             "protocolVersion": negotiated_version,
             "capabilities": capabilities,
-            "serverInfo": {"name": server_name, "version": __version__},
+            "serverInfo": {
+                "name": server_name,
+                "version": getattr(self.config, "mcp_server_version", None)
+                or __version__,
+            },
         }
         instructions = getattr(self.config, "mcp_instructions", None)
         if instructions:

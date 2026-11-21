@@ -170,7 +170,9 @@
     }
    },
    "result": {
-    "body": "",
+    "body": {
+     "error": "Existing trust not verified"
+    },
     "status": 403
    },
    "step": "a request for B's id",
@@ -178,7 +180,9 @@
     {
      "auth": null,
      "children": [],
-     "headers": {},
+     "headers": {
+      "content-type": "application/json"
+     },
      "host": "wire_app",
      "method": "POST",
      "path": "/<A>/trust/friend",
@@ -191,7 +195,9 @@
       "type": "urn:actingweb:test",
       "verify": "<secret:token:planted>"
      },
-     "response": null,
+     "response": {
+      "error": "Existing trust not verified"
+     },
      "status": 403
     }
    ]

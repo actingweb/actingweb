@@ -166,6 +166,17 @@ def is_client_peer(peer_id: str) -> bool:
     return str(peer_id or "").startswith("oauth2_client:")
 
 
+def is_oauth2_peer(peer_id: str) -> bool:
+    """A peer id an OAuth2 row carries (``oauth2:``, ``oauth2_client:``,
+    ``oauth2_interactive:``; ``oauth2_server.trust_lookup.OAUTH2_SOURCES``).
+    Such a row has no base URI by construction, and a peer cannot choose
+    these prefixes (``trust.is_valid_peer_id``)."""
+    from .oauth2_server.trust_lookup import OAUTH2_SOURCES
+
+    prefix, sep, _ = str(peer_id or "").partition(":")
+    return bool(sep) and prefix in OAUTH2_SOURCES
+
+
 def override_applies(permissions: Any, peer_id: str, row_type: str | None) -> bool:
     """Whether a stored override is applied for this trust (4.0, owner
     decision 2026-11-11): always for a peer; for an OAuth2/MCP client only
@@ -418,6 +429,14 @@ class TrustPermissionStore:
         actor_id = permissions.actor_id
         peer_id = permissions.peer_id
 
+        if is_oauth2_peer(peer_id):
+            # An OAuth2/MCP client has no base URI to call back (rc2).
+            logger.debug(
+                f"Not notifying OAuth2 peer {peer_id} of a permission change "
+                f"from actor {actor_id}: it has no callback"
+            )
+            return
+
         logger.debug(
             f"Notifying peer {peer_id} of permission change from actor {actor_id}"
         )
@@ -494,6 +513,14 @@ class TrustPermissionStore:
         """
         actor_id = permissions.actor_id
         peer_id = permissions.peer_id
+
+        if is_oauth2_peer(peer_id):
+            # An OAuth2/MCP client has no base URI to call back (rc2).
+            logger.debug(
+                f"Not notifying OAuth2 peer {peer_id} of a permission change "
+                f"from actor {actor_id}: it has no callback"
+            )
+            return
 
         logger.debug(
             f"Notifying peer {peer_id} of permission change from actor {actor_id} (async)"

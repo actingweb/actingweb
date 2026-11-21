@@ -22,6 +22,7 @@ Tests that share class-level state and must run in order.
 |-------|-------------|-------|
 | `basic_flow` | Basic actor lifecycle | test_basic_flow.py |
 | `trust_flow` | Trust relationship operations | test_trust_flow.py |
+| `trust_peer_request` | A peer's trust request under 4.0 rules (the demo's BlazeMeter flow) | test_trust_flow.py |
 | `subscription_flow` | Subscription creation and callbacks | test_subscription_flow.py |
 | `attributes_flow` | Advanced attribute operations | test_attributes.py |
 | `peer_profile_flow` | Peer profile operations | test_peer_profile.py |
@@ -76,7 +77,7 @@ Groups automatically created from test class names to ensure class-level isolati
 | `spa_api_TestPropertiesMetadataAPI` | SPA properties metadata API | test_spa_api.py |
 | `spa_api_TestPropertyMetadataEndpoint` | SPA property metadata endpoint | test_spa_api.py |
 | `spa_api_TestTrustWithOAuth2Data` | SPA trust with OAuth2 data | test_spa_api.py |
-| `unique_creator` | Isolated stores (creator uniqueness; the attribute-list revision on PostgreSQL): the fixtures swap the process-wide table names (DynamoDB) or schema (PostgreSQL), so no other test may run beside them | test_attribute_list_migration.py, test_deletion_resume_http.py, test_email_as_creator_sweep.py, test_property_lookup_readiness.py, test_rename_creator.py, test_unique_creator_adoption.py, test_unique_creator_backend.py, test_unique_creator_default.py, test_unique_creator_http.py, test_unique_creator_states.py, test_unique_creators_command.py |
+| `unique_creator` | Isolated stores (creator uniqueness; the attribute-list revision on PostgreSQL): the fixtures swap the process-wide table names (DynamoDB) or schema (PostgreSQL), so no other test may run beside them | test_attribute_list_migration.py, test_deletion_resume_http.py, test_email_as_creator_sweep.py, test_property_lookup_readiness.py, test_rename_creator.py, test_unique_creator_adoption.py, test_unique_creator_backend.py, test_unique_creator_default.py, test_unique_creator_http.py, test_unique_creator_states.py, test_unique_creators_command.py, test_unique_creators_record.py |
 | `www_templates_TestWWWCustomTemplateRendering` | WWW custom template rendering | test_www_templates.py |
 | `www_templates_TestWWWTemplateURLConsistency` | WWW template URL consistency | test_www_templates.py |
 | `www_templates_TestWWWTemplates` | WWW templates test class | test_www_templates.py |

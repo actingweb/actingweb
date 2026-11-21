@@ -357,6 +357,43 @@ Then:
 Run ``creator-to-email`` again after a restore or after any period
 with the email flag off. :doc:`../migration/v4.0` gives the details.
 
+**Restoring one actor.** An actor restored from a backup (or renamed back)
+may hold a creator with no ``creators`` record on DynamoDB, while a record
+of the address it had before the restore still names it. ``report`` lists
+both, and ``enable`` refuses until they are settled. Settle one actor
+without a scan:
+
+.. code-block:: bash
+
+   actingweb-unique-creators record --actor <id> --previous <the address it had> --apply
+
+``record`` writes the record of the actor's current creator (only while the
+actor row is as it read it), then releases the record of ``--previous`` if
+it names this actor. Without ``--apply`` it says what it would do. On
+PostgreSQL there are no records: it checks that no other actor holds the
+address (``verified``), and ``--previous`` answers ``not-kept``. It refuses
+an address stored with capitals (``resolve`` settles those), a reserved
+value and a system creator, and answers ``not-enforced`` before ``enable``.
+
+It prints one line per step (``outcome=…``). The record step answers
+``recorded``, ``written``, ``verified``, ``exempt`` or, without
+``--apply``, ``would-write`` (exit 0); ``missing``, ``held-by`` (with
+``holder=<id>``), ``not-enforced``, ``changed`` or ``refused`` (exit 1).
+The previous step answers ``released``, ``absent``, ``not-kept`` or
+``would-release`` (exit 0); ``not-this-actor`` or ``changed`` (exit 1);
+``skipped`` when the record step did not succeed or before ``enable``
+(exit 1). An actor whose
+creator is now exempt has nothing to record (``exempt``), but its
+``--previous`` is still released. An unusable ``--previous`` (the current creator, an exempt
+or reserved value) is refused before any record is read or written: the
+previous step answers ``refused``, the record step ``skipped``, exit 1. A
+store fault exits 2. Never run ``record`` beside ``disable``.
+
+Run the restore and its ``record`` with sign-ins for that address quiet: a
+sign-in before the record exists creates a second actor for it.
+``outcome=held-by holder=<id>`` reports that; run ``report`` and
+``resolve`` then.
+
 Health Checks
 =============
 

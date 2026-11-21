@@ -221,16 +221,28 @@ def _first_changelog_section_with_entries() -> str:
     section (whichever have entries), up to and including that versioned
     section. While a release is being written its entries are in
     ``Unreleased``; once released, a first fix under ``Unreleased`` does not
-    hide the release's own section."""
+    hide the release's own section. The pre-releases of one version
+    (``v4.0.0rc1``, ``v4.0.0rc2``, then ``v4.0.0``) are one release: the
+    notes run through the oldest of them."""
     lines = (REPO_ROOT / "CHANGELOG.rst").read_text(encoding="utf-8").splitlines()
     starts = [
         i - 1
         for i, line in enumerate(lines)
         if i and re.fullmatch(r"-{3,}", line) and lines[i - 1].strip()
     ]
-    for start, end in zip(starts, [*starts[1:], len(lines)], strict=True):
+
+    def base(heading: str) -> str:
+        match = re.match(r"v(\d+\.\d+\.\d+)", heading.strip())
+        return match.group(1) if match else heading.strip()
+
+    ends = [*starts[1:], len(lines)]
+    for index, (start, end) in enumerate(zip(starts, ends, strict=True)):
         if lines[start].strip() == "Unreleased":
             continue
+        release = base(lines[start])
+        while index + 1 < len(starts) and base(lines[starts[index + 1]]) == release:
+            index += 1
+            end = ends[index]
         section = lines[starts[0] : end]
         if any(line.startswith("- ") for line in section):
             return "\n" * starts[0] + "\n".join(section)

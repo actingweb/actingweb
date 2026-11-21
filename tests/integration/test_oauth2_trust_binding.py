@@ -664,3 +664,168 @@ def test_a_refusal_is_a_page_for_a_browser_and_json_for_a_client(flow: Flow) -> 
     )
     assert api.status_code == 400
     assert api.json()["error"] == "invalid_request"
+
+
+# ---------------------------------------------------------------------------
+# A disconnected client needs the user again (4.0.0rc2,
+# plans/2026-11-21-trust-request-answer-secret.md phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _disconnect(flow: Flow) -> None:
+    """The user's connection goes the way the owner's DELETE takes it:
+    ``Trust.delete``, which sweeps the client's tokens and codes first."""
+    from actingweb.actor import Actor
+    from actingweb.trust import Trust
+
+    core = Actor(config=flow.host.config)
+    assert core.get_from_creator(flow.email)
+    for row in flow.user_rows():
+        assert Trust(
+            actor_id=str(core.id), peerid=row["peerid"], config=flow.host.config
+        ).delete()
+    assert flow.user_rows() == []
+
+
+def _refresh(flow: Flow, refresh_token: str) -> requests.Response:
+    return requests.post(
+        f"{flow.host.url}/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": flow.client_id,
+            "client_secret": flow.client_secret,
+        },
+    )
+
+
+def test_a_disconnected_client_needs_the_user_again(flow: Flow) -> None:
+    """AC-18 (regression)."""
+    code = flow.code_of(flow.honest())
+    assert code and flow.token(code).status_code == 200
+    _disconnect(flow)
+    browser, token = flow.paused()
+    assert flow.user_rows() == []
+    r = flow.confirm(browser, token, "approve")
+    assert flow.code_of(r)
+    assert len(flow.user_rows()) == 1
+
+
+def test_a_reconnect_starts_from_a_fresh_grant(flow: Flow) -> None:
+    """AC-19 (regression): the level chosen at the reconnect, and no
+    override from before the disconnect."""
+    from actingweb.actor import Actor
+    from actingweb.trust_permissions import (
+        create_permission_override,
+        get_trust_permission_store,
+    )
+
+    assert flow.code_of(flow.honest("viewer"))
+    row = flow.user_rows()[0]
+    core = Actor(config=flow.host.config)
+    assert core.get_from_creator(flow.email)
+    store = get_trust_permission_store(flow.host.config)
+    store.store_permissions(
+        create_permission_override(
+            str(core.id),
+            row["peerid"],
+            "viewer",
+            {"properties": {"patterns": ["*"], "operations": ["read"]}},
+        ),
+        notify_peer=False,
+    )
+    _disconnect(flow)
+    assert flow.code_of(flow.honest("mcp_client"))
+    rows = flow.user_rows()
+    assert [r["relationship"] for r in rows] == ["mcp_client"]
+    assert not store.get_permissions(str(core.id), rows[0]["peerid"])
+
+
+def test_a_code_from_before_the_disconnect_is_refused(flow: Flow) -> None:
+    """AC-20: the code, its index row and its provider-token row go."""
+    from actingweb import attribute
+    from actingweb.actor import Actor
+    from actingweb.constants import AUTH_CODE_INDEX_BUCKET, OAUTH2_SYSTEM_ACTOR
+
+    code = flow.code_of(flow.honest())
+    assert code
+    core = Actor(config=flow.host.config)
+    assert core.get_from_creator(flow.email)
+    _disconnect(flow)
+    r = flow.token(code)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_grant"
+    config = flow.host.config
+    assert not attribute.Attributes(
+        actor_id=str(core.id), bucket="mcp_auth_codes", config=config
+    ).get_attr(name=code)
+    assert not attribute.Attributes(
+        actor_id=OAUTH2_SYSTEM_ACTOR, bucket=AUTH_CODE_INDEX_BUCKET, config=config
+    ).get_attr(name=code)
+    assert not attribute.Attributes(
+        actor_id=str(core.id), bucket="mcp_google_tokens", config=config
+    ).get_attr(name=f"google_token_{code}")
+
+
+def test_an_old_refresh_token_stays_dead_after_a_reconnect(flow: Flow) -> None:
+    """AC-22 (regression: the token sweep revokes it today)."""
+    code = flow.code_of(flow.honest())
+    assert code
+    old = flow.token(code).json()["refresh_token"]
+    _disconnect(flow)
+    assert flow.code_of(flow.honest())
+    r = _refresh(flow, old)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_grant"
+
+
+def test_a_code_from_before_the_disconnect_is_refused_after_a_reconnect(
+    flow: Flow,
+) -> None:
+    """AC-34: a code held back across a disconnect and a reconnect of the
+    same client."""
+    held = flow.code_of(flow.honest())
+    assert held
+    _disconnect(flow)
+    fresh = flow.code_of(flow.honest())
+    assert fresh and fresh != held
+    r = flow.token(held)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_grant"
+    assert flow.token(fresh).status_code == 200
+
+
+def test_a_code_that_cannot_be_removed_keeps_the_row(flow: Flow) -> None:
+    """AC-36: a code the sweep cannot remove fails the disconnect before
+    the trust row goes; the retry removes both."""
+    from actingweb import single_use
+    from actingweb.actor import Actor
+    from actingweb.db.exceptions import DbError
+    from actingweb.trust import Trust
+
+    code = flow.code_of(flow.honest())
+    assert code
+    core = Actor(config=flow.host.config)
+    assert core.get_from_creator(flow.email)
+    row = flow.user_rows()[0]
+    real = single_use.delete_confirmed
+
+    def fault_codes(config: Any, actor_id: str, bucket: str, name: str) -> bool:
+        if name == code:
+            return False
+        return real(config, actor_id, bucket, name)
+
+    handle = Trust(actor_id=str(core.id), peerid=row["peerid"], config=flow.host.config)
+    with (
+        mock.patch(
+            "actingweb.oauth2_server.token_manager.delete_confirmed",
+            side_effect=fault_codes,
+        ),
+        pytest.raises(DbError),
+    ):
+        handle.delete()
+    assert len(flow.user_rows()) == 1
+    _disconnect(flow)
+    r = flow.token(code)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_grant"

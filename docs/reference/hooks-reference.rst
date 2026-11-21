@@ -564,7 +564,12 @@ and the next sign-in retries.
     - ``actor``: The ActorInterface for the current actor (recipient)
     - ``peer_id``: The ID of the peer who sent the request
     - ``relationship``: The type of trust relationship requested (e.g., "friend", "partner")
-    - ``trust_data``: Dictionary containing the trust relationship data
+    - ``trust_data``: A copy of the trust relationship as written (4.0). The
+      answer to the request and its status (201 or 202) are fixed before the
+      hook runs, so changing ``trust_data`` changes neither; approve or
+      change the row through the trust API. A hook that approves the row
+      still answers 202: the requester learns of the approval from the
+      approval notification.
 
     **Use Cases**: Real-time notifications, UI popups, approval workflows
 

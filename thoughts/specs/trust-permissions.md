@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-18 by thoughts/plans/2026-11-15-3-16-release-validation.iterations.md (entries 1, 3, 4)
+**Last changed:** 2026-11-21 by thoughts/plans/2026-11-21-trust-request-answer-secret.md
 **ID prefix:** TPM
 
 ## Summary
@@ -38,6 +38,13 @@ override.
   `::test_store_permissions_async_cut_by_the_delivery_budget`,
   `::test_store_permissions_async_shares_the_request_deadline`,
   `::test_store_permissions_async_waits_only_what_the_request_has_left`) (plans/2026-11-15-3-16-release-validation.md; iterations entries 1, 3, 4)
+
+- **TPM-4** — A permission change is not sent to a peer whose id has an
+  OAuth2 prefix (`oauth2:`, `oauth2_client:`, `oauth2_interactive:`), on the
+  sync or the async path, and nothing is logged above DEBUG for it; any other
+  peer whose trust has no base URI logs a WARNING. [plan+test]
+  `tests/test_trust_permissions_notify.py::test_an_oauth2_peer_is_not_notified`,
+  `::test_a_peer_without_baseuri_still_warns` (plans/2026-11-21-trust-request-answer-secret.md, AC-14, AC-15)
 
 ## Decisions in force
 

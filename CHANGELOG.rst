@@ -5,9 +5,132 @@ CHANGELOG
 Unreleased
 ----------
 
+v4.0.0rc2: November 21, 2026
+----------------------------
+
+.. note::
+
+   **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
+   here") before upgrading.** From 4.0.0rc1 there is no new upgrade step:
+   no migration, no new operator command to run. The answer to a peer's
+   trust request carries its ``secret`` again, and its refusals carry a JSON
+   ``error``; see below.
+
+ADDED
+~~~~~
+
+- **An application can announce its own MCP server version.**
+  ``with_mcp(server_version="2.3.1")`` sets ``serverInfo.version`` in the
+  MCP ``initialize`` answer, which was always the ActingWeb library's
+  version. Unset, it still is, and ``with_app_version()`` does not change
+  it. A value that is not a non-empty string raises ``ValueError``.
+  ``initialize`` is answered without authentication by default, so the
+  version is public.
+
+- **One actor's creator record can be written without a scan.**
+  ``actingweb-unique-creators record --actor ID [--previous ADDR]
+  [--apply]`` and ``actingweb.maintenance.unique_creators.record_creator()``
+  record one actor's current creator: for an actor restored from a backup
+  or renamed back, whose creator has no ``creators`` record on DynamoDB
+  while a record of its earlier address still names it. Before, ``enable``
+  refused ``--creator``, and settling one actor took ``resolve --apply``
+  and ``enable --apply``, two full scans. ``record`` writes the record
+  conditioned on the actor row as read, releases ``--previous`` only after
+  that succeeded, refuses capitals, reserved values and system creators,
+  and only checks on PostgreSQL. Run it with sign-ins for that address
+  quiet; see the deployment guide ("Restoring one actor").
+
 FIXED
 ~~~~~
 
+- **In 4.0.0rc1 the answer to a peer's trust request carried no**
+  ``secret`` **, so a request sent without one could never be approved.**
+  ``POST /<id>/trust/<rel>`` without a ``secret`` makes the actor generate
+  one (protocol spec 1.5 allows it), and the requester can store it in its
+  own relationship only from the 201 or 202 answer. rc1 removed ``secret``
+  from that answer together with the verification token, so the requester
+  never learned the secret and the owner's approval, which repeats the
+  verification with it, always failed (403). The answer now carries
+  ``secret`` again: the one the request sent, or the one generated for it.
+  It still carries no ``verification_token`` while the owner has not
+  approved the row. **Behavior change:** relative to 4.0.0rc1 only; 3.15.1
+  also answered the secret (and the token, which stays out). **Check:**
+  pending rows rc1 created from requests without a secret cannot be
+  approved; the owner deletes them and the peer asks again. A requester
+  should send a secret: if the answer to a request without one is lost, a
+  repeated request does not replace the pending row, and only the owner
+  can clear it.
+- **The answer to a trust request could reflect what the**
+  ``trust_request_received`` **hook or a concurrent request did to the
+  row.** The answer was built after the hook ran, from the dict the hook
+  received, and a re-pair's answer was read back after its swap. The answer
+  and its status (201 or 202) are now fixed from the row as written, before
+  the hook runs; the hook gets a copy. A re-pair whose read-back row holds
+  a secret other than the one it sent (the row was deleted and another
+  request filed meanwhile) answers 403 and no secret. **Behavior change:**
+  a hook that changes ``trust_data`` no longer changes the answer or its
+  status; a hook that approves the row does so through the trust API, and
+  the requester learns it from the approval notification.
+- **A refused trust request gave the peer no readable reason.** The
+  refusals of ``POST /<id>/trust/<rel>`` (a body that is not JSON, missing
+  ``baseuri`` or ``id``, a reserved relationship name, an id or base URI
+  that is not plain, a bearer for a peer with no trust, a re-pair not
+  proven, a creation that a pending or existing row blocks) answered with an
+  empty body. They now carry ``{"error": "<reason>"}`` as
+  ``application/json``, with the same status as before. A re-pair whose
+  sender proved the trust's secret is told why it was refused (another
+  relationship, a new secret already in use, a row that changed or was
+  deleted meanwhile); any other sender is told only that it did not prove
+  it. **Behavior change:** these refusals have a JSON body and a
+  ``Content-Type`` of ``application/json`` where they had none; a peer that
+  parsed the body or matched on an empty one should read ``error``
+  instead. The status codes are unchanged.
+- **A trust request whose body was not a JSON object, or whose fields were
+  not text, could answer 500.** A number as ``secret`` reached the store,
+  and on a re-pair it was written before the request was refused. The body
+  must be a JSON object and ``baseuri``, ``id``, ``secret``, ``desc``,
+  ``verify`` and ``type`` text (``null`` counts as absent); anything else
+  answers 400 with the field named, and nothing is stored.
+- **A malformed ``Authorization`` header answered 500.** Basic
+  authentication split the header on every space and unpacked two parts, so
+  ``Bearer two words`` (a bearer that failed token authentication, then
+  fell to basic), a header with no credentials, credentials that were not
+  base64 or not UTF-8, or a decoded value without a colon raised instead of
+  refusing. They now answer 403. **Behavior change:** a passphrase that
+  contains ``:`` authenticates (RFC 7617: the user id ends at the first
+  colon; it raised before), and credentials must be strict base64.
+- **An MCP authorization code issued just before a disconnect could still
+  be exchanged afterwards, also after the user reconnected the client.**
+  Deleting a user's connection to an MCP client revoked that user's tokens
+  for it but left its unexchanged authorization codes (they live ten
+  minutes), and the exchange checks no trust: a client holding such a code
+  got working tokens. A disconnect now removes the client's codes for that
+  user with its tokens, each removal confirmed (a store fault fails the
+  disconnect and keeps the trust row for the retry, as for a token), and an
+  exchange in progress during the disconnect revokes what it minted and
+  answers ``invalid_grant``. A reconnect always needs the user on an
+  ActingWeb page (the sign-in form, or the confirmation page when the client
+  posted the form itself), and starts from a fresh grant: the level chosen
+  then, no permission override from before.
+- **Every permission change logged one WARNING per OAuth2/MCP client.**
+  ``Cannot notify peer oauth2_client:… no baseuri in trust`` (or, on the
+  sync path, ``Failed to notify peer … status=0``) was logged for each MCP
+  client connection whose permissions changed: a permission change notifies
+  the peer at its base URI, and an OAuth2 row has none by construction. A
+  peer whose id has an OAuth2 prefix (``oauth2:``, ``oauth2_client:``,
+  ``oauth2_interactive:``) is now not notified, and the skip logs at DEBUG.
+  **Behavior change:** no permission-change notification is attempted for
+  such a peer, on either path. **Check:** an alert on that WARNING now fires only for a peer that should
+  have a base URI.
+- **``actingweb-unique-creators`` tried to record a reserved creator.** An
+  actor row holding a reserved ``#…`` value (a legacy or restored row; the
+  library refuses them since 4.0) was counted as unrecorded by ``report``
+  and given a record by ``enable``, a first start and ``resolve`` (two
+  actors sharing one formed a duplicate group); on DynamoDB the value
+  ``#meta#backfill`` is the key of the backfill-complete item itself. Such
+  a creator is now never recorded nor grouped, and ``report`` lists it as
+  ``reserved creator`` (informational: nothing can sign in with it; rename
+  or delete the actor).
 - **The Agent Skill told an agent that a fresh database's first start
   stops, and an agent opted out of creator uniqueness to avoid the step.**
   ``skills/actingweb-app/SKILL.md`` still described the rc1-era sequence

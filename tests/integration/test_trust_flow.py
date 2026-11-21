@@ -7,6 +7,8 @@ This test suite runs sequentially - each test depends on the previous ones.
 Converted from Runscope/Blazemeter JSON test suite.
 """
 
+import uuid
+
 import pytest
 import requests
 
@@ -660,3 +662,123 @@ class TestTrustActorFlow:
             auth=(self.creator2, self.passphrase2),  # type: ignore[arg-type]
         )
         assert response.status_code == 204
+
+
+@pytest.mark.xdist_group(name="trust_peer_request")
+class TestPeerTrustRequest:
+    """A peer's trust request (``POST /<id>/trust/<rel>``), as the demo's
+    BlazeMeter "Trust actingweb actor flow" sends it, under 4.0 rules
+    (plans/2026-11-21-trust-request-answer-secret.md, phase 1).
+
+    The requester's base URI is the discard port on the loopback
+    (``http://127.0.0.1:9``): nothing serves it, so a request never
+    verifies, and the one fetch (the approval's second check in test_006)
+    is refused at once.
+    """
+
+    actor_url: str | None = None
+    actor_id: str | None = None
+    passphrase: str | None = None
+    creator = f"peer-request-{uuid.uuid4().hex[:8]}@actingweb.net"
+    peer_id = f"testid{uuid.uuid4().hex[:8]}"
+    peer_baseuri = "http://127.0.0.1:9"
+    trust_url: str | None = None
+    secret: str | None = None
+
+    def test_001_create_actor(self, http_client: requests.Session) -> None:
+        response = http_client.post(
+            f"{http_client.base_url}/",  # type: ignore[attr-defined]  # set by the fixture
+            json={"creator": self.creator},
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 201
+        TestPeerTrustRequest.actor_url = response.headers.get("Location")
+        TestPeerTrustRequest.actor_id = response.json()["id"]
+        TestPeerTrustRequest.passphrase = response.json()["passphrase"]
+
+    def test_002_request_with_invalid_peer_is_refused(
+        self, http_client: requests.Session
+    ) -> None:
+        """AC-6, AC-12: a base URI or id that is not plainly one is 400 with
+        a reason, and stores nothing."""
+        for body in (
+            {"baseuri": "testurl", "id": self.peer_id, "type": "urn:test"},
+            {"baseuri": self.peer_baseuri, "id": "a/b", "type": "urn:test"},
+        ):
+            response = requests.post(f"{self.actor_url}/trust/friend", json=body)
+            assert response.status_code == 400
+            assert response.json() == {"error": "Invalid id or baseuri"}
+        response = requests.get(
+            f"{self.actor_url}/trust?peerid={self.peer_id}",
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_003_request_without_secret_answers_its_secret(
+        self, http_client: requests.Session
+    ) -> None:
+        """AC-1: the actor generates the secret and answers it."""
+        response = requests.post(
+            f"{self.actor_url}/trust/friend",
+            json={
+                "baseuri": self.peer_baseuri,
+                "id": self.peer_id,
+                "type": "urn:actingweb:actingweb.org:gae-demo",
+                "desc": "a peer's request without a secret",
+            },
+        )
+        assert response.status_code == 202
+        data = response.json()
+        assert data["secret"]
+        assert data["approved"] is False and data["verified"] is False
+        assert "verification_token" not in data
+        assert response.headers.get("Location")
+        TestPeerTrustRequest.trust_url = response.headers["Location"]
+        TestPeerTrustRequest.secret = data["secret"]
+
+    def test_004_peer_reads_its_pending_row(
+        self, http_client: requests.Session
+    ) -> None:
+        """AC-8: the pending row's own peer reads it: 202, no token."""
+        response = requests.get(
+            self.trust_url,  # type: ignore[arg-type]
+            headers={"Authorization": f"Bearer {self.secret}"},
+        )
+        assert response.status_code == 202
+        data = response.json()
+        assert data["peerid"] == self.peer_id
+        assert data["approved"] in (False, "false")
+        assert "verification_token" not in data
+
+    def test_005_wrong_secret_is_refused(self, http_client: requests.Session) -> None:
+        response = requests.get(
+            self.trust_url,  # type: ignore[arg-type]
+            headers={"Authorization": f"Bearer {uuid.uuid4().hex}"},
+        )
+        assert response.status_code == 403
+
+    def test_006_owner_cannot_approve_unverified_request(
+        self, http_client: requests.Session
+    ) -> None:
+        """AC-7: the request never verified, and its base URI serves
+        nothing: 403, the row stays unapproved."""
+        response = requests.put(
+            self.trust_url,  # type: ignore[arg-type]
+            json={"approved": True},
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code == 403
+        response = requests.get(
+            self.trust_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.json()["approved"] in (False, "false")
+
+    def test_007_delete_actor(self, http_client: requests.Session) -> None:
+        """The peer cannot be told; the actor goes anyway."""
+        response = requests.delete(
+            self.actor_url,  # type: ignore[arg-type]
+            auth=(self.creator, self.passphrase),  # type: ignore[arg-type]
+        )
+        assert response.status_code in (200, 204)

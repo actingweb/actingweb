@@ -31,6 +31,8 @@ Subcommands:
   an actor created or renamed during the scan is not listed.
   Also ``@`` addresses stored with capitals: lookups use the lowercase value,
   so such an actor would not be found once the flag is on.
+  On DynamoDB also actors holding a reserved ``#…`` value (informational:
+  never recorded, and nothing can sign in with it; rename or delete them).
 - ``resolve [--apply] [--keep ID]``: keeps one actor per group and renames the
   others to ``{creator}#dup-{hash}``, clearing their stored ``email`` so it
   no longer claims the address (``creator-to-email`` would otherwise move the
@@ -80,6 +82,15 @@ Subcommands:
   ``--clear-held-email`` clears the stored email of the actor that cannot
   move; one held by an unvouched ``factory`` actor is reported only.
   ``--unmark --apply`` withdraws the marker. Run it again after the deploy.
+- ``record --actor ID [--previous ADDR] [--apply]``: records one actor's
+  current creator without a scan (4.0.0rc2), for an actor restored from a
+  backup or renamed back. DynamoDB: writes the missing record (moving a
+  stale one), answers ``held-by`` when another actor holds the address, and
+  with ``--previous`` then releases that address's record when it names
+  this actor. PostgreSQL keeps no records: it checks that no other actor
+  holds the address (``verified``). Refuses a creator stored with capitals,
+  a reserved value or a system creator, and answers ``not-enforced`` before
+  ``enable``. Run it with sign-ins for that address quiet.
 - ``disable [--apply]``: PostgreSQL drops the index; DynamoDB deletes every
   record and the backfill-complete item, so a later ``enable`` starts from
   the actors, not from records that went stale while the flag was off (the
@@ -87,8 +98,8 @@ Subcommands:
   the flag on has stopped; re-running finishes a partial run.
 
 
-``resolve``, ``enable`` and ``disable`` only print what they would do unless
-``--apply`` is given.
+``resolve``, ``enable``, ``disable`` and ``record`` only print what they
+would do unless ``--apply`` is given.
 
 Output: one ``key=value`` summary line per run, after one line per decision.
 
@@ -111,10 +122,13 @@ from actingweb.constants import DEFAULT_CREATOR
 from actingweb.db.creator_rules import (
     BACKFILL_KEY,
     DUP_MARKER,
+    SYSTEM_CREATORS,
     UNIQUE_INDEX_NAME,
     UNIQUE_INDEX_PREDICATE,
     dup_value,
     is_exempt,
+    is_reserved,
+    is_system_actor,
     normalise_creator,
 )
 from actingweb.db.exceptions import DbError
@@ -151,6 +165,10 @@ class Report:
     default_creator: list[tuple[str, str]] = field(default_factory=list)
     # default-creator actors whose _internal bucket could not be read
     default_creator_unreadable: list[str] = field(default_factory=list)
+    # DynamoDB: (actor_id, creator) holding a reserved ``#…`` value (not a
+    # ``#dup-`` rename): a legacy or restored row, never recorded
+    # (informational, not part of ``clean``)
+    reserved: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def groups(self) -> dict[str, list[str]]:
@@ -282,6 +300,12 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
         if DUP_MARKER in creator:
             report.dup_actors.append(actor_id)
             continue
+        if is_reserved(creator):
+            # Never grouped: resolve would record it (#meta#backfill is the
+            # backfill-complete item's key).
+            if _wanted(creator, only):
+                report.reserved.append((actor_id, creator))
+            continue
         if is_exempt(creator) or not _wanted(creator, only):
             continue
         by_value.setdefault(creator, []).append(actor_id)
@@ -296,6 +320,7 @@ def _group_in_memory(rows: dict[str, str], only: str | None, report: Report) -> 
         if len(v) > 1
     }
     report.dup_actors.sort()
+    report.reserved.sort()
     grouped = {i for g in report.groups.values() for i in g}
     report.unnormalised = sorted(
         (i, c)
@@ -437,7 +462,7 @@ def _collect_creators(
                 (i, c)
                 for i, c in report.creators.items()
                 if not is_exempt(c)
-                and DUP_MARKER not in c
+                and not is_reserved(c)
                 and i not in recorded
                 and _wanted(c, only)
                 and _unrecorded_now(normalise_creator(c), i)
@@ -498,6 +523,11 @@ def print_report(report: Report) -> None:
             f"unrecorded actor id={actor_id} creator={creator!r} "
             "(run enable --apply again)"
         )
+    for actor_id, creator in report.reserved:
+        logger.info(
+            f"reserved creator id={actor_id} creator={creator!r} "
+            "(never recorded; nothing can sign in with it; rename or delete it)"
+        )
     for actor_id, email in report.default_creator:
         logger.info(
             f"default creator id={actor_id} email={email!r} "
@@ -508,7 +538,8 @@ def print_report(report: Report) -> None:
         f"case_groups={len(report.case_only)} renamed={len(report.dup_actors)} "
         f"orphans={len(report.orphans)} unrecorded={len(report.unrecorded)} "
         f"capitals={len(report.unnormalised)} "
-        f"default_creator={len(report.default_creator)}"
+        f"default_creator={len(report.default_creator)} "
+        f"reserved={len(report.reserved)}"
     )
 
 
@@ -631,8 +662,8 @@ def _settle_record(key: str, kept: str, ids: list[str]) -> str:
     )
     from actingweb.db.dynamodb.creator import Creator
 
-    if not Creator.exists():
-        return "skip"  # before enable: it writes the records
+    if not Creator.exists() or is_reserved(key):
+        return "skip"  # before enable: it writes the records; never a reserved key
     try:
         kept_row = Actor.get(kept, consistent_read=True)
     except DoesNotExist:
@@ -664,6 +695,265 @@ def _settle_record(key: str, kept: str, ids: list[str]) -> str:
     else:
         logger.info(f"moved the record of {key!r} from {named} to {kept}")
     return "settled"
+
+
+# ---------------------------------------------------------------------------
+# record: one actor's creator record (4.0.0rc2)
+# ---------------------------------------------------------------------------
+
+RECORD_OK = frozenset({"recorded", "written", "verified", "exempt", "would-write"})
+PREVIOUS_OK = frozenset({"released", "absent", "not-kept", "would-release"})
+
+
+@dataclass
+class RecordOutcome:
+    """What :func:`record_creator` did, or would do.
+
+    ``record`` is the record step's outcome: ``recorded`` (the record
+    already names the actor), ``written``, ``verified`` (PostgreSQL),
+    ``exempt``, ``would-write`` (a dry run), or a failure: ``missing``,
+    ``held-by`` (``holder`` names the actor), ``not-enforced``,
+    ``changed``, ``refused``. ``previous`` is the ``--previous`` step's:
+    ``released``, ``absent``, ``not-kept`` (PostgreSQL),
+    ``would-release``, or ``not-this-actor``, ``changed``, ``skipped``
+    (the record step did not succeed, or records are not enforced yet: a
+    failure either way), ``refused`` (an address that cannot
+    be released); None without one. ``reason`` says why for a refusal.
+    """
+
+    record: str
+    holder: str | None = None
+    previous: str | None = None
+    reason: str = ""
+
+    @property
+    def exit_code(self) -> int:
+        """0 when every step succeeded (a dry run that would succeed
+        included), 1 otherwise."""
+        if self.previous == "refused":
+            return 1
+        if self.record not in RECORD_OK:
+            return 1
+        if self.previous is None:
+            return 0
+        # A requested release that was skipped (record not enforced yet)
+        # did not happen: it fails like any other step.
+        return 0 if self.previous in PREVIOUS_OK else 1
+
+
+def _read_actor_creator(config: Any, actor_id: str) -> tuple[bool, str | None]:
+    """A consistent read of the actor: (found, its creator as stored).
+    Raises on a fault."""
+    if config.database == "postgresql":
+        from actingweb.db import get_actor
+
+        row = get_actor(config).get(actor_id=actor_id)
+        return (bool(row), (row or {}).get("creator"))
+    from pynamodb.exceptions import DoesNotExist
+
+    from actingweb.db.dynamodb.actor import Actor
+
+    try:
+        return (True, Actor.get(actor_id, consistent_read=True).creator)
+    except DoesNotExist:
+        return (False, None)
+
+
+def _creator_refused(actor_id: str, creator: str) -> str | None:
+    """Why ``record`` refuses this creator, or None. The rules are
+    ``creator_rules``'s; capitals are ``resolve``'s to settle."""
+    if is_reserved(creator):
+        return "a reserved value"
+    if creator.lower() in SYSTEM_CREATORS and not is_system_actor(actor_id, creator):
+        return "a system creator on another actor"
+    if "@" in creator and creator != creator.lower():
+        return "an address stored with capitals (run resolve)"
+    return None
+
+
+def _previous_refused(previous: str, current_key: str) -> str | None:
+    if previous == current_key:
+        return "it is the actor's current creator"
+    if is_exempt(previous):
+        return "an exempt value is never recorded"
+    if is_reserved(previous):
+        return "a reserved value"
+    return None
+
+
+def _postgresql_holder(actor_id: str, creator: str) -> str | None:
+    """Another actor that holds this creator (``@`` values compared
+    case-insensitively, provider ids exactly)."""
+    from actingweb.db.postgresql.connection import get_connection
+
+    # Only @ values compare case-insensitively; a provider id keeps its
+    # case (the index is on the raw value, and collect groups the same way).
+    query = (
+        "SELECT id FROM actors WHERE lower(creator) = lower(%s) "
+        if "@" in creator
+        else "SELECT id FROM actors WHERE creator = %s "
+    )
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query + "AND id <> %s ORDER BY id LIMIT 1", (creator, actor_id))
+            row = cur.fetchone()
+    return str(row[0]) if row else None
+
+
+def _dynamodb_record_step(actor_id: str, key: str, *, apply: bool) -> RecordOutcome:
+    """The DynamoDB record step, conditioned on the actor row as read."""
+    from pynamodb.exceptions import DoesNotExist
+
+    from actingweb.db.dynamodb import actor as dynamo_actor
+    from actingweb.db.dynamodb.creator import Creator
+
+    try:
+        row = dynamo_actor.Actor.get(actor_id, consistent_read=True)
+    except DoesNotExist:
+        return RecordOutcome("missing")
+    # The writes below are conditioned on this row: its creator meets the
+    # rules again here, not only the first read's.
+    if normalise_creator(row.creator) != key:
+        return RecordOutcome("changed")
+    why = _creator_refused(actor_id, str(row.creator or ""))
+    if why:
+        return RecordOutcome("refused", reason=why)
+    try:
+        named: str | None = str(Creator.get(key, consistent_read=True).actor_id or "")
+    except DoesNotExist:
+        named = None
+    if named == actor_id:
+        return RecordOutcome("recorded")
+    if named == "":
+        return RecordOutcome(
+            "refused", reason="the record names no actor; run report and resolve"
+        )
+    if named is not None and _record_problem(key, named) is None:
+        return RecordOutcome("held-by", holder=named)
+    if not apply:
+        return RecordOutcome("would-write")
+    if named is None:
+        done = dynamo_actor.record_for_actor_as_read(key, row)
+    else:
+        done = dynamo_actor.move_stale_record(key, named, row)
+    if done:
+        return RecordOutcome("written")
+    # Lost a race: someone holds it now, or something changed.
+    try:
+        now = str(Creator.get(key, consistent_read=True).actor_id or "")
+    except DoesNotExist:
+        now = None
+    if now == actor_id:
+        return RecordOutcome("recorded")
+    if now and _record_problem(key, now) is None:
+        return RecordOutcome("held-by", holder=now)
+    return RecordOutcome("changed")
+
+
+def _dynamodb_previous_step(actor_id: str, previous: str, *, apply: bool) -> str:
+    from pynamodb.exceptions import DoesNotExist
+
+    from actingweb.db.dynamodb import actor as dynamo_actor
+    from actingweb.db.dynamodb.creator import Creator
+
+    try:
+        named = str(Creator.get(previous, consistent_read=True).actor_id or "")
+    except DoesNotExist:
+        return "absent"
+    if named != actor_id:
+        return "not-this-actor"
+    if not apply:
+        return "would-release"
+    return (
+        "released"
+        if dynamo_actor.release_stale_record(previous, actor_id)
+        else ("changed")
+    )
+
+
+def record_creator(
+    config: Any, actor_id: str, *, previous: str | None = None, apply: bool
+) -> RecordOutcome:
+    """Record one actor's current creator, without a scan (4.0.0rc2).
+
+    For an actor restored from a backup or renamed back: on DynamoDB the
+    record of its creator is written (or a stale one moved to it), each
+    write conditioned on the actor row as read; ``previous`` names an
+    address whose record still names this actor (the creator it had
+    before the restore), released after the record step succeeded. On
+    PostgreSQL nothing is written: the outcome is ``verified`` when no
+    other actor holds the address. Without ``apply`` nothing is written.
+
+    Raises :class:`StoreUnavailable` on a store fault. Run it with sign-ins
+    for that address quiet: a sign-in before the record exists creates
+    another actor, which ``held-by`` reports and ``resolve`` settles. Never
+    run it beside ``disable``: its write is not conditioned on the
+    backfill-complete item, so it could leave a record in a store
+    ``disable`` emptied.
+    """
+    try:
+        return _record_creator(config, actor_id, previous=previous, apply=apply)
+    except StoreUnavailable:
+        raise
+    except Exception as e:  # folds DbError: becomes StoreUnavailable (exit 2)
+        raise StoreUnavailable(f"the store could not be read or written: {e}") from e
+
+
+def _record_creator(
+    config: Any, actor_id: str, *, previous: str | None, apply: bool
+) -> RecordOutcome:
+    found, creator = _read_actor_creator(config, actor_id)
+    if not found:
+        return RecordOutcome("missing")
+    creator = creator or ""
+    key = normalise_creator(creator)
+    wanted_previous = normalise_creator(previous) if previous else None
+    if wanted_previous is not None:
+        why = _previous_refused(wanted_previous, key)
+        if why:
+            return RecordOutcome("skipped", previous="refused", reason=why)
+    if is_exempt(creator) or DUP_MARKER in key:
+        # Nothing to record, but the address it held before can still be
+        # released: the actor no longer holds it.
+        out = RecordOutcome("exempt")
+        if wanted_previous:
+            if not _uniqueness_enforced(config):
+                out.previous = "skipped"
+            elif config.database == "postgresql":
+                out.previous = "not-kept"
+            else:
+                out.previous = _dynamodb_previous_step(
+                    actor_id, wanted_previous, apply=apply
+                )
+        return out
+    why = _creator_refused(actor_id, creator)
+    if why:
+        return RecordOutcome(
+            "refused", previous="skipped" if wanted_previous else None, reason=why
+        )
+    if not _uniqueness_enforced(config):
+        return RecordOutcome(
+            "not-enforced", previous="skipped" if wanted_previous else None
+        )
+    if config.database == "postgresql":
+        holder = _postgresql_holder(actor_id, creator)
+        out = (
+            RecordOutcome("held-by", holder=holder)
+            if holder
+            else RecordOutcome("verified")
+        )
+        if wanted_previous:
+            out.previous = "not-kept"
+        return out
+    out = _dynamodb_record_step(actor_id, key, apply=apply)
+    if wanted_previous:
+        if out.record in ("recorded", "written", "would-write"):
+            out.previous = _dynamodb_previous_step(
+                actor_id, wanted_previous, apply=apply
+            )
+        else:
+            out.previous = "skipped"
+    return out
 
 
 def _release_losers_record(key: str, kept: str, ids: list[str]) -> None:
@@ -812,6 +1102,8 @@ def _record_lone_holder(config: Any, key: str, report: Report) -> None:
     from actingweb.db.dynamodb.actor import Actor, record_for_actor_as_read
 
     key = normalise_creator(key)
+    if is_exempt(key) or is_reserved(key):
+        return  # never recorded
     listed = get_actor(config).get_by_creator(creator=key, consistent=True) or []
     rows: list[dict[str, Any]] = [listed] if isinstance(listed, dict) else listed
     candidates = {str(r["id"]) for r in rows if r and r.get("id")}
@@ -994,7 +1286,9 @@ def _enable_dynamodb(config: Any, report: Report, apply: bool) -> tuple[str, int
     pending = sorted(
         (normalise_creator(c), i)
         for i, c in report.creators.items()
-        if not is_exempt(c) and DUP_MARKER not in c
+        # A reserved value is never recorded: ``#meta#backfill`` is the
+        # backfill-complete item's key (rc2).
+        if not is_exempt(c) and not is_reserved(c)
     )
     if not apply:
         logger.info(f"[dry-run] would write up to {len(pending)} creator records")
@@ -1231,7 +1525,7 @@ def enable_empty_store(config: Any) -> None:
 
     def record(row: Any) -> bool:
         creator = normalise_creator(str(row.creator or ""))
-        if is_exempt(creator) or DUP_MARKER in creator:
+        if is_exempt(creator) or is_reserved(creator):
             return True
         if record_for_actor_as_read(creator, row):
             return True
@@ -1399,6 +1693,14 @@ def main(argv: list[str] | None = None) -> int:
                 default="10s",
                 help="PostgreSQL lock_timeout for the index build",
             )
+    p = sub.add_parser("record", help="record one actor's creator (no scan)")
+    p.add_argument("--actor", required=True, help="the actor id")
+    p.add_argument(
+        "--previous",
+        default=None,
+        help="an address whose record still names this actor: release it",
+    )
+    p.add_argument("--apply", action="store_true", help="write")
     p = sub.add_parser(
         "creator-to-email",
         help="move vouched actors to their stored email (with_email_as_creator)",
@@ -1452,6 +1754,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
     try:
         if args.command == "creator-to-email":
             return _run_creator_to_email(args, config)
+        if args.command == "record":
+            return _run_record(args, config)
         if args.command == "disable":
             outcome = disable(config, apply=args.apply)
             logger.info(f"command=disable outcome={outcome}")
@@ -1503,6 +1807,31 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser, config: Any)
     except StoreUnavailable as e:
         logger.error(f"{e}; re-run when the database answers")
         return 2
+
+
+def _run_record(args: argparse.Namespace, config: Any) -> int:
+    """``record``: one line per step, then the exit code (0, 1; a store
+    fault is raised to ``_run``, 2)."""
+    outcome = record_creator(
+        config, args.actor, previous=args.previous, apply=args.apply
+    )
+    line = f"record actor={args.actor} apply={args.apply} outcome={outcome.record}"
+    if outcome.holder:
+        line += f" holder={outcome.holder}"
+    if outcome.reason and outcome.previous != "refused":
+        line += f" reason={outcome.reason!r}"
+    logger.info(line)
+    if outcome.previous is not None:
+        prev = f"record actor={args.actor} previous outcome={outcome.previous}"
+        if outcome.previous == "refused":
+            prev += f" reason={outcome.reason!r}"
+        logger.info(prev)
+    if outcome.record == "held-by":
+        logger.warning(
+            "another actor holds this address (a sign-in before the record?); "
+            "run `actingweb-unique-creators report`, then `resolve`"
+        )
+    return outcome.exit_code
 
 
 def _run_creator_to_email(args: argparse.Namespace, config: Any) -> int:

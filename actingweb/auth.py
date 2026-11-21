@@ -67,6 +67,23 @@ def add_auth_response(appreq=None, auth_obj=None):
     return True
 
 
+def _parse_basic_credentials(credentials: str) -> tuple[str, str] | None:
+    """The user-id and password of a ``Basic`` credential (RFC 7617: the
+    user-id ends at the first colon, the password may contain more), or
+    None when it is not one: not one base64 token, not UTF-8, no colon."""
+    token = credentials.strip()
+    if not token or " " in token:
+        return None
+    try:
+        decoded = base64.b64decode(token, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):  # binascii.Error is a ValueError
+        return None
+    username, sep, password = decoded.partition(":")
+    if not sep:
+        return None
+    return username, password
+
+
 class Auth:
     """The auth class handles authentication and authorisation for the various schemes supported.
 
@@ -152,20 +169,23 @@ class Auth:
             self.response["code"] = 401
             self.response["text"] = "Authentication required"
             return False
-        authz = appreq.request.headers["Authorization"]
-        (basic, _) = authz.split(" ")
-        if basic.lower() != "basic":
+        authz = str(appreq.request.headers["Authorization"] or "")
+        scheme, _, credentials = authz.strip().partition(" ")
+        if scheme.lower() != "basic":
             self.response["code"] = 403
             self.response["text"] = "No basic auth in Authorization header"
             logger.debug("No basic auth in Authorization header")
             return False
         self.authn_done = True
-        au = authz.split(" ")[1]
-        au = au.encode("utf-8")
-        au = base64.b64decode(au)
-        (username, password) = au.split(b":")
-        password = password.decode("utf-8")
-        username = username.decode("utf-8")
+        parsed = _parse_basic_credentials(credentials)
+        if parsed is None:
+            # The header is the caller's: a malformed one is a refusal,
+            # never a 500 (rc2).
+            self.response["code"] = 403
+            self.response["text"] = WRONG_CREDENTIALS
+            logger.debug("Malformed basic credentials")
+            return False
+        username, password = parsed
         if not self.actor or username != self.actor.creator:
             self.response["code"] = 403
             self.response["text"] = WRONG_CREDENTIALS

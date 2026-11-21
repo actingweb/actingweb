@@ -192,8 +192,9 @@ Optional endpoints and ``/mcp``:
 - Clarified: the field table's MANDATORY applies to every representation
   except ``secret``; further fields MAY be present; flags are JSON
   booleans in every response, the creation responses included.
-- Added: the body of the 201 and 202 creation responses (without secret and
-  verification token while unapproved).
+- Added: the body of the 201 and 202 creation responses (with the secret,
+  the one sent or the one B generated; without the verification token while
+  unapproved).
 - Added: what a receiver of a trust request requires (``baseuri`` and
   ``id``; 400 otherwise) and MAY accept without (``secret``, ``type``).
 - Changed: the approval notification is ``{"approved": true}`` (a JSON
@@ -2273,16 +2274,31 @@ Location header in the response. The URL MUST be formatted the following
 way: /<baseuri-with-actor-id>/trust/<trustlevel>/<requesting-actor-id>.
 The body of a 201 or 202 response is the new relationship's
 representation (see Relationships and their data), as an application/json
-object with boolean flags; while B has not approved the relationship, it
-MUST NOT carry ``secret`` or ``verification_token``.
+object with boolean flags. It carries ``secret``: the one the request sent,
+or the one B generated for a request without one. While B has not approved
+the relationship, it MUST NOT carry ``verification_token``.
 
 B MUST answer 400 Bad Request, and store nothing, when the request lacks
 ``baseuri`` or ``id``, when they are not a plain base URI and a plain actor
 id, or when the relationship type in the URL is reserved (see Types of
-Relationships). The requesting actor MUST send ``secret``, ``baseuri``,
-``id`` and ``type``, but B MAY accept a request without ``secret`` or
-``type``; a relationship requested without a secret cannot be verified and
-so cannot be approved automatically.
+Relationships). Every refusal of a trust request, these and the refusal
+of a re-pair (below) included, SHOULD carry an application/json body
+``{"error": "<reason>"}``. The requesting actor MUST
+send ``secret``, ``baseuri``, ``id`` and ``type``, but B MAY accept a
+request without ``secret`` or ``type``; a relationship requested without a
+secret cannot be verified and so cannot be approved automatically.
+
+When B accepts a request without ``secret``, it generates one and its 202
+answer carries it. The requesting actor then keeps that secret in its own
+relationship toward B, approved, so that B's manual approval can repeat the
+verification with it: B fetches that relationship at the requesting actor
+with the secret as bearer token, requires it to be approved and to name B,
+and requires the requesting actor's ``/meta`` to name it (no ``verify``
+token is compared). The answer is the only copy of the secret the
+requesting actor gets: if it is lost, a repeated request does not replace
+the pending relationship (only a request that verifies does), and B's
+owner deletes the pending relationship. A requesting actor SHOULD therefore
+send a secret.
 
 If actor B already holds a verified or approved relationship with the
 requesting actor, the request MUST NOT replace it. B MUST accept it only as
@@ -2341,7 +2357,8 @@ The defined attribites to include in the POST request:
 +-----------------+------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | **Attribute**   |            | **Description**                                                                                                                                                                                                                                                                                            |
 +-----------------+------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| **secret**      | MUST       | Value is the shared secret that actor A will use when authenticating with actor B and the other way around. The requesting actor needs to supply the secret in order for the requested actor to verify the requesting actor.                                                                               |
+| **secret**      | MUST       | Value is the shared secret that actor A will use when authenticating with actor B and the other way around. The requesting actor needs to supply the secret in order for the requested actor to verify the requesting actor. B MAY accept a request without it, generates one, and returns it in its       |
+|                 |            | answer.                                                                                                                                                                                                                                                                                                    |
 +-----------------+------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | **baseuri**     | MUST       | The base URI of the requesting actor (with id).                                                                                                                                                                                                                                                            |
 +-----------------+------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+

@@ -176,6 +176,7 @@ class ActingWebApp:
         self._force_email_prop_as_creator = False
         self._enable_mcp = True  # MCP enabled by default
         self._mcp_server_name = "actingweb"
+        self._mcp_server_version: str | None = None
         self._mcp_instructions: str | None = None
         self._mcp_require_auth_for_initialize = False
         self._mcp_require_pkce = True
@@ -291,6 +292,7 @@ class ActingWebApp:
         self._config.mcp = self._enable_mcp
         self._config.mcp_server_name = self._mcp_server_name
         self._config.mcp_instructions = self._mcp_instructions
+        self._config.mcp_server_version = self._mcp_server_version
         self._config.mcp_require_auth_for_initialize = (
             self._mcp_require_auth_for_initialize
         )
@@ -680,6 +682,7 @@ class ActingWebApp:
         *,
         require_auth_for_initialize: bool = _UNSET,
         require_pkce: bool = _UNSET,
+        server_version: str = _UNSET,
     ) -> "ActingWebApp":
         """Enable or disable MCP (Model Context Protocol) functionality.
 
@@ -717,7 +720,20 @@ class ActingWebApp:
                 accepted at callback and exchange. An application whose
                 clients have not been checked upgrades with False and
                 enforces in a later change.
+            server_version: The version announced as ``serverInfo.version``
+                in the MCP initialise handshake (4.0): any non-empty string,
+                for example ``"2.3.1"``. Unset, it is the ActingWeb
+                library's version; ``with_app_version()`` does not change
+                it. ``initialize`` is answered without authentication by
+                default (``require_auth_for_initialize``), so the value is
+                public.
         """
+        if server_version is not _UNSET and (
+            not isinstance(server_version, str) or not server_version.strip()
+        ):
+            raise ValueError(
+                "with_mcp(server_version=...) needs a non-empty version string"
+            )
         self._enable_mcp = enable
         if server_name is not _UNSET:
             self._mcp_server_name = server_name
@@ -727,6 +743,8 @@ class ActingWebApp:
             self._mcp_require_auth_for_initialize = bool(require_auth_for_initialize)
         if require_pkce is not _UNSET:
             self._mcp_require_pkce = bool(require_pkce)
+        if server_version is not _UNSET:
+            self._mcp_server_version = server_version
         # Config.aw_supported is computed on every read, so the ``mcp`` tag
         # follows the flag as soon as it is applied to the config.
         self._apply_runtime_changes_to_config()
@@ -1674,6 +1692,7 @@ class ActingWebApp:
                 mcp=self._enable_mcp,
                 mcp_server_name=self._mcp_server_name,
                 mcp_instructions=self._mcp_instructions,
+                mcp_server_version=self._mcp_server_version,
                 mcp_require_auth_for_initialize=self._mcp_require_auth_for_initialize,
                 mcp_require_pkce=self._mcp_require_pkce,
                 sync_subscription_callbacks=self._sync_subscription_callbacks,

@@ -26,6 +26,7 @@ from ..single_use import (
     PurgeThrottle,
     StoreFault,
     chain_revoked,
+    delete_confirmed,
     mark_chain_revoked,
     revoke_chain_confirmed,
 )
@@ -359,6 +360,24 @@ class ActingWebTokenManager:
         if not self._generation_still_matches(
             actor_id, stamped, access_token, refresh_token
         ):
+            self._remove_google_token_data(actor_id, auth_data["google_token_key"])
+            self._remove_auth_code(code)
+            return None
+
+        # A disconnect that swept this code after the consume (rc2): its
+        # token pass may have run before these tokens existed, so they are
+        # removed here and the grant fails. A read fault fails closed.
+        try:
+            still_there = self._consumed_code_still_there(actor_id, code)
+        except TokenStoreUnavailable:
+            self._remove_minted(actor_id, access_token, refresh_token)
+            raise
+        if not still_there:
+            logger.warning(
+                f"Authorization code {_mask_token(code)} was swept by a "
+                "disconnect during its exchange; the tokens are revoked"
+            )
+            self._remove_minted(actor_id, access_token, refresh_token)
             self._remove_google_token_data(actor_id, auth_data["google_token_key"])
             self._remove_auth_code(code)
             return None
@@ -1117,7 +1136,7 @@ class ActingWebTokenManager:
             except Exception as e:  # folds DbError: undelivered row, TTL-reaped
                 logger.error(
                     f"Could not delete a token minted for actor {actor_id} by a "
-                    f"refused refresh: {e}"
+                    f"refused grant: {e}"
                 )
 
     def _store_auth_code(
@@ -1210,6 +1229,41 @@ class ActingWebTokenManager:
 
         except Exception as e:  # folds DbError: cleanup; TTL reaps the code
             logger.error(f"Error removing auth code {_mask_token(code)}: {e}")
+
+    def _remove_auth_code_confirmed(
+        self, actor_id: str, code: str, auth_data: dict[str, Any]
+    ) -> bool:
+        """Remove one of ``actor_id``'s authorization codes, confirmed: its
+        provider-token row and its index row, then the code row itself, last,
+        so that a removal stopped half-way leaves the code row for the
+        retry's snapshot to find. True only when all three are gone (rc2;
+        the disconnect sweep). Unlike :meth:`_remove_auth_code`, a fault is
+        reported, never swallowed."""
+        provider_key = auth_data.get("google_token_key")
+        if provider_key and not delete_confirmed(
+            self.config, actor_id, self.google_tokens_bucket, provider_key
+        ):
+            return False
+        if not delete_confirmed(
+            self.config, OAUTH2_SYSTEM_ACTOR, AUTH_CODE_INDEX_BUCKET, code
+        ):
+            return False
+        return delete_confirmed(self.config, actor_id, self.auth_codes_bucket, code)
+
+    def _consumed_code_still_there(self, actor_id: str, code: str) -> bool:
+        """After an exchange minted its tokens: whether its consumed code row
+        is still stored (rc2). A disconnect's sweep removes it; then the
+        tokens just minted must not be answered. Raises
+        :class:`TokenStoreUnavailable` when the row cannot be read."""
+        from ..db import get_attribute
+
+        try:
+            row = get_attribute(self.config).get_attr_strict(
+                actor_id=actor_id, bucket=self.auth_codes_bucket, name=code
+            )
+        except Exception as e:  # folds DbError: fail closed, the caller revokes
+            raise TokenStoreUnavailable("authorization code re-read") from e
+        return row is not None
 
     def _store_google_token_data(
         self, actor_id: str, token_key: str, google_token_data: dict[str, Any]
@@ -1728,10 +1782,12 @@ class ActingWebTokenManager:
 
     def revoke_client_tokens(self, actor_id: str, client_id: str) -> int:
         """
-        Revoke all tokens (access and refresh) associated with a specific client.
+        Revoke all tokens (access and refresh) associated with a specific client,
+        and remove its unexchanged authorization codes (4.0.0rc2).
 
         This ensures that when a client is deleted, all its tokens are immediately
-        invalidated and cannot be used for further access.
+        invalidated and cannot be used for further access, and no code issued
+        before the disconnect can be exchanged after it.
 
         Args:
             actor_id: The actor the client belongs to
@@ -1741,15 +1797,18 @@ class ActingWebTokenManager:
             Number of tokens confirmed revoked (access + refresh tokens)
 
         Raises:
-            TokenStoreUnavailable: one of the two token buckets could not be
-                read, or a delete could not be confirmed, so some of the
-                client's tokens may be left. Whatever could be revoked is
-                revoked first.
+            TokenStoreUnavailable: one of the two token buckets or the
+                authorization-code bucket could not be read, or a delete
+                (of a token, or of a code's provider-token, index or code
+                row) could not be confirmed, so some of the client's tokens
+                or codes may be left. Whatever could be revoked is revoked
+                first.
         """
         return self._revoke_matching_tokens(actor_id, client_id)
 
     def revoke_actor_tokens(self, actor_id: str) -> int:
-        """Revoke every MCP access and refresh token of an actor, whatever client.
+        """Revoke every MCP access and refresh token and every authorization
+        code of an actor, whatever client.
 
         Same removal helpers as :meth:`revoke_client_tokens` without the client
         filter, so the system actor's index rows and the provider-token rows go
@@ -1764,7 +1823,8 @@ class ActingWebTokenManager:
         return self._revoke_matching_tokens(actor_id, None)
 
     def _revoke_matching_tokens(self, actor_id: str, client_id: str | None) -> int:
-        """Revoke an actor's access and refresh tokens; one client's, or all.
+        """Revoke an actor's access and refresh tokens and remove its
+        authorization codes; one client's, or all.
 
         Raises :class:`TokenStoreUnavailable` as :meth:`revoke_client_tokens`
         documents. Whatever could be revoked is revoked first.
@@ -1821,6 +1881,39 @@ class ActingWebTokenManager:
                 return False
             marked.add(chain_id)
             return True
+
+        # The client's authorization codes go first, before the token
+        # snapshots (rc2): an exchange that consumed its code before this
+        # point either wrote its tokens before the snapshots below (which
+        # revoke them) or finds its code gone when it checks after minting
+        # (exchange_authorization_code). Removed and confirmed row by row:
+        # an unconfirmed code fails the call, so the trust row stays for the
+        # retry, as for a token.
+        swept_codes = 0
+        unconfirmed_codes = 0
+        codes = self._snapshot_bucket(actor_id, self.auth_codes_bucket)
+        if codes is None:
+            unreadable.append(self.auth_codes_bucket)
+        else:
+            for code_name, code_attr in codes.items():
+                code_data = (code_attr or {}).get("data")
+                if not isinstance(code_data, dict):
+                    continue
+                if client_id is not None and code_data.get("client_id") != client_id:
+                    continue
+                if self._remove_auth_code_confirmed(actor_id, code_name, code_data):
+                    swept_codes += 1
+                else:
+                    logger.error(
+                        f"Could not confirm the removal of authorization code "
+                        f"{_mask_token(code_name)} {scope}"
+                    )
+                    unconfirmed_codes += 1
+            if swept_codes:
+                logger.info(
+                    f"Removed {swept_codes} authorization code(s) {scope} in "
+                    f"actor {actor_id}"
+                )
 
         # First pass: mark every chain the client has rows in, before the
         # snapshot the deletes below act on (a used refresh row is kept for
@@ -1885,10 +1978,15 @@ class ActingWebTokenManager:
             logger.debug(f"No tokens found to revoke {scope}")
 
         unreadable.extend(b for b in fence_unread if b not in unreadable)
-        if unreadable or unconfirmed:
+        if unreadable or unconfirmed or unconfirmed_codes:
             problems = [f"could not read {bucket}" for bucket in unreadable]
             if unconfirmed:
                 problems.append(f"could not confirm {unconfirmed} delete(s)")
+            if unconfirmed_codes:
+                problems.append(
+                    f"could not confirm the removal of {unconfirmed_codes} "
+                    "authorization code(s)"
+                )
             raise TokenStoreUnavailable(
                 f"{'; '.join(problems)} for actor {actor_id}; "
                 f"revoked {revoked_count} token(s) {scope}"

@@ -243,12 +243,18 @@ attribute-key collision. There is no operator step.
 - **AC-30** (added in iteration 2) — When an action hook raises `ToolError`
   on `GET`, `POST`, `PUT` or `DELETE /<actor>/actions/<name>`, the answer is
   400 with `{"error": "<message>"}` and the wildcard hook does not run.
-- **AC-31** (added in iteration 3) — When a `ToolError` is raised from, or
-  while handling, a store fault, its text is the result and one ERROR line
-  names the store fault.
+- **AC-31** (added in iteration 3, widened in iteration 8) — When a
+  `ToolError` is raised from, or while handling, a store fault, its text is
+  the answer and one line that starts `Tool '<name>' failed with a store
+  fault` (or `Action '<name>' …` on the REST route) is logged, at ERROR for
+  an outage and WARNING for a deletion wait or a creator conflict.
 - **AC-32** (added in iteration 4) — When a tool's result cannot be
   formatted, the answer is JSON-RPC `-32603` `Internal error`, not a tool
   failure.
+
+- **AC-33** (added in iteration 9) — With `strict=True`, a value the
+  backend cannot compare raises `TypeError` or `ValueError`, or answers
+  `False`; it never raises `DbError`.
 
 ## Traceability
 
@@ -284,7 +290,8 @@ attribute-key collision. There is no operator step.
 | AC-28 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_strict_does_not_claim_another_writers_identical_value` | Passing |
 | AC-29 | 3 | `…::TestStrictConditionalUpdate::test_a_strict_fault_keeps_its_cause` | Passing |
 | AC-30 | 1 | `tests/test_tool_error_on_actions_route.py::test_the_actions_route_answers_400_with_the_message` (four verbs, sync and async), `::test_a_tool_error_leaves_the_hook_runner` | Passing |
-| AC-31 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_tool_error_raised_for_a_store_fault_still_alarms` | Passing |
+| AC-31 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_tool_error_raised_for_a_store_fault_still_alarms`, `::test_a_tool_error_over_an_expected_fault_does_not_alarm`; `tests/test_tool_error_on_actions_route.py::test_a_tool_error_for_a_store_fault_still_alarms_over_rest` | Passing |
+| AC-33 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_a_value_that_cannot_be_compared_is_not_an_outage` | Passing |
 | AC-32 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_result_that_cannot_be_formatted_is_not_a_tool_failure` | Passing |
 | AC-26 | 2 | `tests/test_oauth2_authorization_redirect.py::test_a_fragment_and_an_existing_parameter_are_not_corrupted`, `::test_a_fragment_does_not_swallow_the_code`, `::test_a_denial_keeps_the_query` | Passing |
 
@@ -305,7 +312,9 @@ attribute-key collision. There is no operator step.
   REST `/actions` route, the answer is 400 with `{"error": "<message>"}`
   and no later hook runs for the call. (AC-30)
 - **ADDED** (Tool calls) — A `ToolError` raised for a store fault is sent
-  as written and still logs the fault at ERROR. (AC-31)
+  as written and still logs the fault, on the MCP and the REST route, in a
+  line that starts `Tool '<name>' failed with a store fault` or `Action
+  '<name>' failed with a store fault`. (AC-31)
 - **ADDED** (Tool calls) — A tool result that cannot be formatted answers
   JSON-RPC `-32603` `Internal error`. (AC-32)
 - **ADDED** (Tool calls) — A failing `prompts/get` or `resources/read`
@@ -350,8 +359,9 @@ attribute-key collision. There is no operator step.
   chained to the backend's exception, and `False` means the condition did
   not hold: the row holds something other than `old_data` (the same value
   another writer wrote included), there is no row, or another bucket holds
-  the key. In neither mode does `False` prove the write did not land.
-  (AC-16 to AC-18, AC-28, AC-29)
+  the key. In neither mode does `False` prove the write did not land. A
+  value the backend cannot compare is the caller's `TypeError` or
+  `ValueError`, never a `DbError`. (AC-16 to AC-18, AC-28, AC-29, AC-33)
 - **DECISION** — Strict is the backends' to decide, not a re-read above
   them: only the backend knows why its write did not happen.
 - **DECISION** — The default of `conditional_update_attr` does not raise

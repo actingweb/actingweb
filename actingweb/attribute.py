@@ -532,6 +532,9 @@ class Attributes:
             the call in ``new_data`` and reads the row after a False.
 
         Raises:
+            TypeError, ValueError: only with ``strict=True``, for a value
+                the backend cannot compare or encode (the caller's error,
+                not a fault).
             DbError: only with ``strict=True``, when the store faulted,
                 chained to the backend's exception. The write may or may not
                 have landed; read the row before repeating it. A backend

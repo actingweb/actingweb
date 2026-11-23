@@ -65,19 +65,31 @@ ADDED
   ToolError``) answers ``tools/call`` with an ``isError`` result whose text
   is the message, exactly as written. It is the one exception whose text is
   sent, so the author vouches for it: no identifier or stored value the
-  caller may not read. The same hook serves ``POST
-  /<actor_id>/actions/<name>``: there a ``ToolError`` answers 400 with
-  ``{"error": "<message>"}`` and no other hook runs for the call, where any
-  exception from an action hook was logged, the wildcard hook was tried and
-  the answer was 400 with no body (still so for every other exception). A
-  ``ToolError`` raised for a store fault keeps the fault's ERROR log line.
+  caller may not read. A ``ToolError`` raised for a store fault (``raise
+  ToolError(...) from e``, or inside the ``except`` block) still logs the
+  fault, at ERROR for an outage, in a line that starts ``Tool '<name>'
+  failed with a store fault``. The same hook serves
+  ``/<actor_id>/actions/<name>``: there a ``ToolError`` answers 400 with
+  ``{"error": "<message>"}`` on ``GET``, ``POST``, ``PUT`` and ``DELETE``,
+  no other hook runs for the call, and a store fault behind it is logged as
+  ``Action '<name>' failed with a store fault``. Before, any exception from
+  an action hook was logged, the wildcard hook was tried, and the answer
+  had no body: 400 for ``POST`` and ``PUT``, 404 for ``GET``, 403 for
+  ``DELETE`` (still so for every other exception). **Behavior change:**
+  ``HookRegistry.execute_action_hooks()`` and
+  ``execute_action_hooks_async()`` raise a hook's ``ToolError`` where they
+  returned ``None`` (or the wildcard hook's result), so a test or route
+  that calls them directly for a hook that raises it should expect the
+  exception.
 - **A conditional attribute update can raise on a fault.**
   ``Attributes.conditional_update_attr(..., strict=True)`` raises
   ``DbError`` when the store faulted, so ``False`` is left to mean that the
   condition lost. The default is unchanged (``False`` for both, where a
   caller makes its own ``get_attr_strict`` read to tell them apart). The
   ``DbError`` is chained to the backend's exception, so a fault a retry
-  cannot fix classifies as permanent. The default is ``False``, unlike the
+  cannot fix classifies as permanent; a value the backend cannot compare
+  (``old_data`` with mixed key types, say) raises its ``TypeError`` or
+  ``ValueError`` unchanged, as the caller's error. The default is ``False``, unlike the
   reads' ``strict``. A ``False`` is still not proof that the write did not
   land (a write whose answer was lost and whose retry met its own value); a
   caller that must know puts a value unique to the call in ``new_data``. A

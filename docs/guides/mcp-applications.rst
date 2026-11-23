@@ -199,10 +199,12 @@ as written, so put nothing in it the caller may not read. A hook can also
 return its own result with ``"isError": True``; a returned
 ``{"error": "..."}`` without ``isError`` is reported as a success.
 
-The same hook also serves ``POST /<actor_id>/actions/<name>``. There a
+The same hook also serves ``/<actor_id>/actions/<name>``. There a
 ``ToolError`` answers ``400`` with ``{"error": "<message>"}``, and no other
 hook runs for the call (any other exception from an action hook is logged
-and the wildcard hook, if any, is tried, as before).
+and the wildcard hook, if any, is tried, as before). A test that calls
+``app.hooks.execute_action_hooks(...)`` directly sees the ``ToolError``
+raised.
 
 **Any other exception answers a fixed text and is logged** (one line that
 names the tool and the exception, with a traceback). The exception's own
@@ -242,8 +244,10 @@ tell*, so a tool that writes more than once must be safe to repeat: use
 ``append_once`` or a key of its own for list items, or catch the fault after
 its first write and raise a ``ToolError`` that says what was done. A
 ``ToolError`` raised for a store fault (``raise ToolError(...) from e``, or
-raised inside the ``except`` block) still logs the fault at ERROR, so the
-alert above keeps working.
+raised inside the ``except`` block) still logs the fault at ERROR, in a line
+that starts ``Tool '<name>' failed with a store fault``, so the alert above
+keeps working. ``raise ToolError(...) from None`` says the fault is not the
+cause and is logged as an ordinary refusal.
 
 A failing ``prompts/get`` or ``resources/read`` hook stays a JSON-RPC error
 (MCP has no ``isError`` there) with a fixed message (``Prompt generation

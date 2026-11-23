@@ -1041,6 +1041,12 @@ class HookRegistry:
         use execute_action_hooks_async() instead for proper async execution.
         Async hooks in this method will be executed via asyncio.run() which
         may cause issues if already in an event loop.
+
+        Raises:
+            ToolError: a hook raised it to refuse the call with a message
+                (4.0). No later hook runs. Any other exception from a hook
+                is logged and the next hook is tried.
+            DbError: a hook's store fault.
         """
         # Check permission before executing hooks
         if not self._check_hook_permission("action", action_name, actor, auth_context):
@@ -1178,6 +1184,11 @@ class HookRegistry:
 
         Returns:
             Result from the first successful hook, or None
+
+        Raises:
+            ToolError: a hook raised it to refuse the call with a message
+                (4.0). No later hook runs.
+            DbError: a hook's store fault.
         """
         if not self._check_hook_permission("action", action_name, actor, auth_context):
             logger.debug(f"Action hook permission denied for {action_name}")

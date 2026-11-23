@@ -294,8 +294,52 @@ async def test_a_tool_error_raised_for_a_store_fault_still_alarms(
     lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
     assert len(lines) == 1
     assert lines[0].levelno == logging.ERROR
-    assert "store fault" in lines[0].getMessage()
+    # The documented alert string: the same prefix as an unwrapped fault.
+    assert (
+        lines[0]
+        .getMessage()
+        .startswith("Tool 'failing' failed with a store fault (retryable)")
+    )
     assert SECRET in lines[0].getMessage()
+    assert "its tags were not" in lines[0].getMessage()
+
+
+def _tool_error_over(fault: DbError, suppress: bool = False) -> ToolError:
+    try:
+        raise fault
+    except DbError:
+        try:
+            if suppress:
+                raise ToolError("Pick another address.") from None
+            raise ToolError("Pick another address.")
+        except ToolError as error:
+            return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "exc", "level"),
+    [
+        # An answer, not an outage, as when the fault is raised unwrapped.
+        ("conflict", _tool_error_over(CreatorTaken(SECRET)), logging.WARNING),
+        ("deleting", _tool_error_over(DeletionInProgress(SECRET, 9)), logging.WARNING),
+        # ``from None``: the author said the fault is not the cause.
+        (
+            "suppressed",
+            _tool_error_over(DbError("read", SECRET), suppress=True),
+            logging.INFO,
+        ),
+    ],
+    ids=["conflict", "deleting", "suppressed"],
+)
+async def test_a_tool_error_over_an_expected_fault_does_not_alarm(
+    caplog: pytest.LogCaptureFixture, name: str, exc: ToolError, level: int
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    await _call(_app(f"tool_failure_tool_error_{name}", exc), sync=False)
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].levelno == level
 
 
 @pytest.mark.asyncio
@@ -323,14 +367,28 @@ async def test_a_permission_refusal_from_a_tool_is_not_an_error_with_a_traceback
 ) -> None:
     """A peer can trigger it at will (a tool built on an authenticated
     view): one WARNING, no traceback. The model still reads the fixed text."""
+    from actingweb.interface.authenticated_views import (
+        PermissionError as ViewPermissionError,
+    )
+
     caplog.set_level(logging.DEBUG)
-    app = _app("tool_failure_permission_error", PermissionError(f"no: {SECRET}"))
+    app = _app("tool_failure_permission_error", ViewPermissionError(f"no: {SECRET}"))
     for envelope, response in await _call(app, sync=False):
         _assert_tool_failure(envelope, response, FAILED)
     lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
     assert len(lines) == 1
     assert lines[0].levelno == logging.WARNING
     assert lines[0].exc_info is None
+
+    # The builtin of the same name is an operating-system refusal (EACCES):
+    # a real failure, logged as one.
+    caplog.clear()
+    app = _app("tool_failure_os_permission_error", PermissionError("EACCES"))
+    await _call(app, sync=False)
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.ERROR
+    assert lines[0].exc_info is not None
 
 
 @pytest.mark.asyncio

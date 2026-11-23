@@ -109,3 +109,48 @@ def test_the_actions_route_answers_400_with_the_message(
     assert handler.response.status_code == 400
     assert handler.response.headers["Content-Type"] == "application/json"
     assert json.loads(handler.response.body) == {"error": "A note needs a title."}
+
+
+def _tool_error_for_a_fault() -> ToolError:
+    from actingweb.db.exceptions import DbError
+
+    try:
+        raise DbError("property write", "actor-1")
+    except DbError:
+        try:
+            raise ToolError("The note was saved; its tags were not.")
+        except ToolError as error:
+            return error
+
+
+@pytest.mark.parametrize("async_twin", [False, True])
+def test_a_tool_error_for_a_store_fault_still_alarms_over_rest(
+    async_twin: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Before ``ToolError`` was let through, this was an ERROR line from the
+    hook runner. The author's 400 stands; the outage must stay visible."""
+    import logging
+
+    from actingweb.handlers.actions import ActionsHandler
+    from actingweb.handlers.async_actions import AsyncActionsHandler
+
+    caplog.set_level(logging.DEBUG)
+    cls = AsyncActionsHandler if async_twin else ActionsHandler
+    handler = _handler(cls, _tool_error_for_a_fault())
+    auth_obj = mock.Mock(response={"code": 200})
+    result = mock.Mock(success=True, actor=mock.Mock(), auth_obj=auth_obj)
+    with (
+        mock.patch.object(handler, "_authenticate_dual_context", return_value=result),
+        mock.patch.object(handler, "_check_action_permission", return_value=True),
+        mock.patch.object(handler, "_get_actor_interface", return_value=mock.Mock()),
+        mock.patch.object(handler, "_create_auth_context", return_value={}),
+    ):
+        if async_twin:
+            asyncio.run(handler.post_async("a1", "create_note"))
+        else:
+            handler.post("a1", "create_note")
+    assert handler.response.status_code == 400
+    lines = [r for r in caplog.records if "create_note" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.ERROR
+    assert "store fault" in lines[0].getMessage()

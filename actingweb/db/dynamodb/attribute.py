@@ -430,6 +430,11 @@ class DbAttribute:
             # Item doesn't exist or condition check failed (race condition)
             _log_unexpected("conditional_update_attr", bucket, name, e)
             if strict and not _is_expected_miss(e):
+                if isinstance(e, (TypeError, ValueError)):
+                    # The caller's value (one JSON cannot order or encode),
+                    # not the store: reported as an outage it would be
+                    # retried forever.
+                    raise
                 raise DbError("attribute conditional update", actor_id) from e
             return False
 

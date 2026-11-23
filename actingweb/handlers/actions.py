@@ -32,11 +32,11 @@ def answers_tool_error(method: Callable[..., None]) -> Callable[..., None]:
     """
 
     @functools.wraps(method)
-    def wrapper(self: "ActionsHandler", *args: Any, **kwargs: Any) -> None:
+    def wrapper(self: "ActionsHandler", actor_id: str, name: str = "") -> None:
         try:
-            method(self, *args, **kwargs)
+            method(self, actor_id, name)
         except ToolError as e:
-            self._answer_tool_error(e)
+            self._answer_tool_error(e, name)
 
     return wrapper
 
@@ -44,9 +44,24 @@ def answers_tool_error(method: Callable[..., None]) -> Callable[..., None]:
 class ActionsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/actions endpoint."""
 
-    def _answer_tool_error(self, exc: ToolError) -> None:
-        """400 with the hook author's message; see ``answers_tool_error``."""
-        logger.info(f"Action hook refused the call: {str(exc)!r}")
+    def _answer_tool_error(self, exc: ToolError, name: str = "") -> None:
+        """400 with the hook author's message; see ``answers_tool_error``.
+
+        A ``ToolError`` raised for a store fault keeps the author's answer
+        and logs the fault as the MCP route does, so an outage an author
+        translated stays visible.
+        """
+        from ..mcp.errors import fault_behind, fault_log_level
+
+        behind = fault_behind(exc)
+        if behind is not None:
+            logger.log(
+                fault_log_level(behind),
+                f"Action '{name}' failed with a store fault ({behind.kind}): "
+                f"{str(behind.error)!r}; the hook reported {str(exc)!r}",
+            )
+        else:
+            logger.info(f"Action '{name}' refused the call: {str(exc)!r}")
         if self.response:
             self.response.set_status(400, "Bad request")
             self.response.headers["Content-Type"] = "application/json"

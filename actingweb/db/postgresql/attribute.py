@@ -672,6 +672,10 @@ class DbAttribute:
                 f"Error conditionally updating attribute {actor_id}/{bucket}/{name}: {e}"
             )
             if strict:
+                if isinstance(e, (TypeError, ValueError)):
+                    # The caller's value, not the store (see the DynamoDB
+                    # backend).
+                    raise
                 raise DbError("attribute conditional update", actor_id) from e
             return False
 

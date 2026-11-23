@@ -10,7 +10,6 @@ import functools
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from actingweb import auth
 from actingweb.handlers.actions import ActionsHandler
@@ -25,11 +24,13 @@ def answers_tool_error_async(
     """The async twin of ``actions.answers_tool_error``."""
 
     @functools.wraps(method)
-    async def wrapper(self: "AsyncActionsHandler", *args: Any, **kwargs: Any) -> None:
+    async def wrapper(
+        self: "AsyncActionsHandler", actor_id: str, name: str = ""
+    ) -> None:
         try:
-            await method(self, *args, **kwargs)
+            await method(self, actor_id, name)
         except ToolError as e:
-            self._answer_tool_error(e)
+            self._answer_tool_error(e, name)
 
     return wrapper
 

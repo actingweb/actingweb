@@ -875,6 +875,23 @@ class TestStrictConditionalUpdate:
             is True
         )
 
+    def test_a_value_that_cannot_be_compared_is_not_an_outage(self) -> None:
+        """A caller's ``old_data`` that JSON cannot order (mixed key types)
+        is the caller's error. Strict must not report it as a store fault,
+        which would answer 503 and be retried forever."""
+        from actingweb.db.exceptions import DbError
+
+        bad: dict[Any, Any] = {1: "a", "b": 2}
+        try:
+            answer = self.attrs.conditional_update_attr(
+                name="row", old_data=bad, new_data={"v": 2}, strict=True
+            )
+        except DbError:  # pragma: no cover - the defect
+            pytest.fail("a value error was reported as a store fault")
+        except (TypeError, ValueError):
+            return
+        assert answer is False
+
     def test_the_backend_is_passed_the_keyword_only_when_asked(self) -> None:
         """AC-18: a backend written before ``strict`` keeps working for
         every caller that does not ask for it."""

@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Any
 
-from ..db.exceptions import CreatorTaken, DbError, DeletionInProgress
+from ..db.exceptions import CreatorTaken, DbError
 from ..faults import FaultClass, classify_fault, find_db_error
 
 # Global cache for MCP client info during session establishment
@@ -3005,7 +3005,10 @@ class MCPHandler(BaseHandler):
         permission check still answers through ``_db_fault_response``, and
         a result that cannot be formatted is the handler's own error.
         """
-        from ..mcp.errors import ToolError
+        from ..interface.authenticated_views import (
+            PermissionError as ViewPermissionError,
+        )
+        from ..mcp.errors import ToolError, fault_behind, fault_log_level
         from ..single_use import StoreFault
 
         # Exception text is logged as its repr: it can carry a caller's
@@ -3015,15 +3018,15 @@ class MCPHandler(BaseHandler):
             text = str(exc) or TOOL_FAILURE_TEXT
             # An author who caught a store fault and says what was done (the
             # guide's advice) must not hide the outage from the one alarm a
-            # 200 leaves: the fault is found on __cause__ and, because the
-            # author may not have written ``from``, on __context__.
-            behind = fault
-            if behind is None and exc.__context__ is not None:
-                behind = classify_fault(exc.__context__)
+            # 200 leaves. The line starts as an unwrapped fault's does, so
+            # one alert pattern matches both.
+            behind = fault_behind(exc)
             if behind is not None:
-                logger.error(
-                    f"Tool '{tool_name}' reported an error ({text!r}) for a "
-                    f"store fault ({behind.kind}): {str(behind.error)!r}"
+                logger.log(
+                    fault_log_level(behind),
+                    f"Tool '{tool_name}' failed with a store fault "
+                    f"({behind.kind}): {str(behind.error)!r}; the tool "
+                    f"reported {text!r}",
                 )
             else:
                 logger.info(f"Tool '{tool_name}' reported an error: {text!r}")
@@ -3033,9 +3036,8 @@ class MCPHandler(BaseHandler):
             detail = f"{type(cause).__name__}: {str(cause)!r}" if cause else "no cause"
             # A wait for a deletion and a creator conflict are answers, not
             # outages: the integrations log them below ERROR too.
-            expected = isinstance(fault.error, (CreatorTaken, DeletionInProgress))
             logger.log(
-                logging.WARNING if expected else logging.ERROR,
+                fault_log_level(fault),
                 f"Tool '{tool_name}' failed with a store fault "
                 f"({fault.kind}): {str(fault.error)!r} ({detail})",
             )
@@ -3047,9 +3049,10 @@ class MCPHandler(BaseHandler):
                 f"Tool '{tool_name}' failed with a store fault "
                 f"({type(exc).__name__}): {str(exc)!r}"
             )
-        elif isinstance(exc, PermissionError):
-            # A refusal, which a caller can trigger at will (a tool built on
-            # an authenticated view): no ERROR and no traceback per call.
+        elif isinstance(exc, ViewPermissionError):
+            # A refusal by an authenticated view, which a caller can trigger
+            # at will: no ERROR and no traceback per call. Not the builtin
+            # of the same name, which is an operating-system failure.
             text = TOOL_FAILURE_TEXT
             logger.warning(
                 f"Tool '{tool_name}' failed: {type(exc).__name__}: {str(exc)!r}"

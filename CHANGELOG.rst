@@ -65,17 +65,24 @@ ADDED
   ToolError``) answers ``tools/call`` with an ``isError`` result whose text
   is the message, exactly as written. It is the one exception whose text is
   sent, so the author vouches for it: no identifier or stored value the
-  caller may not read.
+  caller may not read. The same hook serves ``POST
+  /<actor_id>/actions/<name>``: there a ``ToolError`` answers 400 with
+  ``{"error": "<message>"}`` and no other hook runs for the call, where any
+  exception from an action hook was logged, the wildcard hook was tried and
+  the answer was 400 with no body (still so for every other exception). A
+  ``ToolError`` raised for a store fault keeps the fault's ERROR log line.
 - **A conditional attribute update can raise on a fault.**
   ``Attributes.conditional_update_attr(..., strict=True)`` raises
   ``DbError`` when the store faulted, so ``False`` is left to mean that the
   condition lost. The default is unchanged (``False`` for both, where a
-  caller makes its own ``get_attr_strict`` read to tell them apart); with
-  ``strict=True`` the call makes that read itself after a ``False``: a row
-  that still holds ``old_data`` raises, and a row that holds ``new_data``
-  counts as written. The default is ``False``, unlike the reads' ``strict``.
-  The backends are not passed the keyword, so a custom backend needs no
-  change.
+  caller makes its own ``get_attr_strict`` read to tell them apart). The
+  ``DbError`` is chained to the backend's exception, so a fault a retry
+  cannot fix classifies as permanent. The default is ``False``, unlike the
+  reads' ``strict``. A ``False`` is still not proof that the write did not
+  land (a write whose answer was lost and whose retry met its own value); a
+  caller that must know puts a value unique to the call in ``new_data``. A
+  custom attribute backend is passed ``strict`` only when a caller asks for
+  it, and must accept the keyword to support that caller.
 - **Code in front of** ``/mcp`` **can ask whether a token is cached.**
   ``actingweb.mcp.is_token_cached(token, config)`` answers whether this
   process holds a fresh MCP token-cache entry for the token, by the
@@ -106,7 +113,11 @@ FIXED
   denial redirect picked ``&`` by looking for ``?`` anywhere in the URI,
   which a fragment defeats. Both now append to the URI's query and leave
   the rest of it byte for byte as registered, a fragment after the query.
-  A redirect URI without a query gets the same URL as before.
+  A redirect URI without a query gets the same URL as before. **Behavior
+  change:** a client whose registered redirect URI has a query or a
+  fragment receives ``code`` and ``state`` as query parameters of their
+  own; one that worked around the old URL by parsing them out of its last
+  parameter's value should read them directly.
 - **A list lookup could hide a programming error behind "no such list".**
   ``PropertyListStore.exists()`` answered ``False`` and ``list_all()``
   logged and returned what it had for any exception that was not a store

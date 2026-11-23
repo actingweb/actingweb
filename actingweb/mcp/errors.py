@@ -16,6 +16,9 @@ class ToolError(Exception):
                 raise ToolError("A note needs a title.")
             ...
 
+    The same hook serves ``POST /<actor_id>/actions/<name>``; there it
+    answers 400 with ``{"error": "<message>"}`` and no other hook runs.
+
     Every other exception a tool raises answers a fixed text and is logged:
     its message can carry what a client must not see. The message of a
     ``ToolError`` is sent as written, so the author vouches for it: no

@@ -520,18 +520,23 @@ class Attributes:
 
             By default both backends also answer False on a fault; a caller
             that must tell the two apart re-reads with the backend's
-            ``get_attr_strict``. With ``strict=True`` that re-read is done
-            here after a False: a row that still holds ``old_data`` was not
-            changed by anyone, so the write faulted and ``DbError`` is
-            raised; a row that holds ``new_data`` counts as written (the
-            write landed and its answer was lost) and answers True. False
-            then means the condition lost: another writer changed the row,
-            there is no live row, or another bucket holds the key.
+            ``get_attr_strict``. With ``strict=True`` the backend raises
+            ``DbError`` for a fault, and False means the condition did not
+            hold: the row holds something other than ``old_data``, there is
+            no row, or another bucket holds the key.
+
+            One False is not a lost race, in either mode: a write that
+            landed and whose answer was lost can be retried by the database
+            client, and the retry then finds its own ``new_data`` and fails
+            the condition. A caller that must know puts a value unique to
+            the call in ``new_data`` and reads the row after a False.
 
         Raises:
-            DbError: only with ``strict=True``, when the store faulted. When
-                the re-read itself could not be made, the row may or may not
-                hold ``new_data``; read it again before repeating the write.
+            DbError: only with ``strict=True``, when the store faulted,
+                chained to the backend's exception. The write may or may not
+                have landed; read the row before repeating it. A backend
+                written without the keyword raises ``TypeError`` when asked
+                for it.
         """
         if not self.actor_id or not self.bucket or not name:
             return False
@@ -543,6 +548,8 @@ class Attributes:
         ttl_kwargs: dict[str, Any] = (
             {"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}
         )
+        if strict:
+            ttl_kwargs["strict"] = True
         # Use the database backend's atomic conditional update
         success = self.dbprop.conditional_update_attr(
             actor_id=self.actor_id,
@@ -553,9 +560,6 @@ class Attributes:
             timestamp=timestamp,
             **ttl_kwargs,
         )
-
-        if not success and strict:
-            success = self._confirm_conditional_update(name, old_data, new_data)
 
         # Update local cache only if successful
         if success:
@@ -570,36 +574,6 @@ class Attributes:
             attr_data["timestamp"] = timestamp
 
         return success
-
-    def _confirm_conditional_update(
-        self, name: str, old_data: Any, new_data: Any
-    ) -> bool:
-        """What a False from the backend's conditional update meant
-        (``strict=True``): the library's own callers make the same strict
-        re-read to tell a lost condition from a fault.
-
-        Raises ``DbError`` when the row is unchanged (nobody else wrote, so
-        the write faulted) or cannot be read. Returns True when the row
-        holds ``new_data``, False for a lost condition or no live row.
-        """
-        from actingweb.db.exceptions import DbError
-        from actingweb.db.utils import sanitize_json_data
-
-        assert self.dbprop is not None
-        row = self.dbprop.get_attr_strict(
-            actor_id=self.actor_id, bucket=self.bucket, name=name
-        )
-        if row is None:
-            return False
-        current = row.get("data")
-        # Compare what the backends compare: the sanitized values.
-        old = sanitize_json_data(old_data, log_source="attribute")
-        new = sanitize_json_data(new_data, log_source="attribute")
-        if current == new and new != old:
-            return True
-        if current == old:
-            raise DbError("attribute conditional update", self.actor_id)
-        return False
 
     def create_attr_if_absent(
         self,

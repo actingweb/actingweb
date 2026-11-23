@@ -1865,21 +1865,24 @@ class MCPHandler(BaseHandler):
 
                                 # Execute the action hook
                                 result = hook(actor, action_name, arguments)
-
-                                return {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "result": format_call_tool_result(
-                                        result,
-                                        self._negotiated_version,
-                                        output_schema=metadata.get("output_schema"),
-                                        tool_name=tool_name,
-                                    ),
-                                }
                             except Exception as e:  # folds DbError: a tool result
                                 return self._tool_failure_result(
                                     request_id, str(tool_name), e
                                 )
+                            # Formatted outside the try: the tool ran (and
+                            # may have written), so a result that cannot be
+                            # formatted is the server's error, not a failure
+                            # the model should answer by calling it again.
+                            return {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "result": format_call_tool_result(
+                                    result,
+                                    self._negotiated_version,
+                                    output_schema=metadata.get("output_schema"),
+                                    tool_name=tool_name,
+                                ),
+                            }
 
         return self._create_jsonrpc_error(
             request_id, -32601, f"Tool not found: {tool_name}"
@@ -1996,7 +1999,10 @@ class MCPHandler(BaseHandler):
                                 raise
                             except Exception as e:
                                 return self._failure_response(
-                                    request_id, "Prompt generation failed", e
+                                    request_id,
+                                    "Prompt generation failed",
+                                    e,
+                                    what=f"prompt {prompt_name!r}",
                                 )
 
         return self._create_jsonrpc_error(
@@ -2088,7 +2094,12 @@ class MCPHandler(BaseHandler):
                 except DbError:
                     raise
                 except Exception as e:
-                    return self._failure_response(request_id, "Resource read failed", e)
+                    return self._failure_response(
+                        request_id,
+                        "Resource read failed",
+                        e,
+                        what=f"resource {uri!r}",
+                    )
 
             return self._create_jsonrpc_error(
                 request_id, -32601, f"Resource not found: {uri}"
@@ -2097,7 +2108,9 @@ class MCPHandler(BaseHandler):
         except DbError as e:  # folds DbError: answered by _db_fault_response
             return self._db_fault_response(request_id, e)
         except Exception as e:
-            return self._failure_response(request_id, "Resource read failed", e)
+            return self._failure_response(
+                request_id, "Resource read failed", e, what=f"resource {uri!r}"
+            )
 
     def _accept_notification(self, method: str) -> dict[str, Any]:
         """Accept a JSON-RPC notification without answering it.
@@ -2989,26 +3002,42 @@ class MCPHandler(BaseHandler):
         ordinary 200.
 
         Only the hook call ends here. A fault in authentication or in the
-        permission check still answers through ``_db_fault_response``.
+        permission check still answers through ``_db_fault_response``, and
+        a result that cannot be formatted is the handler's own error.
         """
         from ..mcp.errors import ToolError
         from ..single_use import StoreFault
 
+        # Exception text is logged as its repr: it can carry a caller's
+        # argument, and a newline in it must not start a log line.
         fault = classify_fault(exc)
         if isinstance(exc, ToolError):
             text = str(exc) or TOOL_FAILURE_TEXT
-            logger.info(f"Tool '{tool_name}' reported an error: {text}")
+            # An author who caught a store fault and says what was done (the
+            # guide's advice) must not hide the outage from the one alarm a
+            # 200 leaves: the fault is found on __cause__ and, because the
+            # author may not have written ``from``, on __context__.
+            behind = fault
+            if behind is None and exc.__context__ is not None:
+                behind = classify_fault(exc.__context__)
+            if behind is not None:
+                logger.error(
+                    f"Tool '{tool_name}' reported an error ({text!r}) for a "
+                    f"store fault ({behind.kind}): {str(behind.error)!r}"
+                )
+            else:
+                logger.info(f"Tool '{tool_name}' reported an error: {text!r}")
         elif fault is not None:
             text = TOOL_FAULT_TEXTS[fault.kind]
             cause = fault.error.__cause__
-            detail = f"{type(cause).__name__}: {cause}" if cause else "no cause"
+            detail = f"{type(cause).__name__}: {str(cause)!r}" if cause else "no cause"
             # A wait for a deletion and a creator conflict are answers, not
             # outages: the integrations log them below ERROR too.
             expected = isinstance(fault.error, (CreatorTaken, DeletionInProgress))
             logger.log(
                 logging.WARNING if expected else logging.ERROR,
                 f"Tool '{tool_name}' failed with a store fault "
-                f"({fault.kind}): {fault.error} ({detail})",
+                f"({fault.kind}): {str(fault.error)!r} ({detail})",
             )
         elif isinstance(exc, (TokenStoreUnavailable, StoreFault)):
             # Store faults that are not a DbError: the token store, and a
@@ -3016,12 +3045,19 @@ class MCPHandler(BaseHandler):
             text = TOOL_FAULT_TEXTS[FaultClass.RETRYABLE]
             logger.error(
                 f"Tool '{tool_name}' failed with a store fault "
-                f"({type(exc).__name__}): {exc}"
+                f"({type(exc).__name__}): {str(exc)!r}"
+            )
+        elif isinstance(exc, PermissionError):
+            # A refusal, which a caller can trigger at will (a tool built on
+            # an authenticated view): no ERROR and no traceback per call.
+            text = TOOL_FAILURE_TEXT
+            logger.warning(
+                f"Tool '{tool_name}' failed: {type(exc).__name__}: {str(exc)!r}"
             )
         else:
             text = TOOL_FAILURE_TEXT
             logger.error(
-                f"Tool '{tool_name}' failed: {type(exc).__name__}: {exc}",
+                f"Tool '{tool_name}' failed: {type(exc).__name__}: {str(exc)!r}",
                 exc_info=True,
             )
         return {
@@ -3031,20 +3067,23 @@ class MCPHandler(BaseHandler):
         }
 
     def _failure_response(
-        self, request_id: Any, label: str, exc: Exception
+        self, request_id: Any, label: str, exc: Exception, *, what: str = ""
     ) -> dict[str, Any]:
         """A JSON-RPC error for an exception outside a tool call (4.0).
 
         ``prompts/get`` and ``resources/read`` have no ``isError`` result, so
         a hook that raises there stays a protocol error. Its message is the
-        fixed ``label``: the exception's own text goes to the log only. A
-        hook that wrapped a store fault (``raise ... from e``) gets the
-        fault's answer.
+        fixed ``label``: the exception's own text goes to the log only,
+        with ``what`` failed (the prompt or the resource). A hook that
+        wrapped a store fault (``raise ... from e``) gets the fault's answer.
         """
         fault = find_db_error(exc)
         if fault is not None:
             return self._db_fault_response(request_id, fault)
-        logger.error(f"{label}: {type(exc).__name__}: {exc}", exc_info=True)
+        subject = f" ({what})" if what else ""
+        logger.error(
+            f"{label}{subject}: {type(exc).__name__}: {str(exc)!r}", exc_info=True
+        )
         return self._create_jsonrpc_error(request_id, -32603, label)
 
     def _db_fault_response(self, request_id: Any, exc: DbError) -> dict[str, Any]:

@@ -138,6 +138,10 @@ def classify_fault(exc: BaseException) -> Fault | None:
     Returns ``None`` when ``exc`` is not a store fault, so the caller's own
     handling runs. The integrations derive their HTTP answers from the same
     classification.
+
+    A fault wrapped with ``raise ... from e`` is found up to five links down
+    the ``__cause__`` chain, as the integrations find it; deeper than that,
+    or reached only through ``__context__``, it is not a fault here.
     """
     fault = find_db_error(exc)
     if fault is None:

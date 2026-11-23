@@ -24,6 +24,7 @@ from typing import (
 
 from ..access_decision import PERMISSION_DENIED, decide
 from ..db.exceptions import DbError
+from ..mcp.errors import ToolError
 
 # Import permission system for transparent permission checking
 try:
@@ -1060,6 +1061,11 @@ class HookRegistry:
                         break  # First successful hook wins
                 except DbError:
                     raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -1074,6 +1080,11 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except DbError:
+                    raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
                     raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")
@@ -1187,6 +1198,11 @@ class HookRegistry:
                         break
                 except DbError:
                     raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -1202,6 +1218,11 @@ class HookRegistry:
                         result = hook_result
                         break
                 except DbError:
+                    raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
                     raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")

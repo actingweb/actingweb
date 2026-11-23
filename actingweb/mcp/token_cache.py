@@ -19,10 +19,13 @@ def is_token_cached(token: str, config: Config) -> bool:
 
     **True does not authorize and False does not mean invalid.**
 
-    - True: the handler will skip token-store validation. It still loads the
-      actor and its trust, and refuses the request when either is gone; a
-      token revoked in another process stays cached here until its entry
-      expires (five minutes).
+    - True: the handler will start from the entry and not read the token
+      store, unless the actor row turns out to be gone: it then drops the
+      entry and validates the token against the store after all (which can
+      raise ``TokenStoreUnavailable``). It still loads the actor and its
+      trust, and a request with no trust is refused at the method. A token
+      revoked in another process stays cached here until its entry expires
+      (five minutes).
     - False: not cached *in this process*. That is every token on a fresh
       worker or a cold function instance. Let the request through and the
       handler validates it; to know whether a token is valid, call

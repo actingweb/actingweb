@@ -2604,8 +2604,11 @@ than the TTL, so an entry written without that object is a miss. Code in front o
 Code that needs to know whether the library will answer a token from this
 cache, without reading the dict, calls ``actingweb.mcp.is_token_cached(token,
 config)``. It is advisory. True means this process holds a fresh entry: the
-handler skips token-store validation, and still loads the actor and its
-trust. False means "not cached in this process", which is every token on a
+handler will start from it and not read the token store, unless the actor
+row turns out to be gone, in which case it drops the entry and validates the
+token against the store after all. It still loads the actor and its trust,
+and a token revoked in another process stays cached here until its entry
+expires. False means "not cached in this process", which is every token on a
 fresh worker or a cold function instance, never "invalid"; let the request
 through and the handler validates it, once. The query reads no store and
 changes no entry.

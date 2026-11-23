@@ -569,8 +569,10 @@ Since 4.0 both backends answer a database fault the same way, and
   when *this* call changed the row, which single-use consumption needs; a
   fault answers False for the two attribute methods (a caller tells the two
   apart with ``get_attr_strict``, or passes ``strict=True`` to
-  ``Attributes.conditional_update_attr``, which makes that read itself and
-  raises ``DbError``; the backend method is not passed the keyword). ``create_attr_if_absent`` is the one
+  ``conditional_update_attr``, which raises ``DbError`` from the backend's
+  exception; a backend's method is passed the keyword only by a caller that
+  asks for it, so a custom backend without it keeps working for every other
+  caller and raises ``TypeError`` for that one). ``create_attr_if_absent`` is the one
   conditional write that **raises** ``DbError`` on a fault, because a retried
   create must tell a lost race from an outage. A custom ``DbAttribute`` backend
   implements it (see :doc:`../migration/v4.0`); two callers writing identical

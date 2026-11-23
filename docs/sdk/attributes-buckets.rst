@@ -115,27 +115,36 @@ requests might modify the same attribute simultaneously.
 - Returns ``True`` only if the current database value exactly matches ``old_data``
 - Returns ``False`` if value was modified by another request (no update performed).
 - **By default it also returns** ``False`` **if the backend faulted.** Pass
-  ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead: after a
-  ``False`` the call re-reads the row, raises when it still holds ``old_data`` (nobody
-  else wrote, so the write faulted), and returns ``True`` when it holds ``new_data``
-  (the write landed and its answer was lost). Unlike the reads, whose ``strict``
-  defaults to ``True``, the default here is ``False``: an existing caller keeps the
-  answer it had. After a ``DbError`` the row may hold either value; read it before
-  repeating the write. (``create_attr_if_absent`` below always raises ``DbError`` on
-  a fault.)
+  ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead, chained to the
+  backend's exception (so a fault a retry cannot fix classifies as permanent).
+  ``False`` then means the condition did not hold: the row holds something other
+  than ``old_data``, or there is no row. Unlike the reads, whose ``strict`` defaults
+  to ``True``, the default here is ``False``: an existing caller keeps the answer it
+  had. (``create_attr_if_absent`` below always raises ``DbError`` on a fault.)
+- **Neither a** ``DbError`` **nor a** ``False`` **proves the write did not land.** A
+  write whose answer was lost can be retried by the database client, and the retry
+  then meets its own ``new_data`` and fails the condition. A caller that must know
+  puts a value unique to the call in ``new_data`` (a nonce) and reads the row with
+  ``get_attr_strict`` before it writes again:
 
 .. code-block:: python
 
+   import secrets
+
    from actingweb.db.exceptions import DbError
 
+   claim = {"owner": worker_id, "claim_id": secrets.token_hex(8)}
    try:
-       won = counters.conditional_update_attr(
-           name="visits", old_data=current, new_data=current + 1, strict=True
+       won = jobs.conditional_update_attr(
+           name=job_id, old_data=unclaimed, new_data=claim, strict=True
        )
    except DbError:
        raise  # an outage: the integration answers 503
    if not won:
-       ...  # a real lost race: read again and retry
+       row = jobs.dbprop.get_attr_strict(
+           actor_id=jobs.actor_id, bucket=jobs.bucket, name=job_id
+       )
+       won = bool(row) and row["data"].get("claim_id") == claim["claim_id"]
 
 **Use Cases:**
 

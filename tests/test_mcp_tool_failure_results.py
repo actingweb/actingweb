@@ -265,6 +265,97 @@ async def test_a_tool_error_reaches_the_model_as_written() -> None:
             assert response.status_code == 200
 
 
+def _tool_error_from_a_fault(chained: bool) -> ToolError:
+    try:
+        raise DbError("property write", SECRET)
+    except DbError as fault:
+        try:
+            if chained:
+                raise ToolError("The note was saved; its tags were not.") from fault
+            raise ToolError("The note was saved; its tags were not.")
+        except ToolError as error:
+            return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chained", [True, False], ids=["from", "while_handling"])
+async def test_a_tool_error_raised_for_a_store_fault_still_alarms(
+    caplog: pytest.LogCaptureFixture, chained: bool
+) -> None:
+    """The guide tells authors to catch a fault after a first write and
+    raise ``ToolError``, and operators to alert on the ERROR line. The
+    author's text is sent; the store fault is still logged at ERROR."""
+    caplog.set_level(logging.DEBUG)
+    app = _app("tool_failure_tool_error_fault", _tool_error_from_a_fault(chained))
+    for envelope, _ in await _call(app, sync=False):
+        assert envelope["result"]["content"][0]["text"] == (
+            "The note was saved; its tags were not."
+        )
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.ERROR
+    assert "store fault" in lines[0].getMessage()
+    assert SECRET in lines[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_newline_in_the_text_cannot_forge_a_log_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A ``ToolError`` often carries a caller's argument. It is sent as
+    written and logged as its ``repr``."""
+    caplog.set_level(logging.DEBUG)
+    text = "Could not fetch x\nERROR forged line"
+    for envelope, _ in await _call(_app("tool_failure_newline", ToolError(text))):
+        assert envelope["result"]["content"][0]["text"] == text
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert lines and all("\n" not in r.getMessage() for r in lines)
+
+    caplog.clear()
+    await _call(_app("tool_failure_newline_other", ValueError(text)), sync=False)
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert lines and all("\n" not in r.getMessage() for r in lines)
+
+
+@pytest.mark.asyncio
+async def test_a_permission_refusal_from_a_tool_is_not_an_error_with_a_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A peer can trigger it at will (a tool built on an authenticated
+    view): one WARNING, no traceback. The model still reads the fixed text."""
+    caplog.set_level(logging.DEBUG)
+    app = _app("tool_failure_permission_error", PermissionError(f"no: {SECRET}"))
+    for envelope, response in await _call(app, sync=False):
+        _assert_tool_failure(envelope, response, FAILED)
+    lines = [r for r in caplog.records if "Tool 'failing'" in r.getMessage()]
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.WARNING
+    assert lines[0].exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_a_result_that_cannot_be_formatted_is_not_a_tool_failure() -> None:
+    """Only the hook call is a tool failure. The tool ran (and may have
+    written), so a model must not be told "the tool failed" and call it
+    again: a result the server cannot format is the server's error."""
+
+    class Unprintable:
+        def __repr__(self) -> str:
+            raise RuntimeError(f"cannot print {SECRET}")
+
+    app = _app("tool_failure_formatter", ValueError("never raised"))
+
+    @app.action_hook("unprintable")
+    @mcp_tool(description="A tool whose result cannot be formatted")
+    def unprintable(actor: Any, action_name: str, data: Any) -> Any:
+        return {"value": Unprintable()}
+
+    for envelope, _ in await _call(app, "unprintable"):
+        assert "result" not in envelope
+        assert envelope["error"] == {"code": -32603, "message": "Internal error"}
+        assert SECRET not in repr(envelope)
+
+
 @pytest.mark.asyncio
 async def test_a_tool_error_without_a_message_takes_the_fixed_text() -> None:
     for envelope, _ in await _call(_app("tool_failure_tool_error_empty", ToolError())):
@@ -346,7 +437,11 @@ def _wrapped_fault() -> RuntimeError:
 )
 @pytest.mark.parametrize("method", ["prompts/get", "resources/read"])
 async def test_a_failing_prompt_or_resource_hook_answers_fixed_text(
-    exc: Exception, message: str | None, status: int, method: str
+    caplog: pytest.LogCaptureFixture,
+    exc: Exception,
+    message: str | None,
+    status: int,
+    method: str,
 ) -> None:
     """The exception's text was on the wire in 4.0.0rc2 ("Prompt generation
     failed: ..."). The answer stays a JSON-RPC error; its message is fixed,
@@ -369,12 +464,17 @@ async def test_a_failing_prompt_or_resource_hook_answers_fixed_text(
     else:
         params = {"uri": "test://raising"}
         expected = "Resource read failed"
+    caplog.set_level(logging.ERROR)
     for envelope, response in await _call(app, method=method, params=params):
         assert "result" not in envelope, envelope
         assert envelope["error"]["code"] == -32603
         assert envelope["error"]["message"] == (message or expected)
         assert SECRET not in repr(envelope)
         assert response.status_code == status
+    if message is None:
+        # The log says which prompt or resource, as the lines it replaced did.
+        named = "raising_prompt" if method == "prompts/get" else "test://raising"
+        assert any(named in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio

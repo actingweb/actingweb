@@ -826,65 +826,71 @@ class TestStrictConditionalUpdate:
         assert self._stored() == {"v": 2}
         assert self.attrs.get_attr(name="row")["data"] == {"v": 2}  # type: ignore[index]
 
-    def test_strict_counts_a_write_that_landed(self) -> None:
-        """The backend answers False for a write whose answer was lost, or
-        whose SDK retry met its own first attempt: a row that holds the new
-        data is this call's write, as ``create_attr_if_absent`` reads it."""
+    def test_strict_does_not_claim_another_writers_identical_value(self) -> None:
+        """True means THIS call changed the row. A caller that lost to a
+        writer of the same value (two increments from one base, a consume
+        without a nonce) must not be told it won."""
+        from actingweb.db import get_attribute
+
+        assert get_attribute(self.config).conditional_update_attr(
+            actor_id=self.actor_id,
+            bucket="strict_bucket",
+            name="row",
+            old_data={"v": 1},
+            new_data={"v": 2},
+        )
+        assert (
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
+            )
+            is False
+        )
+
+    def test_a_strict_fault_keeps_its_cause(self) -> None:
+        """The backend raises from its own exception, so a fault that a
+        retry cannot fix still classifies as permanent."""
+        from actingweb.db.exceptions import DbError
+        from tests._adoption_helpers import seam_fault
+
+        with (
+            seam_fault(self.config, "attribute", "Attribute", "update"),
+            pytest.raises(DbError) as raised,
+        ):
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
+            )
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    def test_strict_compares_as_the_backend_does(self) -> None:
+        """No second comparison in Python: a tuple in ``old_data`` matches
+        the stored list, as it does without strict."""
+        assert self.attrs.set_attr(name="ids", data={"ids": [1, 2]})
+        assert (
+            self.attrs.conditional_update_attr(
+                name="ids",
+                old_data={"ids": (1, 2)},
+                new_data={"ids": [1, 2, 3]},
+                strict=True,
+            )
+            is True
+        )
+
+    def test_the_backend_is_passed_the_keyword_only_when_asked(self) -> None:
+        """AC-18: a backend written before ``strict`` keeps working for
+        every caller that does not ask for it."""
         from unittest.mock import patch
 
         from actingweb.db import get_attribute
 
         db = get_attribute(self.config)
         real = db.conditional_update_attr
+        seen: list[dict[str, Any]] = []
 
-        def lands_then_reports_false(**kwargs: Any) -> bool:
-            assert real(**kwargs) is True
-            return False
+        def recording(**kwargs: Any) -> bool:
+            seen.append(kwargs)
+            return real(**kwargs)
 
-        with patch.object(
-            type(db), "conditional_update_attr", staticmethod(lands_then_reports_false)
-        ):
-            assert (
-                self.attrs.conditional_update_attr(
-                    name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
-                )
-                is True
-            )
-        assert self.attrs.get_attr(name="row")["data"] == {"v": 2}  # type: ignore[index]
-
-    def test_a_backend_without_the_keyword_is_called_without_it(self) -> None:
-        """AC-18: strict is done above the backend, so a backend written
-        before it (or a custom one) is never passed the keyword."""
-        from unittest.mock import patch
-
-        from actingweb.db import get_attribute
-
-        db = get_attribute(self.config)
-        real = db.conditional_update_attr
-        seen: list[set[str]] = []
-
-        def old_backend(
-            *,
-            actor_id: str,
-            bucket: str,
-            name: str,
-            old_data: Any,
-            new_data: Any,
-            timestamp: Any = None,
-        ) -> bool:
-            seen.append({"actor_id", "bucket", "name", "old_data", "new_data"})
-            return real(
-                actor_id=actor_id,
-                bucket=bucket,
-                name=name,
-                old_data=old_data,
-                new_data=new_data,
-                timestamp=timestamp,
-            )
-
-        with patch.object(
-            type(db), "conditional_update_attr", staticmethod(old_backend)
-        ):
+        with patch.object(type(db), "conditional_update_attr", staticmethod(recording)):
             for strict in (False, True):
                 assert (
                     self.attrs.conditional_update_attr(
@@ -895,4 +901,5 @@ class TestStrictConditionalUpdate:
                     )
                     is False
                 )
-        assert len(seen) == 2
+        assert "strict" not in seen[0]
+        assert seen[1]["strict"] is True

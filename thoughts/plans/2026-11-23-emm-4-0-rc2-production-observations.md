@@ -1,6 +1,7 @@
 ---
 status: active
 approved: 2026-11-23 by Greger Wedel
+iterations: thoughts/plans/2026-11-23-emm-4-0-rc2-production-observations.iterations.md
 ---
 
 # Implementation Plan: 4.0.0rc3 — a failing tool answers the model, and a consumer's rc2 findings
@@ -78,10 +79,15 @@ attribute-key collision. There is no operator step.
 - **`conditional_update_attr` gains keyword-only `strict=False`** (owner
   2026-11-23). D10 of `plans/2026-11-01-single-mode-and-consumer-primitives.md`
   stands: the default still answers `False` on a fault and no library call
-  site changes. Strict is done in the `Attributes` wrapper with the strict
-  re-read eleven library call sites already use (outside voice): no backend
-  and no protocol change, so a custom backend keeps working. The default is
-  the opposite of the reads' `strict=True`, and the docs say so.
+  site changes. Strict is done in the backends, which raise `DbError` from
+  their own exception; a backend is passed the keyword only when a caller
+  asks for it. (It was first moved into the `Attributes` wrapper on the
+  outside voice's advice; the first verification showed a re-read cannot
+  know what the backend knew, iteration 1.) The default is the opposite of
+  the reads' `strict=True`, and the docs say so.
+- **`ToolError` is honoured on the REST `/actions` route too** (iteration
+  2, from the first verification): 400 with `{"error": "<message>"}`, and
+  no later hook runs for the call.
 - **The redirect helper appends to the query component** (`urlsplit`), so a
   fragment or an existing parameter is not corrupted (evaluation).
 - **The deletion record is dropped from this plan** (owner 2026-11-23,
@@ -228,8 +234,21 @@ attribute-key collision. There is no operator step.
   fragment or its own `code` parameter, the appended `code` and `state` are
   in the query component.
 
-- **AC-27** (added in plan: evaluation) — With `strict=True`, a `False`
-  from the backend for a row that now holds `new_data` answers `True`.
+- ~~**AC-27**~~ — dropped (iteration 1): answering `True` for a row that
+  holds `new_data` tells two writers of the same value that both won.
+- **AC-28** (added in iteration 1) — With `strict=True`, a caller whose
+  condition lost to another writer of the same `new_data` gets `False`.
+- **AC-29** (added in iteration 1) — The `DbError` a strict fault raises is
+  chained to the backend's exception.
+- **AC-30** (added in iteration 2) — When an action hook raises `ToolError`
+  on `GET`, `POST`, `PUT` or `DELETE /<actor>/actions/<name>`, the answer is
+  400 with `{"error": "<message>"}` and the wildcard hook does not run.
+- **AC-31** (added in iteration 3) — When a `ToolError` is raised from, or
+  while handling, a store fault, its text is the result and one ERROR line
+  names the store fault.
+- **AC-32** (added in iteration 4) — When a tool's result cannot be
+  formatted, the answer is JSON-RPC `-32603` `Internal error`, not a tool
+  failure.
 
 ## Traceability
 
@@ -252,7 +271,7 @@ attribute-key collision. There is no operator step.
 | AC-15 | 2 | manual: read `docs/reference/hooks-reference.rst`, `actor_deleted` ("Reading `actor.store` here"), and the docs build with `-W` — a documentation statement | Done |
 | AC-16 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_strict_raises_on_a_fault` (`seam_fault` at the read and at the write; the file runs on each Full-tier backend) | Passing |
 | AC-17 | 3 | `…::TestStrictConditionalUpdate::test_strict_answers_false_for_a_lost_condition`, `::test_strict_answers_false_for_no_row` | Passing |
-| AC-18 | 3 | `…::TestStrictConditionalUpdate::test_the_default_still_answers_false_on_a_fault`, `::test_a_backend_without_the_keyword_is_called_without_it` | Passing |
+| AC-18 | 3 | `…::TestStrictConditionalUpdate::test_the_default_still_answers_false_on_a_fault`, `::test_the_backend_is_passed_the_keyword_only_when_asked` | Passing |
 | AC-19 | 3 | `tests/test_mcp_token_cache_query.py::test_a_fresh_entry_is_cached_and_reads_no_store` | Passing |
 | AC-20 | 3 | `tests/test_mcp_token_cache_query.py::test_a_miss` (unknown, expired, other config, no `cached_at`), `::test_an_evicted_token_is_not_cached`, `::test_the_handler_and_the_query_agree` | Passing |
 | ~~AC-21~~ | — | dropped | — |
@@ -261,7 +280,12 @@ attribute-key collision. There is no operator step.
 | AC-23 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_tool_error_reaches_the_model_as_written`, `::test_a_tool_error_without_a_message_takes_the_fixed_text` | Passing |
 | AC-24 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_failing_prompt_or_resource_hook_answers_fixed_text` | Passing |
 | AC-25 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_failing_tool_is_a_tool_result` (ids `token_store`, `single_use`, `newer_format`) | Passing |
-| AC-27 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_strict_counts_a_write_that_landed` | Passing |
+| ~~AC-27~~ | — | dropped (iteration 1) | — |
+| AC-28 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_strict_does_not_claim_another_writers_identical_value` | Passing |
+| AC-29 | 3 | `…::TestStrictConditionalUpdate::test_a_strict_fault_keeps_its_cause` | Passing |
+| AC-30 | 1 | `tests/test_tool_error_on_actions_route.py::test_the_actions_route_answers_400_with_the_message` (four verbs, sync and async), `::test_a_tool_error_leaves_the_hook_runner` | Passing |
+| AC-31 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_tool_error_raised_for_a_store_fault_still_alarms` | Passing |
+| AC-32 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_result_that_cannot_be_formatted_is_not_a_tool_failure` | Passing |
 | AC-26 | 2 | `tests/test_oauth2_authorization_redirect.py::test_a_fragment_and_an_existing_parameter_are_not_corrupted`, `::test_a_fragment_does_not_swallow_the_code`, `::test_a_denial_keeps_the_query` | Passing |
 
 ## Spec Delta
@@ -277,6 +301,13 @@ attribute-key collision. There is no operator step.
   the log. (AC-5)
 - **ADDED** (Tool calls) — When a tool hook raises `ToolError`, its message
   is the text of the `isError` result. (AC-23)
+- **ADDED** (Tool calls) — When an action hook raises `ToolError` on the
+  REST `/actions` route, the answer is 400 with `{"error": "<message>"}`
+  and no later hook runs for the call. (AC-30)
+- **ADDED** (Tool calls) — A `ToolError` raised for a store fault is sent
+  as written and still logs the fault at ERROR. (AC-31)
+- **ADDED** (Tool calls) — A tool result that cannot be formatted answers
+  JSON-RPC `-32603` `Internal error`. (AC-32)
 - **ADDED** (Tool calls) — A failing `prompts/get` or `resources/read`
   hook, and an unexpected handler error, answer JSON-RPC `-32603` with a
   fixed message and no exception text. (AC-24)
@@ -315,10 +346,14 @@ attribute-key collision. There is no operator step.
 - **ADDED** (Classification) — `AttributeKeyCollision` is permanent: HTTP
   500 without `Retry-After`. (AC-9)
 - **ADDED** (Conditional writes) — `conditional_update_attr` answers `False`
-  on a fault by default. With `strict=True` a store fault raises `DbError`,
-  a row that holds `new_data` after a `False` answers `True`, and `False`
-  means the condition lost: another writer changed the row, there is no
-  live row, or another bucket holds the key. (AC-16 to AC-18, AC-27)
+  on a fault by default. With `strict=True` a store fault raises `DbError`
+  chained to the backend's exception, and `False` means the condition did
+  not hold: the row holds something other than `old_data` (the same value
+  another writer wrote included), there is no row, or another bucket holds
+  the key. In neither mode does `False` prove the write did not land.
+  (AC-16 to AC-18, AC-28, AC-29)
+- **DECISION** — Strict is the backends' to decide, not a re-read above
+  them: only the backend knows why its write did not happen.
 - **DECISION** — The default of `conditional_update_attr` does not raise
   (D10, `plans/2026-11-01-single-mode-and-consumer-primitives.md`).
 - **DECISION** — `actor.store` folds a failed read; `loaded` is its signal

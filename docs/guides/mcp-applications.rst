@@ -199,6 +199,11 @@ as written, so put nothing in it the caller may not read. A hook can also
 return its own result with ``"isError": True``; a returned
 ``{"error": "..."}`` without ``isError`` is reported as a success.
 
+The same hook also serves ``POST /<actor_id>/actions/<name>``. There a
+``ToolError`` answers ``400`` with ``{"error": "<message>"}``, and no other
+hook runs for the call (any other exception from an action hook is logged
+and the wildcard hook, if any, is tried, as before).
+
 **Any other exception answers a fixed text and is logged** (one line that
 names the tool and the exception, with a traceback). The exception's own
 text never reaches the client: it can name an actor or a stored value.
@@ -235,7 +240,10 @@ model can rely on them.
 plain ``DbError`` means nothing was written *or that the caller cannot
 tell*, so a tool that writes more than once must be safe to repeat: use
 ``append_once`` or a key of its own for list items, or catch the fault after
-its first write and raise a ``ToolError`` that says what was done.
+its first write and raise a ``ToolError`` that says what was done. A
+``ToolError`` raised for a store fault (``raise ToolError(...) from e``, or
+raised inside the ``except`` block) still logs the fault at ERROR, so the
+alert above keeps working.
 
 A failing ``prompts/get`` or ``resources/read`` hook stays a JSON-RPC error
 (MCP has no ``isError`` there) with a fixed message (``Prompt generation
@@ -568,10 +576,9 @@ permission check judged), then ``uri``, which is always the requested URI, so
 do not name a template variable ``uri``. A resource matched by its
 ``uri_pattern`` gets no variables: its hook receives the params and ``uri``
 only, so read any value the permission check must have judged from ``uri``,
-never from a param. Flask and FastAPI answer a successful read
-identically; their error messages differ (a raising hook answers
-"Resource execution failed" on Flask, "Resource read failed" on FastAPI),
-and on Flask the hook must be synchronous: an ``async def`` hook is not
+never from a param. Flask and FastAPI answer a read identically (a raising
+hook answers the fixed message "Resource read failed" on both, with no
+exception text), but on Flask the hook must be synchronous: an ``async def`` hook is not
 awaited there, and the read answers with the coroutine's ``repr`` as its
 text.
 

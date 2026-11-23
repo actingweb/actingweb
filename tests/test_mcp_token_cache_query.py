@@ -100,3 +100,77 @@ def test_the_handler_and_the_query_agree(
     )
     cache[TOKEN] = entry
     assert is_token_cached(TOKEN, config) is (case == "fresh")
+
+
+class TestCachedTokenActorId:
+    """``cached_token_actor_id``: the actor a fresh entry belongs to.
+
+    Middleware that refuses a suspended account needs the account, not a
+    yes: when the token store says "invalid" or faults and the handler
+    would still serve the token from its cache, a yes alone leaves it to
+    let the request through unchecked or refuse it.
+    """
+
+    def test_a_fresh_entry_answers_its_actor_and_reads_no_store(
+        self, cache: dict[str, dict[str, Any]]
+    ) -> None:
+        from actingweb.mcp import cached_token_actor_id
+
+        config = make_mcp_config()
+        cache[TOKEN] = _entry(config)
+        before = dict(cache[TOKEN])
+        stats = dict(mcp_module._cache_stats)
+
+        def no_store(*_a: Any, **_k: Any) -> Any:
+            raise AssertionError("the query read a store")
+
+        with (
+            patch("actingweb.db.get_attribute", no_store),
+            patch("actingweb.db.get_actor", no_store),
+        ):
+            assert cached_token_actor_id(TOKEN, config) == "actor-1"
+        assert cache[TOKEN] == before
+        assert mcp_module._cache_stats == stats
+
+    @pytest.mark.parametrize(
+        "case", ["unknown", "expired", "other_config", "no_cached_at", "empty_token"]
+    )
+    def test_a_miss_answers_none(
+        self, cache: dict[str, dict[str, Any]], case: str
+    ) -> None:
+        from actingweb.mcp import cached_token_actor_id
+
+        config = make_mcp_config()
+        if case == "expired":
+            cache[TOKEN] = _entry(config, age=mcp_module._cache_ttl + 1)
+        elif case == "other_config":
+            cache[TOKEN] = _entry(make_mcp_config())
+        elif case == "no_cached_at":
+            cache[TOKEN] = {"actor_id": "a1", "config": config}
+        token = "" if case == "empty_token" else TOKEN
+        assert cached_token_actor_id(token, config) is None
+
+    @pytest.mark.parametrize("actor_id", [None, "", 7])
+    def test_an_entry_without_a_usable_actor_answers_none(
+        self, cache: dict[str, dict[str, Any]], actor_id: Any
+    ) -> None:
+        """Only ever a non-empty string: a caller reads an account with it."""
+        from actingweb.mcp import cached_token_actor_id
+
+        config = make_mcp_config()
+        cache[TOKEN] = {**_entry(config), "actor_id": actor_id}
+        assert cached_token_actor_id(TOKEN, config) is None
+        assert is_token_cached(TOKEN, config) is True
+
+    def test_the_two_queries_agree_on_a_hit_and_after_eviction(
+        self, cache: dict[str, dict[str, Any]]
+    ) -> None:
+        from actingweb.mcp import cached_token_actor_id
+
+        config = make_mcp_config()
+        cache[TOKEN] = _entry(config)
+        assert is_token_cached(TOKEN, config) is True
+        assert cached_token_actor_id(TOKEN, config) == "actor-1"
+        make_mcp_handler(cfg=config).clear_token_from_cache(TOKEN)
+        assert is_token_cached(TOKEN, config) is False
+        assert cached_token_actor_id(TOKEN, config) is None

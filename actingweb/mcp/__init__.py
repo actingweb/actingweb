@@ -14,7 +14,7 @@ individual applications.
 
 from .decorators import mcp_prompt, mcp_resource, mcp_tool
 from .errors import ToolError
-from .token_cache import is_token_cached
+from .token_cache import cached_token_actor_id, is_token_cached
 
 __all__ = [
     "mcp_tool",
@@ -22,4 +22,5 @@ __all__ = [
     "mcp_prompt",
     "ToolError",
     "is_token_cached",
+    "cached_token_actor_id",
 ]

@@ -104,7 +104,11 @@ ADDED
   ``handlers.mcp._token_cache``. It is advisory: true does not authorize
   (the handler still loads the actor and its trust), and false means "not
   cached in this process", which is every token on a cold instance, never
-  "invalid".
+  "invalid". ``actingweb.mcp.cached_token_actor_id(token, config)`` answers
+  by the same rule which actor the entry belongs to, or ``None``: for a
+  guard that must check the account (a suspension, say) when the token
+  store says "invalid" or cannot be read and the handler would still serve
+  the token from its cache. It exposes nothing else of the entry.
 - **An application can classify a store fault.**
   ``actingweb.faults.classify_fault(exc)`` returns the fault's class
   (``FaultClass.RETRYABLE``, ``STORED``, ``PERMANENT`` or ``CONFLICT``) and

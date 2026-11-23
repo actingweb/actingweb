@@ -26,3 +26,8 @@
 ## 2026-11-23, after the review on pull request 188 (commit `b8d212c`)
 
 13. **[UX refinement] A backend without `strict` says what is missing** — `Attributes.conditional_update_attr(strict=True)` checks the backend method's signature before the call and raises a `TypeError` that names the keyword to add, where the backend's own "unexpected keyword argument" surfaced (`actingweb/attribute.py`). Why: the review's point 4; the check is by signature because catching `TypeError` would also catch the one strict raises for a value that cannot be compared. The review's other four points (changelog **Behavior change** for the list readers, the 200 and its alert line, the prompts and resources line in the guide, a config-mismatch test for the cache query) and its two test and docs asks were already in the branch. AC: none. Spec: none (the answer is still a `TypeError`).
+
+## 2026-11-23, after the consumer's review of the rc3 work (thoughts/research/2026-11-23-emm-review-of-rc3.md)
+
+14. **[New functionality] The cache query answers the actor** — `actingweb.mcp.cached_token_actor_id(token, config)` returns the actor a fresh entry belongs to, or `None`, by the predicate `is_token_cached` uses (`actingweb/mcp/token_cache.py`, `actingweb/mcp/__init__.py`, `docs/guides/caching.rst`, `docs/migration/v4.0.rst`, `CHANGELOG.rst`). Why: the consumer that asked for a cache query guards suspended accounts and needs the account, so a yes or no could not replace its read of the private cache (owner, 2026-11-23). AC: AC-34 added. Spec: MCP-22 added, MCP-D5 reworded (the delta was already merged).
+

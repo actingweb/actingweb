@@ -66,7 +66,11 @@ and a token revoked in another process stays cached here until its entry
 expires. False means "not cached in this process", which is every token on a
 fresh worker or a cold function instance, never "invalid"; let the request
 through and the handler validates it, once. The query reads no store and
-changes no entry.
+changes no entry. ``actingweb.mcp.cached_token_actor_id(token, config)``
+answers by the same rule which actor the entry belongs to (or ``None``), for
+a guard that must check the account, a suspension say, when the token store
+says "invalid" or cannot be read and the handler would still serve the token
+from its cache.
 
 Cache Key Strategy
 -------------------

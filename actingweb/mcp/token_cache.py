@@ -33,6 +33,7 @@ def is_token_cached(token: str, config: Config) -> bool:
 
     Reads no store and changes nothing: no entry is added, refreshed or
     evicted, and no counter moves. The caches themselves stay internal.
+    :func:`cached_token_actor_id` answers which actor the entry belongs to.
     """
     # Imported here: the handler module imports this package's decorators.
     from actingweb.handlers import mcp as handler
@@ -42,3 +43,31 @@ def is_token_cached(token: str, config: Config) -> bool:
     return handler._token_cache_entry_is_fresh(
         handler._token_cache.get(token), config, time.time()
     )
+
+
+def cached_token_actor_id(token: str, config: Config) -> str | None:
+    """The actor a fresh MCP token-cache entry for ``token`` belongs to, or
+    ``None`` when this process holds no fresh entry for it.
+
+    For middleware that must decide something about the account before the
+    handler runs (refuse a suspended one, say), in the case
+    :func:`is_token_cached` cannot help with: the token store answers
+    "invalid" or faults, and the handler would still serve the token from
+    its cache. A caller that holds the token gets the same actor id from a
+    successful ``validate_access_token``; nothing else of the entry is
+    exposed.
+
+    The same rule and the same caveats as :func:`is_token_cached`: an
+    answer does not authorize, ``None`` does not mean invalid, and nothing
+    is read from a store or changed. ``None`` also for an entry that
+    carries no usable actor id.
+    """
+    from actingweb.handlers import mcp as handler
+
+    if not token:
+        return None
+    entry = handler._token_cache.get(token)
+    if not handler._token_cache_entry_is_fresh(entry, config, time.time()):
+        return None
+    actor_id = entry.get("actor_id") if isinstance(entry, dict) else None
+    return actor_id if isinstance(actor_id, str) and actor_id else None

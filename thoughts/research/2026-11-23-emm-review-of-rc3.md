@@ -68,9 +68,9 @@ needs the actor the entry belongs to.
 Checked: true of the function as shipped (it returns `bool`). The entry
 holds `actor_id` (`handlers/mcp.py`, the cache write), and a successful
 `validate_access_token` returns the same id, so answering it exposes
-nothing new to a caller that holds the token. Filed:
-`todo/mcp-token-cache-query-answers-no-actor.md`. The consumer keeps its
-private read meanwhile and nothing else of its plan waits on this.
+nothing new to a caller that holds the token. Added to pull request 188
+as `actingweb.mcp.cached_token_actor_id(token, config)` (owner,
+2026-11-23; the plan's iteration 14), so no todo is left for it.
 
 ## The rest
 

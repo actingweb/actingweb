@@ -259,6 +259,12 @@ attribute-key collision. There is no operator step.
   `TypeError` or `ValueError` before the store is touched, on both
   backends; a `ValueError` raised inside the backend is a `DbError`.
 
+- **AC-34** (added in iteration 14) — When the token cache holds a fresh
+  entry for the token under the application's `Config`,
+  `actingweb.mcp.cached_token_actor_id(token, config)` returns its actor
+  id; for a miss, or an entry with no usable actor id, it returns `None`;
+  it reads no store.
+
 ## Traceability
 
 | AC | Phase | Test | Status |
@@ -297,6 +303,7 @@ attribute-key collision. There is no operator step.
 | AC-33 | 3 | `tests/test_conditional_update_attr.py::TestStrictConditionalUpdate::test_a_value_that_cannot_be_compared_is_not_an_outage`, `::test_a_store_side_value_error_is_still_a_fault` | Passing |
 | AC-32 | 1 | `tests/test_mcp_tool_failure_results.py::test_a_result_that_cannot_be_formatted_is_not_a_tool_failure` | Passing |
 | AC-26 | 2 | `tests/test_oauth2_authorization_redirect.py::test_a_fragment_and_an_existing_parameter_are_not_corrupted`, `::test_a_fragment_does_not_swallow_the_code`, `::test_a_denial_keeps_the_query` | Passing |
+| AC-34 | 3 | `tests/test_mcp_token_cache_query.py::TestCachedTokenActorId` | Passing |
 
 ## Spec Delta
 

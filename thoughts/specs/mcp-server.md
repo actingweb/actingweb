@@ -123,14 +123,20 @@ capabilities it advertises.
   whether this process holds a fresh cache entry for the token under this
   `Config`; it reads no store, changes no entry and grants nothing.
   [plan+test] `tests/test_mcp_token_cache_query.py` (plans/2026-11-23-emm-4-0-rc2-production-observations.md, AC-19, AC-20)
+- **MCP-22** — `actingweb.mcp.cached_token_actor_id(token, config)` answers
+  by the same rule the actor a fresh entry belongs to, or `None` for a miss
+  or an entry with no usable actor id; it reads no store and changes no
+  entry. [plan+test]
+  `tests/test_mcp_token_cache_query.py::TestCachedTokenActorId` (plans/2026-11-23-emm-4-0-rc2-production-observations.md, iteration 14)
 
 ## Decisions in force
 
 - **MCP-D4** — The fixed tool-failure texts are read by models and by
   consumers' instructions to them; changing one is a consumer-visible
   change. (plans/2026-11-23-emm-4-0-rc2-production-observations.md)
-- **MCP-D5** — The token and trust caches stay internal; the query is the
-  only supported view of them. (plans/2026-11-23-emm-4-0-rc2-production-observations.md)
+- **MCP-D5** — The token and trust caches stay internal; the two queries
+  are the only supported view of them, and the actor id is the only field
+  of an entry they answer. (plans/2026-11-23-emm-4-0-rc2-production-observations.md)
 
 - **MCP-D1** — Templated resources stay in `resources/list` until the
   connectors are seen calling `resources/templates/list`. (plans/2026-11-19-emm-4-0-adoption-findings.md)

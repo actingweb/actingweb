@@ -390,6 +390,14 @@ class DbAttribute:
         old_data = sanitize_json_data(old_data, log_source="attribute")
         new_data = sanitize_json_data(new_data, log_source="attribute")
 
+        if strict:
+            # The caller's values are checked before the store is touched:
+            # an exception inside the try below is then the store's, and a
+            # value JSON cannot order or encode is the caller's TypeError or
+            # ValueError, not an outage to be retried forever.
+            normalize_json(old_data)
+            normalize_json(new_data)
+
         try:
             # Get current item with consistent read
             item = Attribute.get(actor_id, bucket_name, consistent_read=True)
@@ -430,11 +438,6 @@ class DbAttribute:
             # Item doesn't exist or condition check failed (race condition)
             _log_unexpected("conditional_update_attr", bucket, name, e)
             if strict and not _is_expected_miss(e):
-                if isinstance(e, (TypeError, ValueError)):
-                    # The caller's value (one JSON cannot order or encode),
-                    # not the store: reported as an outage it would be
-                    # retried forever.
-                    raise
                 raise DbError("attribute conditional update", actor_id) from e
             return False
 

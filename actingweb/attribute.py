@@ -533,8 +533,8 @@ class Attributes:
 
         Raises:
             TypeError, ValueError: only with ``strict=True``, for a value
-                the backend cannot compare or encode (the caller's error,
-                not a fault).
+                JSON cannot order or encode (the caller's error, raised
+                before the store is touched).
             DbError: only with ``strict=True``, when the store faulted,
                 chained to the backend's exception. The write may or may not
                 have landed; read the row before repeating it. A backend

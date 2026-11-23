@@ -117,7 +117,8 @@ requests might modify the same attribute simultaneously.
 - **By default it also returns** ``False`` **if the backend faulted.** Pass
   ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead, chained to the
   backend's exception (so a fault a retry cannot fix classifies as permanent). A
-  value the backend cannot compare raises its ``TypeError`` or ``ValueError``.
+  value JSON cannot order or encode raises ``TypeError`` or ``ValueError`` before
+  the store is touched.
   ``False`` then means the condition did not hold: the row holds something other
   than ``old_data``, or there is no row. Unlike the reads, whose ``strict`` defaults
   to ``True``, the default here is ``False``: an existing caller keeps the answer it

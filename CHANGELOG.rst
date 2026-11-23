@@ -73,9 +73,10 @@ ADDED
   ``{"error": "<message>"}`` on ``GET``, ``POST``, ``PUT`` and ``DELETE``,
   no other hook runs for the call, and a store fault behind it is logged as
   ``Action '<name>' failed with a store fault``. Before, any exception from
-  an action hook was logged, the wildcard hook was tried, and the answer
-  had no body: 400 for ``POST`` and ``PUT``, 404 for ``GET``, 403 for
-  ``DELETE`` (still so for every other exception). **Behavior change:**
+  an action hook other than a store fault was logged and the wildcard hook
+  was tried; when no hook answered, the answer had no body: 400 for
+  ``POST`` and ``PUT``, 404 for ``GET``, 403 for ``DELETE`` (still so for
+  every other exception). **Behavior change:**
   ``HookRegistry.execute_action_hooks()`` and
   ``execute_action_hooks_async()`` raise a hook's ``ToolError`` where they
   returned ``None`` (or the wildcard hook's result), so a test or route
@@ -87,9 +88,9 @@ ADDED
   condition lost. The default is unchanged (``False`` for both, where a
   caller makes its own ``get_attr_strict`` read to tell them apart). The
   ``DbError`` is chained to the backend's exception, so a fault a retry
-  cannot fix classifies as permanent; a value the backend cannot compare
-  (``old_data`` with mixed key types, say) raises its ``TypeError`` or
-  ``ValueError`` unchanged, as the caller's error. The default is ``False``, unlike the
+  cannot fix classifies as permanent; a value JSON cannot order or encode
+  (``old_data`` with mixed key types, say) raises ``TypeError`` or
+  ``ValueError`` before the store is touched, as the caller's error. The default is ``False``, unlike the
   reads' ``strict``. A ``False`` is still not proof that the write did not
   land (a write whose answer was lost and whose retry met its own value); a
   caller that must know puts a value unique to the call in ``new_data``. A

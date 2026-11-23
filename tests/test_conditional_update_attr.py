@@ -875,22 +875,45 @@ class TestStrictConditionalUpdate:
             is True
         )
 
-    def test_a_value_that_cannot_be_compared_is_not_an_outage(self) -> None:
-        """A caller's ``old_data`` that JSON cannot order (mixed key types)
-        is the caller's error. Strict must not report it as a store fault,
-        which would answer 503 and be retried forever."""
+    @pytest.mark.parametrize("which", ["old_data", "new_data"])
+    def test_a_value_that_cannot_be_compared_is_not_an_outage(self, which: str) -> None:
+        """A caller's value that JSON cannot order (mixed key types) or
+        encode is the caller's error, raised before the store is touched,
+        on both backends and whether or not the row exists. Reported as a
+        store fault it would answer 503 and be retried forever."""
+        bad: dict[Any, Any] = {1: "a", "b": 2}
+        values = {"old_data": {"v": 1}, "new_data": {"v": 2}, which: bad}
+        for name in ("row", "absent"):
+            with pytest.raises((TypeError, ValueError)) as raised:
+                self.attrs.conditional_update_attr(name=name, strict=True, **values)
+            from actingweb.db.exceptions import DbError
+
+            assert not isinstance(raised.value, DbError)
+        assert self._stored() == {"v": 1}
+
+    def test_a_store_side_value_error_is_still_a_fault(self) -> None:
+        """Where the exception arose decides, not its type: a stored row
+        that cannot be read raises a ``ValueError`` inside the backend, and
+        that is a store fault."""
+        import importlib
+        from unittest.mock import patch
+
         from actingweb.db.exceptions import DbError
 
-        bad: dict[Any, Any] = {1: "a", "b": 2}
-        try:
-            answer = self.attrs.conditional_update_attr(
-                name="row", old_data=bad, new_data={"v": 2}, strict=True
+        def unreadable(*_a: Any, **_k: Any) -> Any:
+            raise ValueError("stored row cannot be deserialised (simulated)")
+
+        if os.getenv("DATABASE_BACKEND", "dynamodb") == "postgresql":
+            module = importlib.import_module("actingweb.db.postgresql.attribute")
+            seam = patch.object(module, "get_connection", unreadable)
+        else:
+            module = importlib.import_module("actingweb.db.dynamodb.attribute")
+            seam = patch.object(module.Attribute, "get", unreadable)
+        with seam, pytest.raises(DbError) as raised:
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
             )
-        except DbError:  # pragma: no cover - the defect
-            pytest.fail("a value error was reported as a store fault")
-        except (TypeError, ValueError):
-            return
-        assert answer is False
+        assert isinstance(raised.value.__cause__, ValueError)
 
     def test_the_backend_is_passed_the_keyword_only_when_asked(self) -> None:
         """AC-18: a backend written before ``strict`` keeps working for

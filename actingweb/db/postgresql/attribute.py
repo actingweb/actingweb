@@ -638,6 +638,13 @@ class DbAttribute:
         elif clear_ttl:
             ttl_sql = ", ttl_timestamp = NULL"
 
+        if strict:
+            # The caller's values are checked before the store is touched
+            # (see the DynamoDB backend): sorted, as DynamoDB compares them,
+            # so both backends refuse the same values.
+            json.dumps(old_data, sort_keys=True)
+            json.dumps(new_data, sort_keys=True)
+
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -672,10 +679,6 @@ class DbAttribute:
                 f"Error conditionally updating attribute {actor_id}/{bucket}/{name}: {e}"
             )
             if strict:
-                if isinstance(e, (TypeError, ValueError)):
-                    # The caller's value, not the store (see the DynamoDB
-                    # backend).
-                    raise
                 raise DbError("attribute conditional update", actor_id) from e
             return False
 

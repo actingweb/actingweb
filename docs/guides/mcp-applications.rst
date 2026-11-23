@@ -244,9 +244,11 @@ tell*, so a tool that writes more than once must be safe to repeat: use
 ``append_once`` or a key of its own for list items, or catch the fault after
 its first write and raise a ``ToolError`` that says what was done. A
 ``ToolError`` raised for a store fault (``raise ToolError(...) from e``, or
-raised inside the ``except`` block) still logs the fault at ERROR, in a line
+raised inside the ``except`` block) still logs the fault, at ERROR for an
+outage (WARNING for a creator conflict or a wait for a deletion), in a line
 that starts ``Tool '<name>' failed with a store fault``, so the alert above
-keeps working. ``raise ToolError(...) from None`` says the fault is not the
+keeps working; on the REST route the line starts ``Action '<name>' failed
+with a store fault``. ``raise ToolError(...) from None`` says the fault is not the
 cause and is logged as an ordinary refusal.
 
 A failing ``prompts/get`` or ``resources/read`` hook stays a JSON-RPC error

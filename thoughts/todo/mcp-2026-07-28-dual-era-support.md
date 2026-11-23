@@ -156,3 +156,15 @@ longer exists.
 - `thoughts/plans/2026-05-26-mcp-version-negotiation-structuredcontent.md` — the
   Phase 3 roadmap that `actingweb/mcp/protocol.py:8-13` defers transport
   compliance to
+
+## A deployment's `POST /mcp` 400s (2026-11-23)
+
+A consumer's production log shows about one `POST /mcp` in six answered 400,
+before and after its upgrade to 4.0.0rc2, unexamined
+(`thoughts/research/2026-11-23-emm-review-of-rc3.md`). An unsupported
+`MCP-Protocol-Version` is one of three causes of a 400 there, and the
+expected first request of a dual-era client. The INFO line
+`Rejecting unsupported MCP-Protocol-Version …` in that log would say
+whether a client this library serves is already dual-era, which is the
+evidence this todo's trigger is about.
+

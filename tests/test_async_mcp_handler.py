@@ -416,12 +416,15 @@ class TestAsyncMCPHandler:
         with _patch_allow_all():
             result = await handler.post_async(request_data)
 
-        # Verify error response
+        # A tool that raises is a tool result the model reads, not a
+        # protocol error (4.0.0rc3); the exception's text stays in the log.
         assert result["jsonrpc"] == "2.0"
         assert result["id"] == 12
-        assert "error" in result
-        assert result["error"]["code"] == -32603  # Internal error
-        assert "Tool execution failed" in result["error"]["message"]
+        assert "error" not in result
+        assert result["result"]["isError"] is True
+        assert result["result"]["content"] == [
+            {"type": "text", "text": "The tool failed. The error was logged."}
+        ]
 
     @pytest.mark.asyncio
     async def test_concurrent_async_tools(self, app, test_config, webobj):

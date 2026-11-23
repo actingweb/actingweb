@@ -72,6 +72,24 @@ def warn_missing_challenge(
     )
 
 
+def redirect_with_params(redirect_uri: str, params: dict[str, str]) -> str:
+    """``redirect_uri`` with ``params`` appended to its query.
+
+    The registered URI is kept byte for byte: its own query stays (a second
+    ``?`` put the code inside the value of its last parameter), and a
+    fragment stays after the query, where the appended parameters would
+    otherwise never reach the client's server.
+    """
+    base, hash_mark, fragment = redirect_uri.partition("#")
+    if "?" not in base:
+        separator = "?"
+    elif base.endswith(("?", "&")):
+        separator = ""
+    else:
+        separator = "&"
+    return f"{base}{separator}{urlencode(params)}{hash_mark}{fragment}"
+
+
 class ActingWebOAuth2Server:
     """
     ActingWeb OAuth2 Authorization Server for MCP clients.
@@ -1067,8 +1085,7 @@ class ActingWebOAuth2Server:
         params = {"error": "access_denied"}
         if original_state:
             params["state"] = original_state
-        sep = "&" if "?" in redirect_uri else "?"
-        return {"action": "redirect", "url": f"{redirect_uri}{sep}{urlencode(params)}"}
+        return {"action": "redirect", "url": redirect_with_params(redirect_uri, params)}
 
     def _application_decision(self) -> Any:
         """The application's ``oauth2_trust_requested`` hooks as the callable
@@ -1195,7 +1212,7 @@ class ActingWebOAuth2Server:
         logger.info(f"OAuth2 authorization completed for client {client_id}")
         return {
             "action": "redirect",
-            "url": f"{record['redirect_uri']}?{urlencode(redirect_params)}",
+            "url": redirect_with_params(str(record["redirect_uri"]), redirect_params),
         }
 
     def handle_confirmation(

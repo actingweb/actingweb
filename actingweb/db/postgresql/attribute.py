@@ -593,6 +593,7 @@ class DbAttribute:
         ttl_seconds: int | None = None,
         *,
         clear_ttl: bool = False,
+        strict: bool = False,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -610,9 +611,12 @@ class DbAttribute:
                 (plus the clock-skew buffer, as ``set_attr`` does)
             clear_ttl: the same UPDATE sets ``ttl_timestamp`` to NULL (the
                 row then never expires); ignored when ``ttl_seconds`` is given
+            strict: raise ``DbError`` for a fault (4.0); a row that does not
+                match still answers False
 
         Returns:
-            True if update succeeded (current matched old_data), False otherwise
+            True if update succeeded (current matched old_data), False
+            otherwise; without ``strict`` also for a fault
         """
         require_json(new_data, "attribute data")
         if not actor_id or not bucket or not name:
@@ -633,6 +637,13 @@ class DbAttribute:
             ttl_params = (ttl_deadline(ttl_seconds),)
         elif clear_ttl:
             ttl_sql = ", ttl_timestamp = NULL"
+
+        if strict:
+            # The caller's values are checked before the store is touched
+            # (see the DynamoDB backend): sorted, as DynamoDB compares them,
+            # so both backends refuse the same values.
+            json.dumps(old_data, sort_keys=True)
+            json.dumps(new_data, sort_keys=True)
 
         try:
             with get_connection() as conn:
@@ -667,6 +678,8 @@ class DbAttribute:
             logger.error(
                 f"Error conditionally updating attribute {actor_id}/{bucket}/{name}: {e}"
             )
+            if strict:
+                raise DbError("attribute conditional update", actor_id) from e
             return False
 
     @staticmethod

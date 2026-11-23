@@ -49,6 +49,17 @@ Global Storage
    )
    global_config.set_attr(name="maintenance_mode", data=False)
 
+``actor.store`` and a failed read
+---------------------------------
+
+``Attributes.get_bucket()`` and ``get_attr()`` raise ``DbError`` when the
+backend cannot answer. ``actor.store`` (the actor's ``_internal`` bucket) is
+the one wrapper that does not: ``actor.store.<name>`` reads ``None`` for a
+name that is not set *and* for a bucket that could not be read, and
+``actor.store.loaded`` is ``False`` in the second case. Check ``loaded``
+before acting on an absent value; the hooks reference shows the pattern under
+``actor_deleted``.
+
 Atomic Operations (v3.8.2+)
 ---------------------------
 
@@ -102,10 +113,40 @@ requests might modify the same attribute simultaneously.
 - **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data`` for atomic compare-and-swap
 - **DynamoDB**: Uses conditional update expressions with ``condition=(Attribute.data == old_data)``
 - Returns ``True`` only if the current database value exactly matches ``old_data``
-- Returns ``False`` if value was modified by another request (no update performed),
-  and also if the backend faulted: a caller that must tell the two apart re-reads with
-  the backend's ``get_attr_strict``. (``create_attr_if_absent`` below raises ``DbError``
-  on a fault instead.)
+- Returns ``False`` if value was modified by another request (no update performed).
+- **By default it also returns** ``False`` **if the backend faulted.** Pass
+  ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead, chained to the
+  backend's exception (so a fault a retry cannot fix classifies as permanent). A
+  value JSON cannot order or encode raises ``TypeError`` or ``ValueError`` before
+  the store is touched.
+  ``False`` then means the condition did not hold: the row holds something other
+  than ``old_data``, or there is no row. Unlike the reads, whose ``strict`` defaults
+  to ``True``, the default here is ``False``: an existing caller keeps the answer it
+  had. (``create_attr_if_absent`` below always raises ``DbError`` on a fault.)
+- **Neither a** ``DbError`` **nor a** ``False`` **proves the write did not land.** A
+  write whose answer was lost can be retried by the database client, and the retry
+  then meets its own ``new_data`` and fails the condition. A caller that must know
+  puts a value unique to the call in ``new_data`` (a nonce) and reads the row with
+  ``get_attr_strict`` before it writes again:
+
+.. code-block:: python
+
+   import secrets
+
+   from actingweb.db.exceptions import DbError
+
+   claim = {"owner": worker_id, "claim_id": secrets.token_hex(8)}
+   try:
+       won = jobs.conditional_update_attr(
+           name=job_id, old_data=unclaimed, new_data=claim, strict=True
+       )
+   except DbError:
+       raise  # an outage: the integration answers 503
+   if not won:
+       row = jobs.dbprop.get_attr_strict(
+           actor_id=jobs.actor_id, bucket=jobs.bucket, name=job_id
+       )
+       won = bool(row) and row["data"].get("claim_id") == claim["claim_id"]
 
 **Use Cases:**
 

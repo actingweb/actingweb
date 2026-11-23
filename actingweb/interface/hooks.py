@@ -24,6 +24,7 @@ from typing import (
 
 from ..access_decision import PERMISSION_DENIED, decide
 from ..db.exceptions import DbError
+from ..mcp.errors import ToolError
 
 # Import permission system for transparent permission checking
 try:
@@ -1040,6 +1041,12 @@ class HookRegistry:
         use execute_action_hooks_async() instead for proper async execution.
         Async hooks in this method will be executed via asyncio.run() which
         may cause issues if already in an event loop.
+
+        Raises:
+            ToolError: a hook raised it to refuse the call with a message
+                (4.0). No later hook runs. Any other exception from a hook
+                is logged and the next hook is tried.
+            DbError: a hook's store fault.
         """
         # Check permission before executing hooks
         if not self._check_hook_permission("action", action_name, actor, auth_context):
@@ -1060,6 +1067,11 @@ class HookRegistry:
                         break  # First successful hook wins
                 except DbError:
                     raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -1074,6 +1086,11 @@ class HookRegistry:
                         result = hook_result
                         break  # First successful hook wins
                 except DbError:
+                    raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
                     raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")
@@ -1167,6 +1184,11 @@ class HookRegistry:
 
         Returns:
             Result from the first successful hook, or None
+
+        Raises:
+            ToolError: a hook raised it to refuse the call with a message
+                (4.0). No later hook runs.
+            DbError: a hook's store fault.
         """
         if not self._check_hook_permission("action", action_name, actor, auth_context):
             logger.debug(f"Action hook permission denied for {action_name}")
@@ -1187,6 +1209,11 @@ class HookRegistry:
                         break
                 except DbError:
                     raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
+                    raise
                 except Exception as e:
                     logger.error(f"Error in action hook for {action_name}: {e}")
 
@@ -1202,6 +1229,11 @@ class HookRegistry:
                         result = hook_result
                         break
                 except DbError:
+                    raise
+                except ToolError:
+                    # The author's refusal, with a message for the caller: it
+                    # ends the call, and no later hook acts on what this one
+                    # refused.
                     raise
                 except Exception as e:
                     logger.error(f"Error in wildcard action hook: {e}")

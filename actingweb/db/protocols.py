@@ -29,7 +29,9 @@ docstring says otherwise:
   ``DbError`` on a fault, because its callers (a retried create) must tell a
   lost race from an outage. ``delete_attr_conditional`` and
   ``conditional_update_attr`` answer False on a fault (callers tell the two
-  apart with ``get_attr_strict``).
+  apart with ``get_attr_strict``); ``conditional_update_attr(strict=True)``
+  raises ``DbError`` for a fault, chained to the backend's exception, and
+  is passed the keyword only by a caller that asks for it.
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises
   ``DbError``; False is reserved for the documented non-fault refusals
   (missing arguments or handle, an id that is taken).
@@ -1462,6 +1464,7 @@ class DbAttributeProtocol(Protocol):
         ttl_seconds: int | None = None,
         *,
         clear_ttl: bool = False,
+        strict: bool = False,
     ) -> bool:
         """
         Conditionally update an attribute only if current data matches old_data.
@@ -1484,7 +1487,9 @@ class DbAttributeProtocol(Protocol):
         Returns:
             True if update succeeded (current matched old_data), False otherwise
             (a mismatch, a missing row, or a backend fault; use
-            ``get_attr_strict`` to tell the last apart)
+            ``get_attr_strict`` to tell the last apart). With ``strict=True``
+            (4.0) a fault raises ``DbError`` from the backend's exception
+            and False is a mismatch or a missing row.
         """
         ...
 

@@ -770,8 +770,17 @@ ignored. **Check:** a caller that relied on the empty answer catches
 ``DbError``.
 
 A backend error a retry cannot fix (a validation, size or constraint error,
-such as an item over DynamoDB's 400 KB limit) answers ``500`` with
-``{"error": "internal_error"}`` and no ``Retry-After``.
+such as an item over DynamoDB's 400 KB limit, or an attribute key another
+bucket holds) answers ``500`` with ``{"error": "internal_error"}`` and no
+``Retry-After``.
+
+**Building your own answer.** A webhook, a WebSocket handler or a background
+job that catches a fault asks ``actingweb.faults.classify_fault(exc)`` what
+it holds: ``FaultClass.RETRYABLE`` (with ``retry_after`` seconds),
+``STORED`` (the change is saved; a step after it failed), ``PERMANENT`` (a
+retry meets the same answer) or ``CONFLICT`` (the creator is taken). It
+returns ``None`` for an exception that is not a store fault. The
+integrations derive their HTTP answers from the same function.
 
 An exception counts as the fault only when it is the ``DbError`` or was raised
 from one (``raise MyError(...) from e``). An error raised while a ``DbError``
@@ -779,7 +788,8 @@ was being handled, without ``from``, is a bug in that handler and answers
 ``500``. **Check:** in your own routes and hooks let the ``DbError`` itself
 propagate (re-raise it, do not wrap it): the app-level handlers and the hook
 runners match the type, so a wrapping exception answers ``500`` there, or in a
-hook is logged and dropped, with or without ``from``.
+hook is logged and dropped, with or without ``from``. An MCP tool hook is the
+exception: whatever it raises is answered as a tool result (:ref:`v40-mcp-a-failing-tool`).
 
 **Hooks.** The hook runners let a ``DbError`` through. A hook whose own
 store read faults (an ``oauth_success`` allowlist kept in an attribute
@@ -2463,6 +2473,40 @@ MCP
 
 *Skip this part if the application serves no MCP clients (``with_mcp(enable=False)``).*
 
+.. _v40-mcp-a-failing-tool:
+
+A failing tool answers the model
+--------------------------------
+
+A ``tools/call`` whose hook raises answers HTTP 200 with a result whose
+``isError`` is true and a fixed text. In 3.x it answered the JSON-RPC error
+``-32603`` with ``Tool execution failed: <the exception's text>``.
+
+- A store fault (``DbError``) inside the tool is one of four fixed texts by
+  its class; any other exception is ``The tool failed. The error was
+  logged.`` The exception's own text is logged and never sent. The table is
+  in the MCP guide, "When a Tool Fails".
+- ``raise ToolError("...")`` (``actingweb.mcp``) sends your own message to
+  the model.
+- A fault outside the hook call (authentication, the permission check, every
+  other method) still answers a JSON-RPC error with 503 or 500.
+- A failing ``prompts/get`` or ``resources/read`` hook, and an unexpected
+  error in the handler itself, still answer the JSON-RPC error ``-32603``,
+  now with a fixed message and no exception text.
+
+**Check:**
+
+- a client or test that matches ``error.code == -32603`` or the text ``Tool
+  execution failed`` on ``tools/call``: read ``result.isError`` and the text;
+- a tool that raised an exception to tell the model what was wrong (a
+  ``ValueError("title is required")``): raise ``ToolError`` instead;
+- an alarm on 5xx from ``/mcp``: a fault inside a tool is a 200 now; alert
+  on the ERROR log line ``Tool '<name>' failed ...``;
+- a tool that writes more than once: the model is told to try again after a
+  transient fault, so the tool must be safe to repeat;
+- anything that read the exception text from a ``prompts/get`` or
+  ``resources/read`` error.
+
 .. _v40-the-mcp-oauth-server:
 
 The MCP OAuth server
@@ -2556,6 +2600,22 @@ than the TTL, so an entry written without that object is a miss. Code in front o
 ``get_actingweb_token_manager(config).validate_access_token(token)``
 (``actingweb.oauth2_server.token_manager``), which raises
 ``TokenStoreUnavailable`` when the token store cannot be read.
+
+Code that needs to know whether the library will answer a token from this
+cache, without reading the dict, calls ``actingweb.mcp.is_token_cached(token,
+config)``. It is advisory. True means this process holds a fresh entry: the
+handler will start from it and not read the token store, unless the actor
+row turns out to be gone, in which case it drops the entry and validates the
+token against the store after all. It still loads the actor and its trust,
+and a token revoked in another process stays cached here until its entry
+expires. False means "not cached in this process", which is every token on a
+fresh worker or a cold function instance, never "invalid"; let the request
+through and the handler validates it, once. The query reads no store and
+changes no entry. ``actingweb.mcp.cached_token_actor_id(token, config)``
+answers by the same rule which actor the entry belongs to (or ``None``), for
+a guard that must check the account, a suspension say, when the token store
+says "invalid" or cannot be read and the handler would still serve the token
+from its cache.
 
 - **What a request costs.** A warm MCP request reads the actor row (one
   strongly consistent read); a hook's first read or first write of each

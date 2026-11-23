@@ -56,6 +56,22 @@ needs to know whether a token is valid calls the token manager,
 ``(actor_id, client_id, token_data)`` or ``None``, and raises
 ``TokenStoreUnavailable`` when the token store cannot be read.
 
+Code that needs to know whether the library will answer a token from this
+cache, without reading the dict, calls ``actingweb.mcp.is_token_cached(token,
+config)``. It is advisory. True means this process holds a fresh entry: the
+handler will start from it and not read the token store, unless the actor
+row turns out to be gone, in which case it drops the entry and validates the
+token against the store after all. It still loads the actor and its trust,
+and a token revoked in another process stays cached here until its entry
+expires. False means "not cached in this process", which is every token on a
+fresh worker or a cold function instance, never "invalid"; let the request
+through and the handler validates it, once. The query reads no store and
+changes no entry. ``actingweb.mcp.cached_token_actor_id(token, config)``
+answers by the same rule which actor the entry belongs to (or ``None``), for
+a guard that must check the account, a suspension say, when the token store
+says "invalid" or cannot be read and the handler would still serve the token
+from its cache.
+
 Cache Key Strategy
 -------------------
 

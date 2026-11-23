@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-17)
 **Reviewed:** 2026-11-17 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
+**Last changed:** 2026-11-23 by thoughts/plans/2026-11-23-emm-4-0-rc2-production-observations.md
 **ID prefix:** OCR
 
 ## Summary
@@ -65,6 +65,11 @@ cannot be created.
 - **OCR-6** — When the authorise form is posted without the challenge it was
   shown with, the refusal is logged with what a custom form must carry.
   [plan+test] `tests/test_oauth2_pkce_binding.py::test_a_form_post_without_a_challenge_warns_about_the_form` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-52)
+
+- **OCR-8** — When an authorization completes or is denied, the redirect
+  keeps the registered redirect URI byte for byte and appends its
+  parameters to the URI's query, before any fragment. [plan+test]
+  `tests/test_oauth2_authorization_redirect.py`, `tests/integration/test_oauth2_trust_binding.py::test_the_helper_keeps_a_redirect_uris_own_query` (plans/2026-11-23-emm-4-0-rc2-production-observations.md, AC-12, AC-13, AC-26)
 
 ## Discovery
 

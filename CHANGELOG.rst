@@ -5,6 +5,143 @@ CHANGELOG
 Unreleased
 ----------
 
+CHANGED
+~~~~~~~
+
+- **Breaking: a failing MCP tool answers the model, not a protocol error.**
+  A ``tools/call`` whose hook raised answered the JSON-RPC error ``-32603``:
+  with HTTP 503 or 500 and a fixed message for a store fault (``DbError``),
+  and with ``Tool execution failed: <the exception's text>`` for anything
+  else. MCP keeps protocol errors for a request that could not be
+  dispatched; a failure while the tool runs belongs in a result the model
+  reads, and the exception's text can name an actor. Whatever a tool hook
+  raises now answers HTTP 200 with a result whose ``isError`` is true and
+  one fixed text: ``The service is temporarily unavailable. Try again
+  shortly.`` (a transient ``DbError``, ``DeletionInProgress``, a token-store
+  fault); ``A change was saved, but the tool did not finish. Check the
+  current state before calling it again.`` (``DbErrorAfterWrite``); ``The
+  request could not be stored. Trying again will not help.`` (a permanent
+  backend error, ``AttributeKeyCollision``); ``That address already belongs
+  to another account. Use a different one.`` (``CreatorTaken``); ``The tool
+  failed. The error was logged.`` (any other exception). The exception's own
+  text goes to the log only, in one line that names the tool. A fault
+  outside the hook call (authentication, the permission check,
+  ``initialize``, ``tools/list`` and every other method) answers as before.
+  **Behavior change:** a client or test that matched ``-32603``, ``Tool
+  execution failed`` or HTTP 503 on ``tools/call`` should read
+  ``result.isError`` and the text; a tool that raised an exception to tell
+  the model what was wrong should raise ``ToolError`` (below); a 5xx alarm
+  on ``/mcp`` no longer sees a fault inside a tool, so alert on the ERROR
+  line ``Tool '<name>' failed ...``; and because a model that reads "try
+  again" calls the tool again, a tool that writes more than once must be
+  safe to repeat. See ``docs/guides/mcp-applications.rst`` ("When a Tool
+  Fails").
+- **Breaking: the other MCP error answers no longer carry exception text.**
+  A ``prompts/get`` or ``resources/read`` hook that raised, and an
+  unexpected error in the MCP handler, answered ``-32603`` with the
+  exception's own text (``Prompt generation failed: ...``, ``Resource read
+  failed: ...``, ``Internal error: ...``). The code is unchanged; the
+  message is now the fixed part alone (``Prompt generation failed`` on both
+  integrations, where FastAPI said ``Prompt execution failed``; ``Resource
+  read failed`` where a failing resource hook said ``Resource execution
+  failed``), and the exception is logged with a traceback. A hook that
+  wraps a store fault in its own exception (``raise ... from e``) gets the
+  fault's 503 or 500 where it got the wrapper's text. **Behavior change:**
+  code that read the exception text from these errors finds it in the log.
+- **Breaking: an attribute key another bucket holds answers 500, not 503.**
+  ``AttributeKeyCollision`` subclasses ``DbError`` and had no answer of its
+  own, so a route that met one answered 503 with ``Retry-After: 5``, though
+  a retry meets the same row. It now answers 500 with ``{"error":
+  "internal_error"}`` and no ``Retry-After``. **Behavior change:** a client
+  that retried on this 503 stops; the application's bucket and attribute
+  names are what to fix (bucket ``a`` name ``b:c`` and bucket ``a:b`` name
+  ``c`` share a key).
+
+ADDED
+~~~~~
+
+- **An MCP tool can tell the model what went wrong.** ``raise
+  ToolError("A note needs a title.")`` (``from actingweb.mcp import
+  ToolError``) answers ``tools/call`` with an ``isError`` result whose text
+  is the message, exactly as written. It is the one exception whose text is
+  sent, so the author vouches for it: no identifier or stored value the
+  caller may not read. A ``ToolError`` raised for a store fault (``raise
+  ToolError(...) from e``, or inside the ``except`` block) still logs the
+  fault, at ERROR for an outage, in a line that starts ``Tool '<name>'
+  failed with a store fault``. The same hook serves
+  ``/<actor_id>/actions/<name>``: there a ``ToolError`` answers 400 with
+  ``{"error": "<message>"}`` on ``GET``, ``POST``, ``PUT`` and ``DELETE``,
+  no other hook runs for the call, and a store fault behind it is logged as
+  ``Action '<name>' failed with a store fault``. Before, any exception from
+  an action hook other than a store fault was logged and the wildcard hook
+  was tried; when no hook answered, the answer had no body: 400 for
+  ``POST`` and ``PUT``, 404 for ``GET``, 403 for ``DELETE`` (still so for
+  every other exception). **Behavior change:**
+  ``HookRegistry.execute_action_hooks()`` and
+  ``execute_action_hooks_async()`` raise a hook's ``ToolError`` where they
+  returned ``None`` (or the wildcard hook's result), so a test or route
+  that calls them directly for a hook that raises it should expect the
+  exception.
+- **A conditional attribute update can raise on a fault.**
+  ``Attributes.conditional_update_attr(..., strict=True)`` raises
+  ``DbError`` when the store faulted, so ``False`` is left to mean that the
+  condition lost. The default is unchanged (``False`` for both, where a
+  caller makes its own ``get_attr_strict`` read to tell them apart). The
+  ``DbError`` is chained to the backend's exception, so a fault a retry
+  cannot fix classifies as permanent; a value JSON cannot order or encode
+  (``old_data`` with mixed key types, say) raises ``TypeError`` or
+  ``ValueError`` before the store is touched, as the caller's error. The default is ``False``, unlike the
+  reads' ``strict``. A ``False`` is still not proof that the write did not
+  land (a write whose answer was lost and whose retry met its own value); a
+  caller that must know puts a value unique to the call in ``new_data``. A
+  custom attribute backend is passed ``strict`` only when a caller asks for
+  it, and must accept the keyword to support that caller.
+- **Code in front of** ``/mcp`` **can ask whether a token is cached.**
+  ``actingweb.mcp.is_token_cached(token, config)`` answers whether this
+  process holds a fresh MCP token-cache entry for the token, by the
+  handler's own rule, without reading a store or changing an entry.
+  Middleware that had to know read the private
+  ``handlers.mcp._token_cache``. It is advisory: true does not authorize
+  (the handler still loads the actor and its trust), and false means "not
+  cached in this process", which is every token on a cold instance, never
+  "invalid". ``actingweb.mcp.cached_token_actor_id(token, config)`` answers
+  by the same rule which actor the entry belongs to, or ``None``: for a
+  guard that must check the account (a suspension, say) when the token
+  store says "invalid" or cannot be read and the handler would still serve
+  the token from its cache. It exposes nothing else of the entry.
+- **An application can classify a store fault.**
+  ``actingweb.faults.classify_fault(exc)`` returns the fault's class
+  (``FaultClass.RETRYABLE``, ``STORED``, ``PERMANENT`` or ``CONFLICT``) and
+  the seconds to wait before a retry, or ``None`` when the exception is not
+  a store fault; it follows ``raise ... from`` as the integrations do. The
+  integrations' HTTP answers are derived from it. Before, a webhook, a
+  WebSocket handler or a background job that built its own answer had to
+  import the private ``interface/integrations/_errors`` to tell a
+  retryable fault from a permanent one.
+
+FIXED
+~~~~~
+
+- **The authorization redirect broke a redirect URI that has a query.** The
+  code was joined with a bare ``?``, so a client registered with
+  ``https://client.example/cb?tenant=a`` was sent to
+  ``...cb?tenant=a?code=...``: its ``code`` and ``state`` landed inside the
+  value of its last parameter, and the sign-in failed at the client. The
+  denial redirect picked ``&`` by looking for ``?`` anywhere in the URI,
+  which a fragment defeats. Both now append to the URI's query and leave
+  the rest of it byte for byte as registered, a fragment after the query.
+  A redirect URI without a query gets the same URL as before. **Behavior
+  change:** a client whose registered redirect URI has a query or a
+  fragment receives ``code`` and ``state`` as query parameters of their
+  own; one that worked around the old URL by parsing them out of its last
+  parameter's value should read them directly.
+- **A list lookup could hide a programming error behind "no such list".**
+  ``PropertyListStore.exists()`` answered ``False`` and ``list_all()``
+  logged and returned what it had for any exception that was not a store
+  fault (a ``DbError`` already propagated). They now let it through.
+  **Behavior change:** an unexpected exception under either call reaches
+  the caller, and over HTTP answers 500, where the list read as absent.
+
 v4.0.0rc2: November 21, 2026
 ----------------------------
 

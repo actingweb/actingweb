@@ -384,6 +384,27 @@ Event Details
     registered hook, and again only when one of them raised ``DbError``, so
     write it to be idempotent.
 
+    **Reading** ``actor.store`` **here.** ``actor.store.<name>`` never
+    raises: when its bucket could not be read, every name reads as ``None``.
+    A hook that acts on an absent value (nothing to revoke, nothing to
+    cancel) must tell "not set" from "could not read" with
+    ``actor.store.loaded``, which is ``False`` after a failed read:
+
+    .. code-block:: python
+
+        from actingweb.db.exceptions import DbError
+
+        @app.lifecycle_hook("actor_deleted")
+        def remember_what_to_revoke(actor, **kwargs):
+            token = actor.store.provider_refresh_token
+            if not actor.store.loaded:
+                # Not "no token": the store did not answer. Raising DbError
+                # stops the deletion here; it is resumed and this hook runs
+                # again.
+                raise DbError("provider token read", actor.id)
+            if token:
+                queue_revocation(actor.id, token)
+
 ``actor_adopted``
     Triggered once per adoption, on the **surviving** actor, after a sign-in
     that proved the creator address (a provider login or the emailed

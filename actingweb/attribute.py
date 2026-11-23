@@ -1,3 +1,4 @@
+import inspect
 import logging
 import weakref
 from typing import Any, cast
@@ -498,6 +499,8 @@ class Attributes:
         new_data: Any | None = None,
         timestamp: Any | None = None,
         ttl_seconds: int | None = None,
+        *,
+        strict: bool = False,
     ) -> bool:
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -510,11 +513,35 @@ class Attributes:
             timestamp: Optional timestamp
             ttl_seconds: When given, the same write sets the row's storage TTL.
                 Unlike ``set_attr`` it never re-creates a row that is gone.
+            strict: Raise ``DbError`` on a store fault (4.0). The default is
+                ``False``, unlike the reads' ``strict=True``: see Returns.
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise.
-            Both backends also answer False on a fault; a caller that must tell
-            the two apart re-reads with the backend's ``get_attr_strict``.
+
+            By default both backends also answer False on a fault; a caller
+            that must tell the two apart re-reads with the backend's
+            ``get_attr_strict``. With ``strict=True`` the backend raises
+            ``DbError`` for a fault, and False means the condition did not
+            hold: the row holds something other than ``old_data``, there is
+            no row, or another bucket holds the key.
+
+            One False is not a lost race, in either mode: a write that
+            landed and whose answer was lost can be retried by the database
+            client, and the retry then finds its own ``new_data`` and fails
+            the condition. A caller that must know puts a value unique to
+            the call in ``new_data`` and reads the row after a False.
+
+        Raises:
+            TypeError, ValueError: only with ``strict=True``, for a value
+                JSON cannot order or encode (the caller's error, raised
+                before the store is touched).
+            DbError: only with ``strict=True``, when the store faulted,
+                chained to the backend's exception. The write may or may not
+                have landed; read the row before repeating it.
+            TypeError: also when a custom backend's
+                ``conditional_update_attr`` does not take ``strict``; the
+                message says what to add.
         """
         if not self.actor_id or not self.bucket or not name:
             return False
@@ -526,6 +553,21 @@ class Attributes:
         ttl_kwargs: dict[str, Any] = (
             {"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}
         )
+        if strict:
+            # Asked before the call, by signature: catching the backend's
+            # TypeError would also catch the one strict raises for a value
+            # that cannot be compared.
+            accepted = inspect.signature(self.dbprop.conditional_update_attr).parameters
+            if "strict" not in accepted and not any(
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()
+            ):
+                raise TypeError(
+                    f"{type(self.dbprop).__name__}.conditional_update_attr() "
+                    "does not support strict=True: add a keyword-only "
+                    "'strict: bool = False' that raises DbError on a fault "
+                    "(see docs/reference/database-backends.rst)"
+                )
+            ttl_kwargs["strict"] = True
         # Use the database backend's atomic conditional update
         success = self.dbprop.conditional_update_attr(
             actor_id=self.actor_id,

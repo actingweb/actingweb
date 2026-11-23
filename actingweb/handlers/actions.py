@@ -5,21 +5,67 @@ Actions are trigger-based functions that execute external events or operations.
 GET returns action status, PUT/POST executes the action.
 """
 
+import functools
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from actingweb import auth
 from actingweb.handlers import base_handler
 
 from ..access_decision import listable_names, named_route_allows, peer_of
+from ..mcp.errors import ToolError
 from ..permission_evaluator import PermissionType, get_permission_evaluator
 
 logger = logging.getLogger(__name__)
 
 
+def answers_tool_error(method: Callable[..., None]) -> Callable[..., None]:
+    """Answer a ``ToolError`` raised by the action hook with 400 and its
+    message (4.0).
+
+    An action hook exposed as an MCP tool raises ``ToolError`` to say what
+    is wrong with the call. Over MCP that is the text of an ``isError``
+    result; here it is ``{"error": "<message>"}``. The hook runner lets it
+    through, so no later hook acts on what this one refused.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "ActionsHandler", actor_id: str, name: str = "") -> None:
+        try:
+            method(self, actor_id, name)
+        except ToolError as e:
+            self._answer_tool_error(e, name)
+
+    return wrapper
+
+
 class ActionsHandler(base_handler.BaseHandler):
     """Handler for /<actor_id>/actions endpoint."""
+
+    def _answer_tool_error(self, exc: ToolError, name: str = "") -> None:
+        """400 with the hook author's message; see ``answers_tool_error``.
+
+        A ``ToolError`` raised for a store fault keeps the author's answer
+        and logs the fault as the MCP route does, so an outage an author
+        translated stays visible.
+        """
+        from ..mcp.errors import fault_behind, fault_log_level
+
+        behind = fault_behind(exc)
+        if behind is not None:
+            logger.log(
+                fault_log_level(behind),
+                f"Action '{name}' failed with a store fault ({behind.kind}): "
+                f"{str(behind.error)!r}; the hook reported {str(exc)!r}",
+            )
+        else:
+            logger.info(f"Action '{name}' refused the call: {str(exc)!r}")
+        if self.response:
+            self.response.set_status(400, "Bad request")
+            self.response.headers["Content-Type"] = "application/json"
+            self.response.write(json.dumps({"error": str(exc) or "The action failed"}))
 
     def _check_action_permission(
         self, actor_id: str, auth_obj: Any, action_name: str, method: str = "POST"
@@ -69,6 +115,7 @@ class ActionsHandler(base_handler.BaseHandler):
             "method": getattr(self, "_request_method", None),
         }
 
+    @answers_tool_error
     def get(self, actor_id: str, name: str = "") -> None:
         """
         Handle GET requests to actions endpoint.
@@ -131,6 +178,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(404, "Not found")
 
+    @answers_tool_error
     def post(self, actor_id: str, name: str = "") -> None:
         """
         Handle POST requests to actions endpoint.
@@ -193,6 +241,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Processing error")
 
+    @answers_tool_error
     def put(self, actor_id: str, name: str = "") -> None:
         """
         Handle PUT requests to actions endpoint.
@@ -255,6 +304,7 @@ class ActionsHandler(base_handler.BaseHandler):
             if self.response:
                 self.response.set_status(400, "Processing error")
 
+    @answers_tool_error
     def delete(self, actor_id: str, name: str = "") -> None:
         """
         Handle DELETE requests to actions endpoint.

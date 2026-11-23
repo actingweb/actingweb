@@ -140,10 +140,7 @@ class AsyncMCPHandler(MCPHandler):
         except DbError as e:  # folds DbError: answered by _db_fault_response
             return self._db_fault_response(data.get("id"), e)
         except Exception as e:
-            logger.error(f"Error handling MCP POST request: {e}")
-            return self._create_jsonrpc_error(
-                data.get("id"), -32603, f"Internal error: {str(e)}"
-            )
+            return self._failure_response(data.get("id"), "Internal error", e)
 
     async def _handle_tool_call_async(
         self, request_id: Any, params: dict[str, Any], actor: Any
@@ -228,26 +225,24 @@ class AsyncMCPHandler(MCPHandler):
                                     result = await hook(actor, action_name, arguments)
                                 else:
                                     result = hook(actor, action_name, arguments)
-
-                                return {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "result": format_call_tool_result(
-                                        result,
-                                        self._negotiated_version,
-                                        output_schema=metadata.get("output_schema"),
-                                        tool_name=tool_name,
-                                    ),
-                                }
-                            except DbError:
-                                raise
-                            except Exception as e:
-                                logger.error(f"Error executing tool {tool_name}: {e}")
-                                return self._create_jsonrpc_error(
-                                    request_id,
-                                    -32603,
-                                    f"Tool execution failed: {str(e)}",
+                            except Exception as e:  # folds DbError: a tool result
+                                return self._tool_failure_result(
+                                    request_id, str(tool_name), e
                                 )
+                            # Formatted outside the try: the tool ran (and
+                            # may have written), so a result that cannot be
+                            # formatted is the server's error, not a failure
+                            # the model should answer by calling it again.
+                            return {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "result": format_call_tool_result(
+                                    result,
+                                    self._negotiated_version,
+                                    output_schema=metadata.get("output_schema"),
+                                    tool_name=tool_name,
+                                ),
+                            }
 
         return self._create_jsonrpc_error(
             request_id, -32601, f"Tool not found: {tool_name}"
@@ -363,13 +358,11 @@ class AsyncMCPHandler(MCPHandler):
                             except DbError:
                                 raise
                             except Exception as e:
-                                logger.error(
-                                    f"Error executing prompt {prompt_name}: {e}"
-                                )
-                                return self._create_jsonrpc_error(
+                                return self._failure_response(
                                     request_id,
-                                    -32603,
-                                    f"Prompt execution failed: {str(e)}",
+                                    "Prompt generation failed",
+                                    e,
+                                    what=f"prompt {prompt_name!r}",
                                 )
 
         return self._create_jsonrpc_error(
@@ -467,11 +460,8 @@ class AsyncMCPHandler(MCPHandler):
             except DbError as e:  # folds DbError: answered by _db_fault_response
                 return self._db_fault_response(request_id, e)
             except Exception as e:
-                logger.error(f"Error executing resource read for {uri}: {e}")
-                return self._create_jsonrpc_error(
-                    request_id,
-                    -32603,
-                    f"Resource read failed: {str(e)}",
+                return self._failure_response(
+                    request_id, "Resource read failed", e, what=f"resource {uri!r}"
                 )
 
         return self._create_jsonrpc_error(

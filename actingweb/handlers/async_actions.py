@@ -6,13 +6,33 @@ with FastAPI and other async frameworks. It properly awaits async hooks
 without thread pool overhead.
 """
 
+import functools
 import json
 import logging
+from collections.abc import Awaitable, Callable
 
 from actingweb import auth
 from actingweb.handlers.actions import ActionsHandler
+from actingweb.mcp.errors import ToolError
 
 logger = logging.getLogger(__name__)
+
+
+def answers_tool_error_async(
+    method: Callable[..., Awaitable[None]],
+) -> Callable[..., Awaitable[None]]:
+    """The async twin of ``actions.answers_tool_error``."""
+
+    @functools.wraps(method)
+    async def wrapper(
+        self: "AsyncActionsHandler", actor_id: str, name: str = ""
+    ) -> None:
+        try:
+            await method(self, actor_id, name)
+        except ToolError as e:
+            self._answer_tool_error(e, name)
+
+    return wrapper
 
 
 class AsyncActionsHandler(ActionsHandler):
@@ -24,6 +44,7 @@ class AsyncActionsHandler(ActionsHandler):
     Inherits all synchronous methods from ActionsHandler for backward compatibility.
     """
 
+    @answers_tool_error_async
     async def get_async(self, actor_id: str, name: str = "") -> None:
         """
         Handle GET requests to actions endpoint asynchronously.
@@ -87,6 +108,7 @@ class AsyncActionsHandler(ActionsHandler):
             if self.response:
                 self.response.set_status(404, "Not found")
 
+    @answers_tool_error_async
     async def post_async(self, actor_id: str, name: str = "") -> None:
         """
         Handle POST requests to actions endpoint asynchronously.
@@ -150,6 +172,7 @@ class AsyncActionsHandler(ActionsHandler):
             if self.response:
                 self.response.set_status(400, "Processing error")
 
+    @answers_tool_error_async
     async def put_async(self, actor_id: str, name: str = "") -> None:
         """
         Handle PUT requests to actions endpoint asynchronously.
@@ -213,6 +236,7 @@ class AsyncActionsHandler(ActionsHandler):
             if self.response:
                 self.response.set_status(400, "Processing error")
 
+    @answers_tool_error_async
     async def delete_async(self, actor_id: str, name: str = "") -> None:
         """
         Handle DELETE requests to actions endpoint asynchronously.

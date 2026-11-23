@@ -26,14 +26,21 @@ CHAIN_SCAN_WARN_ROWS = 1000
 logger = logging.getLogger(__name__)
 
 
+def _is_expected_miss(e: Exception) -> bool:
+    """Whether a conditional operation failed because no row exists or its
+    condition did not hold, as opposed to a fault."""
+    return (
+        isinstance(e, DoesNotExist)
+        or getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException"
+    )
+
+
 def _log_unexpected(op: str, bucket: str, name: str, e: Exception) -> None:
     """Log a conditional operation's failure unless it is the expected miss
     (no row, or the condition failed): the method answers False either way,
     and a throttle or network fault must not be silent (it would read as "a
     concurrent caller won")."""
-    if isinstance(e, DoesNotExist):
-        return
-    if getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException":
+    if _is_expected_miss(e):
         return
     logger.warning(f"{op} on {bucket}:{name} failed: {type(e).__name__}: {e}")
 
@@ -341,6 +348,7 @@ class DbAttribute:
         ttl_seconds=None,
         *,
         clear_ttl=False,
+        strict=False,
     ):  # type: ignore[misc]
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -363,9 +371,12 @@ class DbAttribute:
             clear_ttl: the same conditional update removes the row's
                 ``ttl_timestamp`` (it then never expires); ignored when
                 ``ttl_seconds`` is given
+            strict: raise ``DbError`` for a fault (4.0); a missing row and
+                a failed condition still answer False
 
         Returns:
-            True if update succeeded (current matched old_data), False otherwise
+            True if update succeeded (current matched old_data), False
+            otherwise; without ``strict`` also for a fault
         """
         require_json(new_data, "attribute data")
         if not actor_id or not bucket or not name:
@@ -378,6 +389,14 @@ class DbAttribute:
 
         old_data = sanitize_json_data(old_data, log_source="attribute")
         new_data = sanitize_json_data(new_data, log_source="attribute")
+
+        if strict:
+            # The caller's values are checked before the store is touched:
+            # an exception inside the try below is then the store's, and a
+            # value JSON cannot order or encode is the caller's TypeError or
+            # ValueError, not an outage to be retried forever.
+            normalize_json(old_data)
+            normalize_json(new_data)
 
         try:
             # Get current item with consistent read
@@ -418,6 +437,8 @@ class DbAttribute:
         except Exception as e:
             # Item doesn't exist or condition check failed (race condition)
             _log_unexpected("conditional_update_attr", bucket, name, e)
+            if strict and not _is_expected_miss(e):
+                raise DbError("attribute conditional update", actor_id) from e
             return False
 
     @staticmethod

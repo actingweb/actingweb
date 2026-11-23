@@ -100,6 +100,23 @@ class TestFlask:
         assert "Retry-After" not in response.headers
         assert response.get_json()["error"] == "conflict"
 
+    def test_a_key_collision_answers_500_without_retry_after(self) -> None:
+        """A retry meets the same row: it answered 503 with Retry-After in
+        4.0.0rc2."""
+        from actingweb.db.exceptions import AttributeKeyCollision
+
+        app, client = self._client()
+
+        @app.route("/custom-collision")
+        def custom_collision() -> str:  # pyright: ignore[reportUnusedFunction]
+            raise AttributeKeyCollision("a", "b:c", ACTOR_ID)
+
+        response = client.get("/custom-collision")
+        assert response.status_code == 500
+        assert "Retry-After" not in response.headers
+        assert response.get_json()["error"] == "internal_error"
+        assert ACTOR_ID not in response.get_data(as_text=True)
+
     def test_a_bug_while_handling_a_fault_answers_500(self) -> None:
         # Raised inside ``except DbError`` without ``from``: the DbError is
         # only its __context__, so it is a bug, not an availability fault.
@@ -159,6 +176,22 @@ class TestFastAPI:
         response = client.get("/custom-conflict")
         assert response.status_code == 409
         assert response.json()["error"] == "conflict"
+
+    def test_a_key_collision_answers_500_without_retry_after(self) -> None:
+        from actingweb.db.exceptions import AttributeKeyCollision
+
+        app = FastAPI()
+
+        @app.get("/custom-collision")
+        async def custom_collision() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+            raise AttributeKeyCollision("a", "b:c", ACTOR_ID)
+
+        _app, client = self._client(app)
+        response = client.get("/custom-collision")
+        assert response.status_code == 500
+        assert "Retry-After" not in response.headers
+        assert response.json()["error"] == "internal_error"
+        assert ACTOR_ID not in response.text
 
     def test_a_bug_while_handling_a_fault_answers_500(self) -> None:
         app = FastAPI()

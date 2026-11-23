@@ -28,7 +28,7 @@ https://actingweb.readthedocs.io/en/latest/docs/reference/hooks-reference.html
 for the real signatures.
 """
 
-__version__ = "4.0.0rc2"
+__version__ = "4.0.0rc3"
 
 # Modules below are lazy-loaded on-demand (`from actingweb import actor`,
 # etc.). Most are here for backward compatibility with pre-3.x code and are

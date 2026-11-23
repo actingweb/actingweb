@@ -1,7 +1,9 @@
 ---
-status: active
+status: done
 approved: 2026-11-23 by Greger Wedel
 iterations: thoughts/plans/2026-11-23-emm-4-0-rc2-production-observations.iterations.md
+verified: thoughts/verifications/2026-11-23-emm-4-0-rc2-production-observations-2.md
+spec_merged: 2026-11-23
 ---
 
 # Implementation Plan: 4.0.0rc3 — a failing tool answers the model, and a consumer's rc2 findings
@@ -585,7 +587,7 @@ Notes:
 ### Verification
 
 - [x] Run the contract's `### Checks` fast tier verbatim
-- [ ] The Full tier, both backends, and the docs build
+- [x] The Full tier, both backends, and the docs build
 
 ### Implementation Status: Complete
 
@@ -632,3 +634,41 @@ Notes:
 - Whether an MCP client that validates `structuredContent` against a declared `outputSchema` skips the check for `isError: true`.
 - Whether a peer's callback sender treats this actor's 500 for a key collision differently from a 503.
 - A tool built on an authenticated view logs ERROR with a traceback per `PermissionError`, which a peer can trigger at will.
+
+## Implementation Summary
+
+**Completed:** 2026-11-23
+**All phases:** Complete
+**Test status:** All passing. Full tier on `cf52f9d`: DynamoDB 8635 passed,
+PostgreSQL 8386 passed, docs build clean. On the tip `c1f08ce`: the fast
+tier (6705 passed) and the strict-mode tests on PostgreSQL; CI runs the
+full matrix.
+
+### Deviations from Plan
+
+- The plan was approved and Phase 1 begun before its evaluators returned.
+  Their findings changed the tool texts, added `ToolError`, gave the other
+  MCP error answers fixed text, and dropped the deletion record (owner,
+  2026-11-23, each).
+- Strict mode was built in the `Attributes` wrapper (the outside voice's
+  advice, folded into the plan), found wrong by the first verification, and
+  rebuilt in the backends as the plan first said (iterations 1, 9, 11).
+- The verification loop added behaviour: `ToolError` on the REST
+  `/actions` route, and `execute_action_hooks()` raising it (iterations 2,
+  8, 10).
+- One commit for the three phases, where this repository's habit is a
+  commit per phase with the Full tier before each: the phases shared files
+  and were implemented in one pass. The Full tier ran after Phase 1
+  (DynamoDB), after all three (both backends), and after iterations 7 to 10
+  (both backends).
+
+### Learnings
+
+- A new public name added after the plan's evaluation gets the least
+  review and produced the most findings (`ToolError`: three Medium).
+- A re-read above the backend cannot stand in for the backend's knowledge
+  of why a write did not happen; the eleven library call sites that re-read
+  each carry a nonce or accept the ambiguity, which is why they work.
+- Classify an exception by where it arose, not by its type.
+- The sync MCP handler does not await an `async def` tool hook
+  (`todo/sync-mcp-handler-does-not-await-async-tool-hooks.md`).

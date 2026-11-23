@@ -2,7 +2,7 @@
 
 **Status:** partial (covers: behaviour changed since 2026-11-19)
 **Reviewed:** 2026-11-19 by Greger Wedel (with the plan)
-**Last changed:** 2026-11-20 by thoughts/plans/2026-11-19-emm-4-0-adoption-findings.md
+**Last changed:** 2026-11-23 by thoughts/plans/2026-11-23-emm-4-0-rc2-production-observations.md
 **ID prefix:** PLS
 
 ## Summary
@@ -14,8 +14,9 @@ faults, the stored-format rule and the item ceiling.
 ## Faults
 
 - **PLS-1** — When the store faults under `exists()`, `list_all()` or
-  `list_all_with_rows()`, on either store, `DbError` is raised. [plan+test]
-  `tests/test_db_fault_callers.py::TestListStoreLookups`, `tests/test_list_prefix_with_rows.py`, `tests/test_attribute_list_store.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-8, AC-21, AC-44)
+  `list_all_with_rows()`, on either store, `DbError` is raised. Any other
+  exception propagates unchanged. [plan+test]
+  `tests/test_db_fault_callers.py::TestListStoreLookups`, `tests/test_list_prefix_with_rows.py`, `tests/test_attribute_list_store.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-8, AC-21, AC-44; plans/2026-11-23-emm-4-0-rc2-production-observations.md, AC-14)
 - **PLS-2** — When a write is stored and a later step faults, the exception
   is `DbErrorAfterWrite` (503 `stored_not_notified`, no `Retry-After`): the
   value is stored, its diff is not registered. [plan+test] `tests/test_db_error_after_write.py` (plans/2026-11-19-emm-4-0-adoption-findings.md, AC-22)

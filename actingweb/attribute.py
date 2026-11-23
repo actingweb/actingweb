@@ -1,3 +1,4 @@
+import inspect
 import logging
 import weakref
 from typing import Any, cast
@@ -537,9 +538,10 @@ class Attributes:
                 before the store is touched).
             DbError: only with ``strict=True``, when the store faulted,
                 chained to the backend's exception. The write may or may not
-                have landed; read the row before repeating it. A backend
-                written without the keyword raises ``TypeError`` when asked
-                for it.
+                have landed; read the row before repeating it.
+            TypeError: also when a custom backend's
+                ``conditional_update_attr`` does not take ``strict``; the
+                message says what to add.
         """
         if not self.actor_id or not self.bucket or not name:
             return False
@@ -552,6 +554,19 @@ class Attributes:
             {"ttl_seconds": ttl_seconds} if ttl_seconds is not None else {}
         )
         if strict:
+            # Asked before the call, by signature: catching the backend's
+            # TypeError would also catch the one strict raises for a value
+            # that cannot be compared.
+            accepted = inspect.signature(self.dbprop.conditional_update_attr).parameters
+            if "strict" not in accepted and not any(
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values()
+            ):
+                raise TypeError(
+                    f"{type(self.dbprop).__name__}.conditional_update_attr() "
+                    "does not support strict=True: add a keyword-only "
+                    "'strict: bool = False' that raises DbError on a fault "
+                    "(see docs/reference/database-backends.rst)"
+                )
             ttl_kwargs["strict"] = True
         # Use the database backend's atomic conditional update
         success = self.dbprop.conditional_update_attr(

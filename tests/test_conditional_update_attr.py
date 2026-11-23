@@ -943,3 +943,47 @@ class TestStrictConditionalUpdate:
                 )
         assert "strict" not in seen[0]
         assert seen[1]["strict"] is True
+
+
+class TestStrictOnABackendWithoutIt:
+    """A custom attribute backend written before ``strict`` (PR 188 review)."""
+
+    def test_asking_for_strict_says_what_is_missing(self) -> None:
+        """The backend's own ``TypeError`` ("unexpected keyword argument")
+        reads like a bug in the library; the caller is told what to do."""
+        from unittest.mock import patch
+
+        from actingweb.attribute import Attributes
+        from actingweb.db import get_attribute
+
+        config = Config(unique_creator=False)
+        attrs = Attributes(actor_id="a1", bucket="b", config=config)
+        calls: list[str] = []
+
+        def old_backend(
+            actor_id: Any = None,
+            bucket: Any = None,
+            name: Any = None,
+            old_data: Any = None,
+            new_data: Any = None,
+            timestamp: Any = None,
+            ttl_seconds: Any = None,
+        ) -> bool:
+            calls.append(name)
+            return False
+
+        db = get_attribute(config)
+        with patch.object(
+            type(db), "conditional_update_attr", staticmethod(old_backend)
+        ):
+            with pytest.raises(TypeError, match="does not support strict=True"):
+                attrs.conditional_update_attr(
+                    name="row", old_data=1, new_data=2, strict=True
+                )
+            assert calls == []
+            # Without strict the same backend serves the call as before.
+            assert (
+                attrs.conditional_update_attr(name="row", old_data=1, new_data=2)
+                is False
+            )
+        assert calls == ["row"]

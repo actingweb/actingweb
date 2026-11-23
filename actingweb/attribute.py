@@ -498,6 +498,8 @@ class Attributes:
         new_data: Any | None = None,
         timestamp: Any | None = None,
         ttl_seconds: int | None = None,
+        *,
+        strict: bool = False,
     ) -> bool:
         """Conditionally update an attribute only if current data matches old_data.
 
@@ -510,11 +512,26 @@ class Attributes:
             timestamp: Optional timestamp
             ttl_seconds: When given, the same write sets the row's storage TTL.
                 Unlike ``set_attr`` it never re-creates a row that is gone.
+            strict: Raise ``DbError`` on a store fault (4.0). The default is
+                ``False``, unlike the reads' ``strict=True``: see Returns.
 
         Returns:
             True if update succeeded (current matched old_data), False otherwise.
-            Both backends also answer False on a fault; a caller that must tell
-            the two apart re-reads with the backend's ``get_attr_strict``.
+
+            By default both backends also answer False on a fault; a caller
+            that must tell the two apart re-reads with the backend's
+            ``get_attr_strict``. With ``strict=True`` that re-read is done
+            here after a False: a row that still holds ``old_data`` was not
+            changed by anyone, so the write faulted and ``DbError`` is
+            raised; a row that holds ``new_data`` counts as written (the
+            write landed and its answer was lost) and answers True. False
+            then means the condition lost: another writer changed the row,
+            there is no live row, or another bucket holds the key.
+
+        Raises:
+            DbError: only with ``strict=True``, when the store faulted. When
+                the re-read itself could not be made, the row may or may not
+                hold ``new_data``; read it again before repeating the write.
         """
         if not self.actor_id or not self.bucket or not name:
             return False
@@ -537,6 +554,9 @@ class Attributes:
             **ttl_kwargs,
         )
 
+        if not success and strict:
+            success = self._confirm_conditional_update(name, old_data, new_data)
+
         # Update local cache only if successful
         if success:
             if self.data is None:
@@ -550,6 +570,36 @@ class Attributes:
             attr_data["timestamp"] = timestamp
 
         return success
+
+    def _confirm_conditional_update(
+        self, name: str, old_data: Any, new_data: Any
+    ) -> bool:
+        """What a False from the backend's conditional update meant
+        (``strict=True``): the library's own callers make the same strict
+        re-read to tell a lost condition from a fault.
+
+        Raises ``DbError`` when the row is unchanged (nobody else wrote, so
+        the write faulted) or cannot be read. Returns True when the row
+        holds ``new_data``, False for a lost condition or no live row.
+        """
+        from actingweb.db.exceptions import DbError
+        from actingweb.db.utils import sanitize_json_data
+
+        assert self.dbprop is not None
+        row = self.dbprop.get_attr_strict(
+            actor_id=self.actor_id, bucket=self.bucket, name=name
+        )
+        if row is None:
+            return False
+        current = row.get("data")
+        # Compare what the backends compare: the sanitized values.
+        old = sanitize_json_data(old_data, log_source="attribute")
+        new = sanitize_json_data(new_data, log_source="attribute")
+        if current == new and new != old:
+            return True
+        if current == old:
+            raise DbError("attribute conditional update", self.actor_id)
+        return False
 
     def create_attr_if_absent(
         self,

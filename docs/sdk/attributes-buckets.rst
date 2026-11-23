@@ -49,6 +49,17 @@ Global Storage
    )
    global_config.set_attr(name="maintenance_mode", data=False)
 
+``actor.store`` and a failed read
+---------------------------------
+
+``Attributes.get_bucket()`` and ``get_attr()`` raise ``DbError`` when the
+backend cannot answer. ``actor.store`` (the actor's ``_internal`` bucket) is
+the one wrapper that does not: ``actor.store.<name>`` reads ``None`` for a
+name that is not set *and* for a bucket that could not be read, and
+``actor.store.loaded`` is ``False`` in the second case. Check ``loaded``
+before acting on an absent value; the hooks reference shows the pattern under
+``actor_deleted``.
+
 Atomic Operations (v3.8.2+)
 ---------------------------
 
@@ -102,10 +113,29 @@ requests might modify the same attribute simultaneously.
 - **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data`` for atomic compare-and-swap
 - **DynamoDB**: Uses conditional update expressions with ``condition=(Attribute.data == old_data)``
 - Returns ``True`` only if the current database value exactly matches ``old_data``
-- Returns ``False`` if value was modified by another request (no update performed),
-  and also if the backend faulted: a caller that must tell the two apart re-reads with
-  the backend's ``get_attr_strict``. (``create_attr_if_absent`` below raises ``DbError``
-  on a fault instead.)
+- Returns ``False`` if value was modified by another request (no update performed).
+- **By default it also returns** ``False`` **if the backend faulted.** Pass
+  ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead: after a
+  ``False`` the call re-reads the row, raises when it still holds ``old_data`` (nobody
+  else wrote, so the write faulted), and returns ``True`` when it holds ``new_data``
+  (the write landed and its answer was lost). Unlike the reads, whose ``strict``
+  defaults to ``True``, the default here is ``False``: an existing caller keeps the
+  answer it had. After a ``DbError`` the row may hold either value; read it before
+  repeating the write. (``create_attr_if_absent`` below always raises ``DbError`` on
+  a fault.)
+
+.. code-block:: python
+
+   from actingweb.db.exceptions import DbError
+
+   try:
+       won = counters.conditional_update_attr(
+           name="visits", old_data=current, new_data=current + 1, strict=True
+       )
+   except DbError:
+       raise  # an outage: the integration answers 503
+   if not won:
+       ...  # a real lost race: read again and retry
 
 **Use Cases:**
 

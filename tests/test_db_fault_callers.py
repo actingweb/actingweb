@@ -399,3 +399,42 @@ class TestListStoreLookups:
         with seam_fault(config, "property", "Property", "get"), pytest.raises(DbError):
             store.exists("notes")
         assert store.exists("notes") is False
+
+    @pytest.mark.parametrize("method", ["exists", "list_all"])
+    def test_an_unexpected_exception_propagates(
+        self, config: Any, method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A store fault always propagated; anything else was folded to
+        ``False`` (``exists``) or logged and dropped (``list_all``), which
+        hid a programming error behind "no such list" (4.0.0rc3)."""
+        import actingweb.property as property_module
+        from actingweb.property import PropertyListStore
+
+        bug = RuntimeError("a bug, not a store fault")
+
+        def broken(_config: Any) -> Any:
+            raise bug
+
+        monkeypatch.setattr(property_module, "get_property", broken)
+        monkeypatch.setattr(property_module, "get_property_list", broken)
+        store = PropertyListStore(actor_id="actor-1", config=config)
+        with pytest.raises(RuntimeError) as raised:
+            store.exists("notes") if method == "exists" else store.list_all()
+        assert raised.value is bug
+
+    def test_the_ordinary_answers_are_unchanged(self, config: Any) -> None:
+        """Removing the broad handlers must not move what the two methods
+        answer without a config, for no list and for a list that exists."""
+        from actingweb.property import PropertyListStore
+
+        unconfigured = PropertyListStore(actor_id="actor-1", config=None)
+        assert unconfigured.exists("notes") is False
+        assert unconfigured.list_all() == []
+
+        actor = create_core_actor(config, uuid_email())
+        store = PropertyListStore(actor_id=aid(actor), config=config)
+        assert store.exists("notes") is False
+        assert store.list_all() == []
+        store.notes.append("one")
+        assert store.exists("notes") is True
+        assert store.list_all() == ["notes"]

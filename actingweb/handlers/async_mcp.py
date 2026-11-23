@@ -140,10 +140,7 @@ class AsyncMCPHandler(MCPHandler):
         except DbError as e:  # folds DbError: answered by _db_fault_response
             return self._db_fault_response(data.get("id"), e)
         except Exception as e:
-            logger.error(f"Error handling MCP POST request: {e}")
-            return self._create_jsonrpc_error(
-                data.get("id"), -32603, f"Internal error: {str(e)}"
-            )
+            return self._failure_response(data.get("id"), "Internal error", e)
 
     async def _handle_tool_call_async(
         self, request_id: Any, params: dict[str, Any], actor: Any
@@ -239,14 +236,9 @@ class AsyncMCPHandler(MCPHandler):
                                         tool_name=tool_name,
                                     ),
                                 }
-                            except DbError:
-                                raise
-                            except Exception as e:
-                                logger.error(f"Error executing tool {tool_name}: {e}")
-                                return self._create_jsonrpc_error(
-                                    request_id,
-                                    -32603,
-                                    f"Tool execution failed: {str(e)}",
+                            except Exception as e:  # folds DbError: a tool result
+                                return self._tool_failure_result(
+                                    request_id, str(tool_name), e
                                 )
 
         return self._create_jsonrpc_error(
@@ -363,13 +355,8 @@ class AsyncMCPHandler(MCPHandler):
                             except DbError:
                                 raise
                             except Exception as e:
-                                logger.error(
-                                    f"Error executing prompt {prompt_name}: {e}"
-                                )
-                                return self._create_jsonrpc_error(
-                                    request_id,
-                                    -32603,
-                                    f"Prompt execution failed: {str(e)}",
+                                return self._failure_response(
+                                    request_id, "Prompt generation failed", e
                                 )
 
         return self._create_jsonrpc_error(
@@ -467,12 +454,7 @@ class AsyncMCPHandler(MCPHandler):
             except DbError as e:  # folds DbError: answered by _db_fault_response
                 return self._db_fault_response(request_id, e)
             except Exception as e:
-                logger.error(f"Error executing resource read for {uri}: {e}")
-                return self._create_jsonrpc_error(
-                    request_id,
-                    -32603,
-                    f"Resource read failed: {str(e)}",
-                )
+                return self._failure_response(request_id, "Resource read failed", e)
 
         return self._create_jsonrpc_error(
             request_id, -32601, f"Resource not found: {uri}"

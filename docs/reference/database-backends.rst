@@ -568,7 +568,9 @@ Since 4.0 both backends answer a database fault the same way, and
   ``conditional_update_attr`` and the ``*_if_*`` methods answer True only
   when *this* call changed the row, which single-use consumption needs; a
   fault answers False for the two attribute methods (a caller tells the two
-  apart with ``get_attr_strict``). ``create_attr_if_absent`` is the one
+  apart with ``get_attr_strict``, or passes ``strict=True`` to
+  ``Attributes.conditional_update_attr``, which makes that read itself and
+  raises ``DbError``; the backend method is not passed the keyword). ``create_attr_if_absent`` is the one
   conditional write that **raises** ``DbError`` on a fault, because a retried
   create must tell a lost race from an outage. A custom ``DbAttribute`` backend
   implements it (see :doc:`../migration/v4.0`); two callers writing identical
@@ -597,7 +599,14 @@ Both integrations answer a ``DbError`` that reaches them with **503**,
 ``Retry-After: 5`` and a fixed body
 (``{"error": "temporarily_unavailable", ...}``); the exception text goes to
 the log only. A backend error a retry cannot fix (a validation, size or
-constraint error) answers **500** without ``Retry-After``. One refusal a
+constraint error, or an attribute key another bucket holds:
+``AttributeKeyCollision``) answers **500** without ``Retry-After``. Code
+that builds its own answer for a fault (a webhook, a WebSocket handler, a
+background job) asks ``actingweb.faults.classify_fault(exc)`` for the same
+classification: retryable (with the delay), stored, permanent or conflict,
+or ``None`` when the exception is not a store fault. Inside an MCP tool a
+fault is answered as a tool result instead (see "When a Tool Fails" in the
+MCP guide). One refusal a
 retry does not clear still answers 503: an actor create or creator change
 refused because creator uniqueness is on and the database does not enforce
 it yet (an ERROR names ``actingweb-unique-creators enable --apply``).

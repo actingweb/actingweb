@@ -141,7 +141,7 @@ Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorator
     from datetime import datetime
     from typing import Dict, Any
     from actingweb.interface import ActorInterface
-    from actingweb.mcp import mcp_tool
+    from actingweb.mcp import ToolError, mcp_tool
 
     logger = logging.getLogger(__name__)
 
@@ -173,17 +173,74 @@ Create reusable MCP tools in ``shared_mcp/tools.py`` using the correct decorator
             import requests
             url = params.get("url")
             if not url:
-                return {"error": "Missing url"}
+                raise ToolError("fetch_url needs a url.")
             try:
                 resp = requests.get(url, timeout=10)
                 resp.raise_for_status()
-                actor.properties[f"fetch_{datetime.now().isoformat()}"] = {
-                    "url": url,
-                    "status_code": resp.status_code,
-                }
-                return resp.text[:5000]
-            except Exception as e:
-                return f"Error fetching URL: {e}"
+            except requests.RequestException:
+                raise ToolError(f"Could not fetch {url}.")
+            actor.properties[f"fetch_{datetime.now().isoformat()}"] = {
+                "url": url,
+                "status_code": resp.status_code,
+            }
+            return resp.text[:5000]
+
+When a Tool Fails
+~~~~~~~~~~~~~~~~~
+
+A tool that fails answers ``tools/call`` with a *result* whose ``isError`` is
+true, which the model reads. It is never a JSON-RPC error: MCP keeps those
+for a request that could not be dispatched (an unknown tool, a denied
+permission, a store fault before the tool ran).
+
+**To tell the model what is wrong, raise** ``ToolError`` (``from
+actingweb.mcp import ToolError``). Its message is the result's text, exactly
+as written, so put nothing in it the caller may not read. A hook can also
+return its own result with ``"isError": True``; a returned
+``{"error": "..."}`` without ``isError`` is reported as a success.
+
+**Any other exception answers a fixed text and is logged** (one line that
+names the tool and the exception, with a traceback). The exception's own
+text never reaches the client: it can name an actor or a stored value.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - The tool hook raised
+     - The model reads
+   * - ``ToolError("...")``
+     - the message
+   * - ``DbError`` (a throttle, a timeout, a lost connection),
+       ``DeletionInProgress``, a token-store fault
+     - ``The service is temporarily unavailable. Try again shortly.``
+   * - ``DbErrorAfterWrite``
+     - ``A change was saved, but the tool did not finish. Check the current
+       state before calling it again.``
+   * - ``DbError`` with a permanent backend cause,
+       ``AttributeKeyCollision``
+     - ``The request could not be stored. Trying again will not help.``
+   * - ``CreatorTaken``
+     - ``That address already belongs to another account. Use a different
+       one.``
+   * - anything else
+     - ``The tool failed. The error was logged.``
+
+The answer is HTTP 200 without ``Retry-After``, so a store fault inside a
+tool no longer shows as a 5xx: **alert on the ERROR log line** (``Tool
+'<name>' failed ...``). The texts are a contract: instructions written for a
+model can rely on them.
+
+"Try again shortly" is read by a model, which will call the tool again. A
+plain ``DbError`` means nothing was written *or that the caller cannot
+tell*, so a tool that writes more than once must be safe to repeat: use
+``append_once`` or a key of its own for list items, or catch the fault after
+its first write and raise a ``ToolError`` that says what was done.
+
+A failing ``prompts/get`` or ``resources/read`` hook stays a JSON-RPC error
+(MCP has no ``isError`` there) with a fixed message (``Prompt generation
+failed``, ``Resource read failed``); a store fault there answers 503 with
+``Retry-After`` as on every other route.
 
 Tool Safety Annotations
 ~~~~~~~~~~~~~~~~~~~~~~~~

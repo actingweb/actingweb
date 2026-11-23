@@ -536,6 +536,41 @@ def test_the_helper_for_an_own_sign_in_route(flow: Flow, listed: Any) -> None:
     assert "code=" in done["url"] and "state=s9" in done["url"]
 
 
+def test_the_helper_keeps_a_redirect_uris_own_query(flow: Flow, listed: Any) -> None:
+    """A registered redirect URI with a query got a second ``?`` (4.0.0rc2):
+    the code and state are appended to its query."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from actingweb.actor import Actor
+    from actingweb.oauth2_server.oauth2_server import get_actingweb_oauth2_server
+
+    redirect = REDIRECT + "?tenant=a"
+    registered = requests.post(
+        f"{flow.host.url}/oauth/register",
+        json={"client_name": "Query Client", "redirect_uris": [redirect]},
+    )
+    assert registered.status_code == 201, registered.text
+    r = requests.post(f"{flow.host.url}/", json={"creator": flow.email})
+    assert r.status_code == 201
+    core = Actor(config=flow.host.config)
+    core.get(actor_id=r.json()["id"])
+    listed(["mcp_client", "viewer"])
+    done = get_actingweb_oauth2_server(flow.host.config).complete_client_authorization(
+        core,
+        registered.json()["client_id"],
+        redirect,
+        "viewer",
+        code_challenge=_challenge(),
+        code_challenge_method="S256",
+        state="s9",
+    )
+    assert done["url"].count("?") == 1
+    query = parse_qs(urlsplit(done["url"]).query)
+    assert query["tenant"] == ["a"]
+    assert query["state"] == ["s9"]
+    assert len(query["code"]) == 1 and query["code"][0]
+
+
 def test_the_helper_asks_the_applications_decision_hook(
     flow: Flow, listed: Any
 ) -> None:

@@ -19,7 +19,8 @@ import threading
 import time
 from typing import Any
 
-from ..db.exceptions import CreatorTaken, DbError
+from ..db.exceptions import CreatorTaken, DbError, DeletionInProgress
+from ..faults import FaultClass, classify_fault, find_db_error
 
 # Global cache for MCP client info during session establishment
 _mcp_client_info_cache: dict[str, dict[str, Any]] = {}
@@ -803,6 +804,41 @@ def format_call_tool_result(
     return out
 
 
+# What a model is told when a tool hook raises (``_tool_failure_result``).
+# The texts are fixed: consumers' instructions to their models are written
+# against them, so changing one is a consumer-visible change.
+TOOL_FAULT_TEXTS: dict[FaultClass, str] = {
+    FaultClass.RETRYABLE: (
+        "The service is temporarily unavailable. Try again shortly."
+    ),
+    FaultClass.STORED: (
+        "A change was saved, but the tool did not finish. "
+        "Check the current state before calling it again."
+    ),
+    FaultClass.PERMANENT: (
+        "The request could not be stored. Trying again will not help."
+    ),
+    FaultClass.CONFLICT: (
+        "That address already belongs to another account. Use a different one."
+    ),
+}
+TOOL_FAILURE_TEXT = "The tool failed. The error was logged."
+
+
+def _token_cache_entry_is_fresh(entry: Any, config: Any, now: float) -> bool:
+    """Whether a token-cache entry is one this handler would use: younger
+    than the TTL and written under this ``Config`` object.
+
+    Pure: no counter, no eviction. The handler's cache hit and the public
+    ``actingweb.mcp.is_token_cached`` both call it, so they cannot drift.
+    """
+    return (
+        isinstance(entry, dict)
+        and now - entry.get("cached_at", 0) < _cache_ttl
+        and entry.get("config") is config
+    )
+
+
 class MCPHandler(BaseHandler):
     """
     Handler for the /mcp endpoint.
@@ -961,8 +997,11 @@ class MCPHandler(BaseHandler):
         except DbError:
             raise
         except Exception as e:
-            logger.error(f"Error handling MCP GET request: {e}")
-            return self.error_response(500, f"Internal server error: {str(e)}")
+            logger.error(
+                f"Error handling MCP GET request: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            return self.error_response(500, "Internal server error")
 
     def _reject_non_object_body(self, data: Any) -> dict[str, Any]:
         """Answer a POST body that is not a single JSON-RPC object.
@@ -1098,10 +1137,7 @@ class MCPHandler(BaseHandler):
         except DbError as e:  # folds DbError: answered by _db_fault_response
             return self._db_fault_response(data.get("id"), e)
         except Exception as e:
-            logger.error(f"Error handling MCP POST request: {e}")
-            return self._create_jsonrpc_error(
-                data.get("id"), -32603, f"Internal error: {str(e)}"
-            )
+            return self._failure_response(data.get("id"), "Internal error", e)
 
     def _has_mcp_tools(self) -> bool:
         """Check if server has any MCP-exposed tools."""
@@ -1840,14 +1876,9 @@ class MCPHandler(BaseHandler):
                                         tool_name=tool_name,
                                     ),
                                 }
-                            except DbError:
-                                raise
-                            except Exception as e:
-                                logger.error(f"Error executing tool {tool_name}: {e}")
-                                return self._create_jsonrpc_error(
-                                    request_id,
-                                    -32603,
-                                    f"Tool execution failed: {str(e)}",
+                            except Exception as e:  # folds DbError: a tool result
+                                return self._tool_failure_result(
+                                    request_id, str(tool_name), e
                                 )
 
         return self._create_jsonrpc_error(
@@ -1964,13 +1995,8 @@ class MCPHandler(BaseHandler):
                             except DbError:
                                 raise
                             except Exception as e:
-                                logger.error(
-                                    f"Error generating prompt {prompt_name}: {e}"
-                                )
-                                return self._create_jsonrpc_error(
-                                    request_id,
-                                    -32603,
-                                    f"Prompt generation failed: {str(e)}",
+                                return self._failure_response(
+                                    request_id, "Prompt generation failed", e
                                 )
 
         return self._create_jsonrpc_error(
@@ -2062,12 +2088,7 @@ class MCPHandler(BaseHandler):
                 except DbError:
                     raise
                 except Exception as e:
-                    logger.error(f"Error executing resource {uri}: {e}")
-                    return self._create_jsonrpc_error(
-                        request_id,
-                        -32603,
-                        f"Resource execution failed: {str(e)}",
-                    )
+                    return self._failure_response(request_id, "Resource read failed", e)
 
             return self._create_jsonrpc_error(
                 request_id, -32601, f"Resource not found: {uri}"
@@ -2076,10 +2097,7 @@ class MCPHandler(BaseHandler):
         except DbError as e:  # folds DbError: answered by _db_fault_response
             return self._db_fault_response(request_id, e)
         except Exception as e:
-            logger.error(f"Error reading resource {uri}: {e}")
-            return self._create_jsonrpc_error(
-                request_id, -32603, f"Resource read failed: {str(e)}"
-            )
+            return self._failure_response(request_id, "Resource read failed", e)
 
     def _accept_notification(self, method: str) -> dict[str, Any]:
         """Accept a JSON-RPC notification without answering it.
@@ -2396,10 +2414,8 @@ class MCPHandler(BaseHandler):
             token_seq_at_read = _current_token_eviction_seq()
 
             cached_data = _token_cache.get(bearer_token)
-            if (
-                cached_data is not None
-                and current_time - cached_data.get("cached_at", 0) < _cache_ttl
-                and cached_data.get("config") is self.config
+            if cached_data is not None and _token_cache_entry_is_fresh(
+                cached_data, self.config, current_time
             ):
                 _cache_stats["token_hits"] += 1
                 actor_id = cached_data["actor_id"]
@@ -2958,6 +2974,78 @@ class MCPHandler(BaseHandler):
         return self._create_jsonrpc_error(
             request_id, -32603, "Token store temporarily unavailable; retry"
         )
+
+    def _tool_failure_result(
+        self, request_id: Any, tool_name: str, exc: Exception
+    ) -> dict[str, Any]:
+        """The ``tools/call`` answer for a tool hook that raised (4.0).
+
+        A failure while the tool runs is a result with ``isError: true``,
+        which the model reads; MCP keeps protocol errors for a request that
+        could not be dispatched. The text is fixed by the failure's class:
+        the exception's own text can name an actor and goes to the log only.
+        A ``ToolError`` is the exception: its text is the author's message
+        to the model. No status and no header is set, so the answer is an
+        ordinary 200.
+
+        Only the hook call ends here. A fault in authentication or in the
+        permission check still answers through ``_db_fault_response``.
+        """
+        from ..mcp.errors import ToolError
+        from ..single_use import StoreFault
+
+        fault = classify_fault(exc)
+        if isinstance(exc, ToolError):
+            text = str(exc) or TOOL_FAILURE_TEXT
+            logger.info(f"Tool '{tool_name}' reported an error: {text}")
+        elif fault is not None:
+            text = TOOL_FAULT_TEXTS[fault.kind]
+            cause = fault.error.__cause__
+            detail = f"{type(cause).__name__}: {cause}" if cause else "no cause"
+            # A wait for a deletion and a creator conflict are answers, not
+            # outages: the integrations log them below ERROR too.
+            expected = isinstance(fault.error, (CreatorTaken, DeletionInProgress))
+            logger.log(
+                logging.WARNING if expected else logging.ERROR,
+                f"Tool '{tool_name}' failed with a store fault "
+                f"({fault.kind}): {fault.error} ({detail})",
+            )
+        elif isinstance(exc, (TokenStoreUnavailable, StoreFault)):
+            # Store faults that are not a DbError: the token store, and a
+            # single-use consume that could not be confirmed.
+            text = TOOL_FAULT_TEXTS[FaultClass.RETRYABLE]
+            logger.error(
+                f"Tool '{tool_name}' failed with a store fault "
+                f"({type(exc).__name__}): {exc}"
+            )
+        else:
+            text = TOOL_FAILURE_TEXT
+            logger.error(
+                f"Tool '{tool_name}' failed: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"content": [{"type": "text", "text": text}], "isError": True},
+        }
+
+    def _failure_response(
+        self, request_id: Any, label: str, exc: Exception
+    ) -> dict[str, Any]:
+        """A JSON-RPC error for an exception outside a tool call (4.0).
+
+        ``prompts/get`` and ``resources/read`` have no ``isError`` result, so
+        a hook that raises there stays a protocol error. Its message is the
+        fixed ``label``: the exception's own text goes to the log only. A
+        hook that wrapped a store fault (``raise ... from e``) gets the
+        fault's answer.
+        """
+        fault = find_db_error(exc)
+        if fault is not None:
+            return self._db_fault_response(request_id, fault)
+        logger.error(f"{label}: {type(exc).__name__}: {exc}", exc_info=True)
+        return self._create_jsonrpc_error(request_id, -32603, label)
 
     def _db_fault_response(self, request_id: Any, exc: DbError) -> dict[str, Any]:
         """A JSON-RPC error for a database fault in a method.

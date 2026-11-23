@@ -86,40 +86,23 @@ class PropertyListStore:
 
     def exists(self, name: str) -> bool:
         """Check if a list property exists without creating it."""
-        try:
-            if self._config:
-                db = get_property(self._config)
-                meta = db.get(actor_id=self._actor_id, name=f"list:{name}-meta")
-                return meta is not None
-        except DbError:
-            raise
-        except Exception:
-            pass
-        return False
+        if not self._config:
+            return False
+        db = get_property(self._config)
+        meta = db.get(actor_id=self._actor_id, name=f"list:{name}-meta")
+        return meta is not None
 
     def list_all(self) -> list[str]:
         """List all existing list property names."""
-        list_names = []
-        try:
-            if self._config:
-                db_list = get_property_list(self._config)
-                all_props = (
-                    db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
-                )
-                for prop_name in all_props.keys():
-                    if prop_name.startswith("list:") and prop_name.endswith("-meta"):
-                        # Extract list name: "list:name-meta" -> "name"
-                        list_name = prop_name[
-                            5:-5
-                        ]  # Remove 'list:' prefix and '-meta' suffix
-                        list_names.append(list_name)
-        except DbError:
-            raise
-        except Exception as e:
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error in list_all(): {e}")
+        list_names: list[str] = []
+        if not self._config:
+            return list_names
+        db_list = get_property_list(self._config)
+        all_props = db_list.fetch_all_including_lists(actor_id=self._actor_id) or {}
+        for prop_name in all_props.keys():
+            if prop_name.startswith("list:") and prop_name.endswith("-meta"):
+                # "list:name-meta" -> "name"
+                list_names.append(prop_name[5:-5])
         return list_names
 
     def list_all_with_rows(self) -> tuple[list[str], dict[str, str]]:

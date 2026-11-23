@@ -4864,7 +4864,7 @@ class Actor:
                     elif missed is not None:
                         missed.append(_resync_id(sub))
                 except DbError as e:  # folds DbError: raised after the loop
-                    from .interface.integrations._errors import is_permanent
+                    from .faults import is_permanent
 
                     if is_permanent(e):
                         logger.error(

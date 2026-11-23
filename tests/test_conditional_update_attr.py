@@ -9,6 +9,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC
+from typing import Any
 
 import pytest
 
@@ -730,3 +731,168 @@ class TestTryMarkRefreshTokenUsedConcurrency:
         # This test just verifies we get the timestamp to enable this check
         assert isinstance(time_diff, int)
         assert time_diff >= 0, "Time difference should be non-negative"
+
+
+@pytest.mark.integration
+class TestStrictConditionalUpdate:
+    """``conditional_update_attr(strict=True)`` (4.0.0rc3): a fault raises
+    ``DbError``; ``False`` is left to mean "the condition lost".
+
+    The default is unchanged: it answers ``False`` for both, and a caller
+    tells them apart with a strict re-read of its own.
+    """
+
+    def setup_method(self) -> None:
+        from actingweb.attribute import Attributes
+
+        self.config = Config(unique_creator=False)
+        self.actor_id = f"cond_strict_{int(time.time() * 1000000)}"
+        self.attrs = Attributes(
+            actor_id=self.actor_id, bucket="strict_bucket", config=self.config
+        )
+        assert self.attrs.set_attr(name="row", data={"v": 1})
+
+    def teardown_method(self) -> None:
+        try:
+            self.config.DbAttribute.DbAttributeBucketList().delete(  # type: ignore
+                actor_id=self.actor_id
+            )
+        except Exception:
+            pass
+
+    def _stored(self) -> object:
+        from actingweb.db import get_attribute
+
+        row = get_attribute(self.config).get_attr_strict(
+            actor_id=self.actor_id, bucket="strict_bucket", name="row"
+        )
+        return row.get("data") if row else None
+
+    @pytest.mark.parametrize("seam", ["get", "update"])
+    def test_strict_raises_on_a_fault(self, seam: str) -> None:
+        """AC-16: at the read that precedes the write, and at the write."""
+        from actingweb.db.exceptions import DbError
+        from tests._adoption_helpers import seam_fault
+
+        with (
+            seam_fault(self.config, "attribute", "Attribute", seam),
+            pytest.raises(DbError),
+        ):
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
+            )
+        assert self._stored() == {"v": 1}
+
+    @pytest.mark.parametrize("seam", ["get", "update"])
+    def test_the_default_still_answers_false_on_a_fault(self, seam: str) -> None:
+        """AC-18: D10 stands."""
+        from tests._adoption_helpers import seam_fault
+
+        with seam_fault(self.config, "attribute", "Attribute", seam):
+            assert (
+                self.attrs.conditional_update_attr(
+                    name="row", old_data={"v": 1}, new_data={"v": 2}
+                )
+                is False
+            )
+        assert self._stored() == {"v": 1}
+
+    def test_strict_answers_false_for_a_lost_condition(self) -> None:
+        """AC-17: another writer changed the row; nothing is raised."""
+        assert (
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 0}, new_data={"v": 2}, strict=True
+            )
+            is False
+        )
+        assert self._stored() == {"v": 1}
+
+    def test_strict_answers_false_for_no_row(self) -> None:
+        """AC-17."""
+        assert (
+            self.attrs.conditional_update_attr(
+                name="absent", old_data={"v": 1}, new_data={"v": 2}, strict=True
+            )
+            is False
+        )
+
+    def test_strict_succeeds_as_before(self) -> None:
+        assert (
+            self.attrs.conditional_update_attr(
+                name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
+            )
+            is True
+        )
+        assert self._stored() == {"v": 2}
+        assert self.attrs.get_attr(name="row")["data"] == {"v": 2}  # type: ignore[index]
+
+    def test_strict_counts_a_write_that_landed(self) -> None:
+        """The backend answers False for a write whose answer was lost, or
+        whose SDK retry met its own first attempt: a row that holds the new
+        data is this call's write, as ``create_attr_if_absent`` reads it."""
+        from unittest.mock import patch
+
+        from actingweb.db import get_attribute
+
+        db = get_attribute(self.config)
+        real = db.conditional_update_attr
+
+        def lands_then_reports_false(**kwargs: Any) -> bool:
+            assert real(**kwargs) is True
+            return False
+
+        with patch.object(
+            type(db), "conditional_update_attr", staticmethod(lands_then_reports_false)
+        ):
+            assert (
+                self.attrs.conditional_update_attr(
+                    name="row", old_data={"v": 1}, new_data={"v": 2}, strict=True
+                )
+                is True
+            )
+        assert self.attrs.get_attr(name="row")["data"] == {"v": 2}  # type: ignore[index]
+
+    def test_a_backend_without_the_keyword_is_called_without_it(self) -> None:
+        """AC-18: strict is done above the backend, so a backend written
+        before it (or a custom one) is never passed the keyword."""
+        from unittest.mock import patch
+
+        from actingweb.db import get_attribute
+
+        db = get_attribute(self.config)
+        real = db.conditional_update_attr
+        seen: list[set[str]] = []
+
+        def old_backend(
+            *,
+            actor_id: str,
+            bucket: str,
+            name: str,
+            old_data: Any,
+            new_data: Any,
+            timestamp: Any = None,
+        ) -> bool:
+            seen.append({"actor_id", "bucket", "name", "old_data", "new_data"})
+            return real(
+                actor_id=actor_id,
+                bucket=bucket,
+                name=name,
+                old_data=old_data,
+                new_data=new_data,
+                timestamp=timestamp,
+            )
+
+        with patch.object(
+            type(db), "conditional_update_attr", staticmethod(old_backend)
+        ):
+            for strict in (False, True):
+                assert (
+                    self.attrs.conditional_update_attr(
+                        name="row",
+                        old_data={"v": 0},
+                        new_data={"v": 2},
+                        strict=strict,
+                    )
+                    is False
+                )
+        assert len(seen) == 2

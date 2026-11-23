@@ -76,6 +76,11 @@ def mcp_tool(
         ``structuredContent``, and others discard text blocks whenever it is
         present, so only sending both reaches every client.
 
+    Errors:
+        To tell the model what went wrong, raise ``actingweb.mcp.ToolError``:
+        its message is the text of an ``isError`` result. Any other exception
+        answers a fixed text and is logged; its own text is never sent.
+
     Example:
         import json
 

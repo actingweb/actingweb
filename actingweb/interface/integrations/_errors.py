@@ -9,6 +9,10 @@ it can name an actor id.
 
 ``CreatorTaken`` subclasses ``DbError`` but is a conflict, not an outage. It
 is tested first and answered **409**.
+
+The classification itself is public (``actingweb.faults``); this module maps
+it to HTTP and stays private. ``is_permanent`` and ``find_db_error`` are
+re-exported from there.
 """
 
 from __future__ import annotations
@@ -21,13 +25,22 @@ from actingweb.constants import ERROR_CODE_HEADER
 from actingweb.db.exceptions import (
     CreatorTaken,
     DbError,
-    DbErrorAfterWrite,
     DeletionInProgress,
 )
+from actingweb.faults import (
+    DEFAULT_RETRY_AFTER,
+    FaultClass,
+    classify_fault,
+    find_db_error,
+    is_permanent,
+)
+
+# Re-exported: the integrations, ``actor.py`` and tests import them from here.
+__all__ = ["db_error_answer", "find_db_error", "is_permanent", "map_db_error"]
 
 logger = logging.getLogger(__name__)
 
-RETRY_AFTER_SECONDS = "5"
+RETRY_AFTER_SECONDS = str(DEFAULT_RETRY_AFTER)
 
 UNAVAILABLE_BODY: dict[str, str] = {
     "error": "temporarily_unavailable",
@@ -79,68 +92,24 @@ INTERNAL_BODY: dict[str, str] = {
     "message": "The request could not be stored",
 }
 
-# Backend errors that a retry cannot fix: the request itself is the problem
-# (an item over DynamoDB's 400 KB limit, a value too long for an index, a
-# constraint the data violates). They answer 500 without Retry-After.
-_PERMANENT_DYNAMODB_CODES = frozenset(
-    {
-        "ValidationException",
-        "SerializationException",
-        "ItemCollectionSizeLimitExceededException",
-    }
-)
-_PERMANENT_PG_CLASSES = frozenset(
-    {"DataError", "IntegrityError", "ProgrammingError", "NotSupportedError"}
-)
-
-
-def is_permanent(exc: BaseException) -> bool:
-    """Whether the backend error behind this ``DbError`` is not transient.
-
-    Walks the ``__cause__`` chain only (the backend exception is chained
-    with ``raise DbError(op) from e``); an exception reached only through
-    ``__context__`` does not decide it.
-    """
-    current: BaseException | None = exc.__cause__
-    depth = 0
-    while current is not None and depth < 5:
-        code = getattr(current, "cause_response_code", None)
-        if code in _PERMANENT_DYNAMODB_CODES:
-            return True
-        for klass in type(current).__mro__:
-            if klass.__name__ in _PERMANENT_PG_CLASSES and klass.__module__.startswith(
-                "psycopg"
-            ):
-                return True
-        current = current.__cause__
-        depth += 1
-    return False
-
 
 def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, str]]:
     """The status, headers and JSON body for a ``DbError``.
 
-    Raises ``TypeError`` for anything else, so a caller cannot map an
-    unrelated exception by accident.
+    Derived from ``actingweb.faults.classify_fault``, so the HTTP answer and
+    the public classification cannot disagree. Raises ``TypeError`` for
+    anything else, so a caller cannot map an unrelated exception by accident.
     """
-    if isinstance(exc, CreatorTaken):
+    fault = classify_fault(exc) if isinstance(exc, DbError) else None
+    if fault is None:
+        raise TypeError(f"not a DbError: {type(exc).__name__}")
+    if fault.kind is FaultClass.CONFLICT:
         return (
             409,
             {ERROR_CODE_HEADER: CONFLICT_BODY["error"]},
             {**CONFLICT_BODY, "code": CONFLICT_BODY["error"]},
         )
-    if isinstance(exc, DeletionInProgress):
-        # A wait, not a fault: another request is finishing the actor's
-        # deletion and holds its lease; retry after the lease's remainder.
-        return (
-            503,
-            {
-                "Retry-After": str(exc.retry_after),
-                ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
-            },
-            {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
-        )
-    if isinstance(exc, DbErrorAfterWrite):
+    if fault.kind is FaultClass.STORED:
         # The change is stored: no Retry-After, which would invite a retry
         # that, for an unkeyed append, adds a second item.
         return (
@@ -148,40 +117,22 @@ def db_error_answer(exc: BaseException) -> tuple[int, dict[str, str], dict[str, 
             {ERROR_CODE_HEADER: STORED_NOT_NOTIFIED_BODY["error"]},
             {**STORED_NOT_NOTIFIED_BODY, "code": STORED_NOT_NOTIFIED_BODY["error"]},
         )
-    if isinstance(exc, DbError):
-        if is_permanent(exc):
-            return (
-                500,
-                {ERROR_CODE_HEADER: INTERNAL_BODY["error"]},
-                {**INTERNAL_BODY, "code": INTERNAL_BODY["error"]},
-            )
+    if fault.kind is FaultClass.PERMANENT:
         return (
-            503,
-            {
-                "Retry-After": RETRY_AFTER_SECONDS,
-                ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
-            },
-            {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
+            500,
+            {ERROR_CODE_HEADER: INTERNAL_BODY["error"]},
+            {**INTERNAL_BODY, "code": INTERNAL_BODY["error"]},
         )
-    raise TypeError(f"not a DbError: {type(exc).__name__}")
-
-
-def find_db_error(exc: BaseException) -> DbError | None:
-    """The ``DbError`` this exception is, or was raised from.
-
-    A handler that wraps a fault in its own exception with
-    ``raise ... from e`` still answers 503: the ``__cause__`` chain is
-    followed a few links deep. ``__context__`` is not: an unrelated error
-    raised while a ``DbError`` was being handled is a bug and answers 500.
-    """
-    seen = 0
-    current: BaseException | None = exc
-    while current is not None and seen < 5:
-        if isinstance(current, DbError):
-            return current
-        current = current.__cause__
-        seen += 1
-    return None
+    # Retryable: an outage (Retry-After 5), or a wait for another request
+    # that is finishing the actor's deletion (the lease's remainder).
+    return (
+        503,
+        {
+            "Retry-After": str(fault.retry_after),
+            ERROR_CODE_HEADER: UNAVAILABLE_BODY["error"],
+        },
+        {**UNAVAILABLE_BODY, "code": UNAVAILABLE_BODY["error"]},
+    )
 
 
 def reason_phrase(status: int) -> str:
@@ -298,5 +249,5 @@ def log_db_error(exc: DbError) -> None:
         return
     cause = exc.__cause__
     detail = f"{type(cause).__name__}: {cause}" if cause else "no cause"
-    status = 500 if is_permanent(exc) else 503
+    status = db_error_answer(exc)[0]
     logger.error(f"Database fault answered {status}: {exc} ({detail})")

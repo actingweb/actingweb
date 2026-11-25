@@ -8,6 +8,9 @@ spec's expected outcome is "Fails … the client then surfaces an actionable
 error to the user."
 **Origin:** `thoughts/research/2026-08-13-mcp-2026-07-28-stateless-revision.md`
 
+**Also unblocks:** `mcp-tasks.md`. MCP's long-running tasks exist only as
+the 2026-07-28 extension `io.modelcontextprotocol/tasks`.
+
 ## Why this is deferred rather than done
 
 The MCP revision published 2026-07-28 removes `initialize`, protocol-level

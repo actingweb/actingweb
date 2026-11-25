@@ -5,6 +5,21 @@ CHANGELOG
 Unreleased
 ----------
 
+v4.0.0rc4: November 25, 2026
+----------------------------
+
+.. note::
+
+   **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
+   here") before upgrading.** From 4.0.0rc3 there is no new upgrade step:
+   no migration, no new operator command to run. One method is added
+   (``Attributes.delete_attr_if_data_equals``), and four attribute
+   behaviours change: every conditional compare is by JSON value on both
+   backends (on DynamoDB a stored ``true`` no longer matches ``1``), a null
+   row matches ``None``, a non-finite number in attribute data raises
+   ``UnserialisableValue``, and a subscription replica deletes a key whose
+   new value it cannot store. See item 37 of the guide's one-line list.
+
 ADDED
 ~~~~~
 

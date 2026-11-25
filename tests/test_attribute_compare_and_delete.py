@@ -541,3 +541,39 @@ class TestRowsTheOldUpdateCorrupted:
         self._corrupt(actor_id)
         config.DbAttribute.DbAttributeBucketList().delete(actor_id=actor_id)  # type: ignore[attr-defined]
         assert get_attribute(config).get_bucket(actor_id=actor_id, bucket=BUCKET) == {}
+
+
+@pytest.mark.integration
+@dynamodb_only
+class TestStoredTextAnotherWriterProduced:
+    """PR #191 review: the DynamoDB condition re-serialises the data it read.
+    Key order survives the round trip (``json.loads`` keeps it), so a row
+    whose keys are in a non-canonical order still matches; text the library
+    never writes (compact spacing) answers False and the row stays."""
+
+    @staticmethod
+    def _raw(actor: str, text: str) -> None:
+        from actingweb.db.dynamodb.attribute import Attribute
+
+        _put(make_config(database="dynamodb"), actor, "r", {"seed": 1})
+        Attribute(id=actor, bucket_name=f"{BUCKET}:r").update(
+            actions=[Attribute.data.set({"S": text})]
+        )
+
+    def test_a_non_canonical_key_order_matches(
+        self, config: Config, actor_id: str
+    ) -> None:
+        self._raw(actor_id, '{"b": 2, "a": 1}')
+        assert _attrs(config, actor_id).delete_attr_if_data_equals(
+            "r", {"a": 1, "b": 2}
+        )
+        assert _row(config, actor_id, "r") is None
+
+    def test_compact_text_answers_false_and_is_kept(
+        self, config: Config, actor_id: str
+    ) -> None:
+        self._raw(actor_id, '{"a":1}')
+        assert (
+            _attrs(config, actor_id).delete_attr_if_data_equals("r", {"a": 1}) is False
+        )
+        assert _row(config, actor_id, "r")["data"] == {"a": 1}

@@ -245,7 +245,11 @@ another request wrote in between.
   null matches ``None``. A row past its TTL is compared and deleted like any other.
 - A fault raises ``DbError`` (the integrations answer 503), never ``False``. As with
   ``conditional_update_attr``, a ``False`` does not prove the delete did not land: a
-  delete whose answer was lost can be retried by the database client.
+  delete whose answer was lost can be retried by the database client. Re-read the row
+  (``get_attr``) before trying again: absent means the work is done.
+- On DynamoDB the compare re-encodes the stored data for its condition. A row the
+  library wrote always matches; a row another writer stored as different JSON text
+  (compact spacing, say) answers ``False`` and is never deleted by mistake.
 - A missing ``name`` raises ``ValueError``. An ``expected`` that JSON cannot encode (a
   ``datetime``, a ``set``, ``NaN`` or ``Infinity``) raises ``UnserialisableValue``
   before the store is touched.

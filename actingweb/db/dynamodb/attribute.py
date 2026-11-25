@@ -86,16 +86,102 @@ class Attribute(Model):
 
 def normalize_json(data: Any) -> Any:
     """Normalize JSON data by serializing with sorted keys, so that
-    ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` compare equal."""
+    ``{"a": 1, "b": 2}`` and ``{"b": 2, "a": 1}`` compare equal. Raises
+    ``TypeError`` or ``ValueError`` for a value JSON cannot order or encode,
+    a non-finite number included."""
     import json
 
     if data is None:
         return None
-    return json.loads(json.dumps(data, sort_keys=True))
+    return json.loads(json.dumps(data, sort_keys=True, allow_nan=False))
+
+
+def as_json(value: Any) -> Any:
+    """The caller's value as the store would hold it: a tuple becomes a
+    list, an int key its string. Raises ``TypeError`` or ``ValueError`` for
+    a value JSON cannot encode, a non-finite number included."""
+    import json
+
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def json_values_equal(a: Any, b: Any) -> bool:
+    """JSON value equality, as PostgreSQL's ``jsonb`` applies it, for two
+    decoded JSON values (pass the caller's side through :func:`as_json`).
+
+    Key order does not matter, numbers compare numerically (``1.0`` equals
+    ``1``), and booleans, numbers, strings, null, lists and objects are
+    distinct kinds (``true`` is not ``1``, as it is to Python's ``==``).
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        if isinstance(a, float) != isinstance(b, float):
+            # An int against a float: compare the decimals their JSON text
+            # names, as jsonb's numeric does (Python's == compares the
+            # float's binary value: 10**30 != 1e30, 2**70 == float(2**70)).
+            from decimal import Decimal
+
+            return Decimal(repr(a)) == Decimal(repr(b))
+        return a == b
+    if isinstance(a, dict):
+        return (
+            isinstance(b, dict)
+            and a.keys() == b.keys()
+            and all(json_values_equal(a[k], b[k]) for k in a)
+        )
+    if isinstance(a, list):
+        return (
+            isinstance(b, list)
+            and len(a) == len(b)
+            and all(json_values_equal(x, y) for x, y in zip(a, b, strict=True))
+        )
+    if isinstance(a, str):
+        return isinstance(b, str) and a == b
+    if a is None:
+        return b is None
+    return False
 
 
 def _condition_failed(e: Exception) -> bool:
     return getattr(e, "cause_response_code", None) == "ConditionalCheckFailedException"
+
+
+# What a delete reads: the keys and the bucket, never ``data``, so a row whose
+# data cannot be read back (see ``_serialised``) can still be deleted.
+_KEY_FIELDS = ["id", "bucket_name", "bucket"]
+
+
+def _serialised(value: Any) -> Any:
+    """``value`` as ``JSONAttribute`` stores it (JSON text), in PynamoDB's
+    already-serialised form, for a condition or an update action.
+
+    PynamoDB takes a one-key dict whose key is a DynamoDB type name (``S``,
+    ``N``, ``M``...) as an already-serialised value and skips the
+    attribute's serialiser, so a condition on ``{"S": "x"}`` compared the
+    bare ``x`` and an update wrote it, leaving a row ``JSONAttribute``
+    cannot read back. ``None`` stays None (a NULL)."""
+    if value is None:
+        return None
+    return {"S": Attribute.data.serialize(value)}
+
+
+def _stored_data_condition(bucket: str, name: str, stored: Any) -> Any:
+    """The condition for a write that must find the row as it was read: the
+    row exists, belongs to ``bucket`` under ``name`` and holds ``stored``.
+
+    A null row has two forms in DynamoDB: a row created with null data has
+    no ``data`` attribute, and one updated to null holds ``data: {NULL:
+    true}``; each test below holds for one of them. The row and its bucket
+    are always part of it: "no ``data``" also holds for a missing row, and
+    an ``UpdateItem`` on a missing key would create one.
+    """
+    row = (
+        Attribute.id.exists() & (Attribute.bucket == bucket) & (Attribute.name == name)
+    )
+    if stored is None:
+        return row & (Attribute.data.does_not_exist() | (Attribute.data == None))  # noqa: E711
+    return row & (Attribute.data == _serialised(stored))
 
 
 class DbAttribute:
@@ -254,8 +340,13 @@ class DbAttribute:
             return False
         if not data:
             try:
+                # Keys and bucket only: a row whose data cannot be read back
+                # (see _serialised) must still be deletable.
                 item = Attribute.get(
-                    actor_id, bucket + ":" + name, consistent_read=True
+                    actor_id,
+                    bucket + ":" + name,
+                    consistent_read=True,
+                    attributes_to_get=_KEY_FIELDS,
                 )
                 if item.bucket == bucket:
                     item.delete()
@@ -323,7 +414,14 @@ class DbAttribute:
         if not actor_id or not bucket or not name:
             return False
         try:
-            item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+            # Keys and bucket only: a row whose data cannot be read back
+            # can still be consumed.
+            item = Attribute.get(
+                actor_id,
+                bucket + ":" + name,
+                consistent_read=True,
+                attributes_to_get=_KEY_FIELDS,
+            )
         except Exception as e:  # PynamoDB DoesNotExist exception
             _log_unexpected("delete_attr_conditional", bucket, name, e)
             return False
@@ -354,9 +452,10 @@ class DbAttribute:
 
         This provides atomic compare-and-swap functionality for race-free updates.
 
-        JSON comparison is order-independent - dict key ordering does not affect equality.
-        If the caller's old_data has different key ordering than stored data, we normalize
-        both sides for comparison and use the stored ordering for the atomic update.
+        ``old_data`` is compared with the stored data by JSON value
+        (``json_values_equal``): key order and number spelling do not
+        matter, ``true`` is not ``1``, and a null row matches ``None``. The
+        update is then conditioned on the row still holding what was read.
 
         Args:
             actor_id: The actor ID
@@ -393,30 +492,29 @@ class DbAttribute:
         if strict:
             # The caller's values are checked before the store is touched:
             # an exception inside the try below is then the store's, and a
-            # value JSON cannot order or encode is the caller's TypeError or
-            # ValueError, not an outage to be retried forever.
+            # value JSON cannot order or encode (a non-finite number
+            # included) is the caller's TypeError or ValueError, not an
+            # outage to be retried forever.
             normalize_json(old_data)
             normalize_json(new_data)
 
         try:
+            # Without strict, an old_data JSON cannot encode answers False.
+            wanted = as_json(old_data)
             # Get current item with consistent read
             item = Attribute.get(actor_id, bucket_name, consistent_read=True)
             if item.bucket != bucket:
                 return False
 
-            # Normalize JSON for order-independent comparison
-            # This ensures {"a": 1, "b": 2} == {"b": 2, "a": 1}
-            old_data_normalized = normalize_json(old_data)
-            current_data_normalized = normalize_json(item.data)
-
-            # Check if current data matches old_data (order-independent)
-            if old_data_normalized != current_data_normalized:
+            # JSON value equality: key order and number spelling do not
+            # matter, and true is not 1 (as in PostgreSQL's jsonb).
+            if not json_values_equal(item.data, wanted):
                 return False
 
-            # Data matches semantically - perform atomic update
-            # Use the ACTUAL stored data for DynamoDB's condition to ensure atomicity
-            # This handles the case where old_data has different key ordering
-            actions: Sequence[object] = [Attribute.data.set(new_data)]
+            # The data matches by value: update on a condition that the row
+            # still holds what was read (its stored text, whatever the key
+            # order of old_data), so a writer in between makes this lose.
+            actions: Sequence[object] = [Attribute.data.set(_serialised(new_data))]
             if timestamp:
                 actions = list(actions) + [Attribute.timestamp.set(timestamp)]
             if ttl_seconds is not None:
@@ -428,9 +526,7 @@ class DbAttribute:
 
             item.update(
                 actions=actions,  # type: ignore[arg-type]
-                condition=(
-                    Attribute.data == item.data
-                ),  # Atomic check against current value
+                condition=_stored_data_condition(bucket, name, item.data),
             )
             return True
 
@@ -508,7 +604,7 @@ class DbAttribute:
             # other bucket: a loss, whatever its data.
             if stored.bucket != bucket:
                 return False
-            return normalize_json(stored.data) == normalize_json(data)
+            return json_values_equal(stored.data, as_json(data))
         return False
 
     # -- list primitives (thoughts/plans/2026-11-13-attribute-list-v2-port.md)
@@ -663,21 +759,52 @@ class DbAttribute:
         }
 
     @staticmethod
+    def _matching_row(
+        actor_id: str, bucket: str, name: str, expected: Any, op: str
+    ) -> tuple[Attribute | None, Any]:
+        """The row to write and the condition that it is still as read.
+
+        A string ``expected`` (what list storage passes) is compared as
+        given by the write's own condition: no read. Any other value is
+        sanitised, round-tripped through JSON and compared by value with a
+        consistent read of the row; ``(None, None)`` when there is no row,
+        another bucket owns it or it holds something else. A read fault
+        raises ``DbError``.
+        """
+        if isinstance(expected, str):
+            item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+            return item, _stored_data_condition(bucket, name, expected)
+        from actingweb.db.utils import sanitize_json_data
+
+        wanted = as_json(sanitize_json_data(expected, log_source="attribute"))
+        try:
+            item = Attribute.get(actor_id, bucket + ":" + name, consistent_read=True)
+        except DoesNotExist:
+            return None, None
+        except Exception as e:
+            raise DbError(op, actor_id) from e
+        if item.bucket != bucket or not json_values_equal(item.data, wanted):
+            return None, None
+        return item, _stored_data_condition(bucket, name, item.data)
+
+    @staticmethod
     def set_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str, data: Any
+        actor_id: str, bucket: str, name: str, expected: Any, data: Any
     ) -> bool:
-        """Replace the row's data when it equals ``expected`` exactly; False
-        when it differs, the row is absent, or another bucket owns it."""
+        """Replace the row's data when it equals ``expected`` by JSON value;
+        False when it differs, the row is absent, or another bucket owns it.
+        A string ``expected`` costs one conditional write; any other value a
+        consistent read first (see ``_matching_row``)."""
         require_json(data, "attribute data")
-        item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+        require_json(expected, "attribute data")
+        item, condition = DbAttribute._matching_row(
+            actor_id, bucket, name, expected, "attribute compare-and-swap"
+        )
+        if item is None:
+            return False
         try:
             item.update(
-                actions=[Attribute.data.set(data)],
-                condition=(
-                    Attribute.id.exists()
-                    & (Attribute.bucket == bucket)
-                    & (Attribute.data == expected)
-                ),
+                actions=[Attribute.data.set(_serialised(data))], condition=condition
             )
             return True
         except UpdateError as e:
@@ -689,18 +816,20 @@ class DbAttribute:
 
     @staticmethod
     def delete_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str
+        actor_id: str, bucket: str, name: str, expected: Any
     ) -> bool:
-        """Delete the row when its data equals ``expected`` exactly."""
-        item = Attribute(id=actor_id, bucket_name=bucket + ":" + name)
+        """Delete the row when its data equals ``expected`` by JSON value;
+        False when it differs, the row is absent, or another bucket owns it.
+        A string ``expected`` costs one conditional delete; any other value
+        a consistent read first (see ``_matching_row``)."""
+        require_json(expected, "attribute data")
+        item, condition = DbAttribute._matching_row(
+            actor_id, bucket, name, expected, "attribute conditional delete"
+        )
+        if item is None:
+            return False
         try:
-            item.delete(
-                condition=(
-                    Attribute.id.exists()
-                    & (Attribute.bucket == bucket)
-                    & (Attribute.data == expected)
-                )
-            )
+            item.delete(condition=condition)
             return True
         except DeleteError as e:
             if _condition_failed(e):
@@ -769,6 +898,7 @@ class DbAttribute:
                 actor_id,
                 Attribute.bucket_name.startswith(bucket + ":"),
                 consistent_read=True,
+                attributes_to_get=_KEY_FIELDS,
             ):
                 if t.bucket != bucket:
                     continue
@@ -932,7 +1062,7 @@ class DbAttributeBucketList:
         if not actor_id:
             return False
         try:
-            for t in Attribute.query(actor_id):
+            for t in Attribute.query(actor_id, attributes_to_get=_KEY_FIELDS):
                 t.delete()
         except Exception as e:
             raise DbError("attribute bucket list delete") from e

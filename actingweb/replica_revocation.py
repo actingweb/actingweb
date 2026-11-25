@@ -26,6 +26,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .db.exceptions import UnserialisableValue
 from .permission_evaluator import drop_excluded, glob_match, path_excluded
 
 if TYPE_CHECKING:
@@ -135,7 +136,19 @@ def apply_revoked(store: RemotePeerStore, revoked: RevokedNames) -> list[str]:
         store.delete_list(name)
     for name, kept in revoked.rewrites.items():
         if kept:
-            store.set_value(name, kept)
+            try:
+                store.set_value(name, kept)
+            except UnserialisableValue:
+                # A row stored before non-finite numbers were refused can
+                # hold NaN, which no write takes now: the kept part cannot
+                # be written back, so the name goes whole (fail closed).
+                logger.warning(
+                    "Deleted %r from the replica of peer %s whole: its value "
+                    "without the revoked parts cannot be stored",
+                    name,
+                    store._peer_id,  # noqa: SLF001
+                )
+                store.delete_value(name)
         else:
             store.delete_value(name)
     for name in revoked.names:

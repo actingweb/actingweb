@@ -640,6 +640,62 @@ class Attributes:
             self._bucket_loaded = False
         return won
 
+    def delete_attr_if_data_equals(self, name: str, expected: Any) -> bool:
+        """Delete ``name`` only while it still holds ``expected`` (atomic).
+
+        ``expected`` is compared with the stored data by JSON value, on both
+        backends: key order and number spelling (``1.0``, ``1``) do not
+        matter, booleans, numbers, strings and null are distinct (a stored
+        ``true`` is not ``1``), a null row matches ``None``, and ``expected``
+        is compared as its JSON encoding (a tuple is a list, an int key its
+        string). A row past its TTL is compared and deleted like any other,
+        as ``get_attr`` returns it. A sweep over ``get_bucket()`` iterates
+        over a copy (``list(bucket.items())``): ``get_bucket()`` returns this
+        instance's cache, which this method changes.
+
+        Returns:
+            True when this call deleted the row. False when the row holds
+            something else, there is no row, or another bucket owns the key;
+            a later ``get_attr(name)`` on this instance then reads the store.
+            As with ``conditional_update_attr``, a False does not prove the
+            delete did not land (an SDK retry of a delete that did).
+
+        Raises:
+            ValueError: ``name`` is missing, or the store is not loaded.
+            UnserialisableValue: JSON cannot encode ``expected`` (a
+                non-finite number included); the store is not touched.
+            DbError: on a backend fault, never False.
+        """
+        if not name:
+            raise ValueError("delete_attr_if_data_equals needs a name")
+        if not self.actor_id or not self.bucket or not self.dbprop:
+            raise ValueError(
+                "delete_attr_if_data_equals needs a loaded attribute store"
+            )
+        from .db.exceptions import require_json
+        from .db.utils import sanitize_json_data
+
+        # Refused before the sanitiser walks it (a circular value would
+        # recurse there).
+        require_json(expected, "attribute data")
+        expected = sanitize_json_data(expected, log_source="attribute")
+        if self.data is None:
+            self.data = {}
+        try:
+            deleted = self.dbprop.delete_attr_if_data_equals(
+                actor_id=self.actor_id, bucket=self.bucket, name=name, expected=expected
+            )
+        except Exception:
+            self._unload_after_failed_delete(name)
+            raise
+        if deleted:
+            self.data.pop(name, None)
+        else:
+            # The cache must not keep a value the store no longer holds.
+            self.data.pop(name, None)
+            self._bucket_loaded = False
+        return deleted
+
     def delete_attr(self, name: str | None = None) -> bool:
         if not name:
             return False

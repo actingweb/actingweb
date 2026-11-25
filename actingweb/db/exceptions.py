@@ -111,7 +111,8 @@ class AttributeKeyCollision(DbError):
 
 class UnserialisableValue(ValueError, TypeError):
     """A value the store cannot encode as JSON (a ``datetime``, a ``set``, an
-    object), refused before any store call: nothing was written.
+    object, or a non-finite number: ``NaN`` and ``Infinity`` are not JSON),
+    refused before any store call: nothing was written.
 
     Not a ``DbError``: that answers 503 with ``Retry-After``, and a retry of
     this write can never succeed. A ``ValueError`` (a caller's bad input),
@@ -126,10 +127,11 @@ class UnserialisableValue(ValueError, TypeError):
 
 def require_json(value: object, what: str) -> None:
     """Raise :class:`UnserialisableValue` when ``json`` cannot encode
-    ``value``; called before a write reaches the store."""
+    ``value`` as standard JSON (a non-finite number included); called before
+    a write reaches the store."""
     import json
 
     try:
-        json.dumps(value)
+        json.dumps(value, allow_nan=False)
     except (TypeError, ValueError) as e:
         raise UnserialisableValue(what, e) from e

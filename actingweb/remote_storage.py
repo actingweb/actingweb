@@ -11,7 +11,12 @@ from datetime import UTC
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
-from .db.exceptions import AttributeKeyCollision, DbError
+from .db.exceptions import (
+    AttributeKeyCollision,
+    DbError,
+    UnserialisableValue,
+    require_json,
+)
 from .identifiers import first_control_character
 from .list_core import (
     ListCorruptionError,
@@ -84,6 +89,29 @@ class ReplicaApplyResult(dict[str, Any]):
         self.out_of_step: dict[str, Any] | None = None
         self.failed: list[str] = []
         self.skipped = False
+
+
+def _is_json(value: Any) -> bool:
+    """Whether the attribute store takes ``value`` (``require_json``); a
+    value nested too deep to encode is not JSON either."""
+    try:
+        require_json(value, "attribute data")
+    except (UnserialisableValue, RecursionError):
+        return False
+    return True
+
+
+def _without_path(root: dict[str, Any], segments: list[str]) -> dict[str, Any]:
+    """A copy of ``root`` without the value at ``segments`` (which exists);
+    the parents on the way are copied, nothing else is touched."""
+    copy = dict(root)
+    node = copy
+    for seg in segments[:-1]:
+        child = dict(node[seg])
+        node[seg] = child
+        node = child
+    del node[segments[-1]]
+    return copy
 
 
 # The longest DynamoDB sort key is 1,024 bytes: "{bucket}:list:{name}-#"
@@ -599,11 +627,34 @@ class RemotePeerStore:
                 self._peer_id,
             )
             return {"error": "refused", "reason": "key held by another bucket"}
+        except UnserialisableValue as e:
+            return self._refused_unserialisable(key, e)
         except DbError:
             raise
         except Exception as e:
             logger.error(f"Error applying callback data for {key!r}: {e}")
             return {"error": str(e)}
+
+    def _refused_unserialisable(
+        self, key: str, e: UnserialisableValue
+    ) -> dict[str, Any]:
+        """A value the store refuses (a peer's ``NaN`` or ``Infinity``, or a
+        merge into a property stored before the refusal that holds one):
+        the name is deleted, so the replica never serves the previous value
+        as current (fail closed, as a revocation rewrite does), and the
+        refusal is logged. Refused, not failed: a rebuild would fetch the
+        same value and meet the same refusal."""
+        # Only a scalar write is refused this way: list items are stored as
+        # strings, and a list's name never reaches set_value (a callback
+        # raises ReplicaOutOfStep first, a baseline deletes the list first).
+        self.delete_value(key)
+        logger.error(
+            "Refused %r in the replica of peer %s and deleted it: %s",
+            key,
+            self._peer_id,
+            e,
+        )
+        return {"error": "refused", "reason": "not JSON", "success": False}
 
     def _list_exists(self, name: str) -> bool:
         return bool(self._get_list_store().exists(name))
@@ -663,6 +714,43 @@ class RemotePeerStore:
             return {"error": "refused", "reason": "a list holds the name"}
         stored = self.get_value(subtarget)
         root: dict[str, Any] = dict(stored) if isinstance(stored, dict) else {}
+        legacy = bool(root) and not _is_json(root)
+        if legacy:
+            # Stored before non-finite numbers were refused (DynamoDB only):
+            # no write of it can succeed, so it is replaced by this write
+            # alone rather than refusing every write to the property.
+            logger.warning(
+                "Replaced %r in the replica of peer %s: its stored value is not "
+                "JSON (stored before non-finite numbers were refused)",
+                subtarget,
+                self._peer_id,
+            )
+            root = {}
+        if not _is_json(value):
+            # The peer's new value at this path cannot be stored, so the
+            # previous one is stale: that path goes (fail closed); the
+            # property's other paths, which other subscriptions may have
+            # written, stay. Only existing parents are followed.
+            node: Any = root
+            for seg in segments[:-1]:
+                node = node.get(seg) if isinstance(node, dict) else None
+            if isinstance(node, dict) and segments[-1] in node:
+                root = _without_path(root, segments)
+                if root:
+                    self.set_value(subtarget, root)
+                else:
+                    self.delete_value(subtarget)
+            elif legacy:
+                # The stored value cannot be kept either (see above).
+                self.delete_value(subtarget)
+            logger.error(
+                "Refused %r/%s in the replica of peer %s and deleted that path: "
+                "not JSON",
+                subtarget,
+                resource,
+                self._peer_id,
+            )
+            return {"error": "refused", "reason": "not JSON", "success": False}
         node = root
         for seg in segments[:-1]:
             child = node.get(seg)
@@ -972,6 +1060,8 @@ class RemotePeerStore:
                     self._peer_id,
                 )
                 outcome = (key, {"error": "refused", "success": False})
+            except UnserialisableValue as e:
+                outcome = (key, self._refused_unserialisable(key, e))
             except DbError:
                 raise
             except Exception as e:

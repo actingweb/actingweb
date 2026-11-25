@@ -5,6 +5,111 @@ CHANGELOG
 Unreleased
 ----------
 
+v4.0.0rc4: November 25, 2026
+----------------------------
+
+.. note::
+
+   **4.0.0 is a major release; read** ``docs/migration/v4.0.rst`` **("Start
+   here") before upgrading.** From 4.0.0rc3 there is no new upgrade step:
+   no migration, no new operator command to run. One method is added
+   (``Attributes.delete_attr_if_data_equals``), and four attribute
+   behaviours change: every conditional compare is by JSON value on both
+   backends (on DynamoDB a stored ``true`` no longer matches ``1``), a null
+   row matches ``None``, a non-finite number in attribute data raises
+   ``UnserialisableValue``, and a subscription replica deletes a key whose
+   new value it cannot store. See item 37 of the guide's one-line list.
+
+ADDED
+~~~~~
+
+- **An application can delete an attribute only while it still holds the
+  value it read.** A sweep that read a record and then called
+  ``delete_attr`` deleted a value another request wrote in between, and the
+  backends' compare-and-delete was not public.
+  ``Attributes.delete_attr_if_data_equals(name, expected)`` answers
+  ``True`` when this call deleted the row and ``False`` when the row holds
+  something else, there is no row, or another bucket owns the key; a store
+  fault raises ``DbError``, never ``False``. The compare is by JSON value on
+  both backends (key order and number spelling do not matter, a stored
+  ``true`` is not ``1``, a null row matches ``None``). A missing name raises
+  ``ValueError``, and an ``expected`` JSON cannot encode raises
+  ``UnserialisableValue`` before the store is touched. On DynamoDB an
+  ``expected`` that is not a string costs one consistent read before the
+  conditional delete. See
+  ``docs/sdk/attributes-buckets.rst`` ("Deleting only what you read").
+
+FIXED
+~~~~~
+
+- **On DynamoDB, ``set_attr_if_data_equals`` and
+  ``delete_attr_if_data_equals`` missed a dict whose keys were in another
+  order.** They compared the stored JSON text, so only a byte-identical
+  encoding matched; both have been in the library since 4.0.0rc1. A string
+  (what list storage passes) is still compared in one conditional write; any
+  other value is read consistently, compared by JSON value, and written on
+  the condition that the row still holds what was read. A custom
+  ``DbAttribute`` backend must compare these two methods by JSON value too
+  (``docs/migration/v4.0.rst``, "Custom database backends").
+- **On DynamoDB, ``conditional_update_attr`` and ``create_attr_if_absent``'s
+  read-back matched a stored ``true`` against ``1``.** They compared with
+  Python's ``==``, which folds booleans into numbers; PostgreSQL's ``jsonb``
+  does not. Both backends now apply the same JSON value equality.
+  **Behavior change:** on DynamoDB, a ``conditional_update_attr`` whose
+  ``old_data`` differs from the stored value only by ``true`` against ``1``
+  (or ``false`` against ``0``) answers ``False``; 3.15.1 matched them too.
+  Check any caller that builds ``old_data`` by hand rather than from a read.
+  **Behavior change:** on DynamoDB, ``conditional_update_attr`` without
+  ``strict`` compares an ``old_data`` whose keys mix types (``{1: "a", "b":
+  2}``) as its JSON encoding (``{"1": "a", "b": 2}``), as PostgreSQL did,
+  where it answered ``False``; with ``strict=True`` it still raises.
+- **On DynamoDB, ``conditional_update_attr`` with ``old_data=None`` never
+  matched a row that stores null.** A row created with null data has no
+  ``data`` attribute, which the write's condition did not accept;
+  PostgreSQL matched it. **Behavior change:** on DynamoDB that call now
+  replaces the row's data, as on PostgreSQL. The write is also conditioned
+  on the row and its bucket, so a row deleted between the read and the
+  write answers ``False`` and is not recreated.
+- **On DynamoDB, an attribute update with a dict whose one key is a
+  DynamoDB type name (such as ``{"S": "x"}``) stored the wrong row.**
+  PynamoDB took such a dict as an already-serialised value in an update or
+  a condition, so ``conditional_update_attr`` (since 3.x) and
+  ``set_attr_if_data_equals`` stored its bare inner value, and a compare on
+  such a value never matched or raised ``DbError``. ``{"S": "x"}`` stored
+  the text ``x``, which no read can decode: every read of the row,
+  ``get_bucket`` included, raised ``DbError``, and so did ``delete_bucket``
+  and deleting the actor. An inner value that is itself JSON text
+  (``{"S": "5"}``) was read back silently as that value (``5``). Other type
+  names were rejected by DynamoDB and stored nothing. Values are now passed
+  as JSON text, so such a dict is stored and compared like any other.
+  Deletes (``delete_attr``, ``delete_attr_conditional``, ``delete_bucket``
+  and deleting all of an actor's attributes) read only a row's keys, so a
+  row an earlier release corrupted this way can be removed. An application
+  that wrote type-named dicts through ``conditional_update_attr`` checks
+  those rows; ``get_bucket`` raising ``DbError`` while the store is up is
+  one symptom.
+- **A non-finite number in an attribute write was stored on DynamoDB and
+  raised** ``DbError`` **on PostgreSQL.** ``NaN`` and ``Infinity`` are not
+  JSON, and ``jsonb`` rejects them, so the same write was an outage on one
+  backend and a success on the other. **Behavior change:** every attribute
+  write whose data holds one raises ``UnserialisableValue`` (a
+  ``ValueError``) on both backends before the store is touched, and
+  ``conditional_update_attr(strict=True)`` raises ``ValueError`` for a
+  non-finite ``old_data`` where PostgreSQL raised ``DbError``. A DynamoDB
+  row that already holds one stays readable and can be overwritten or
+  deleted, but no compare matches it. List items are not covered: a list
+  stores each item as a string. **Behavior change:** a subscription
+  replica deletes a key whose new value it cannot store (a peer's
+  non-finite value, or a resource write into a property stored before
+  this release that holds one), logs it at ERROR and applies the rest of
+  the callback or baseline. On DynamoDB the value was stored; on PostgreSQL
+  the whole callback failed and was resent. The key does not keep a rebuild
+  owed, and a later finite value from the peer stores it again. At a
+  resource path only that path is deleted and the property's other paths
+  stay; a property stored before this release that holds such a number
+  is replaced by the next resource write to it. A revocation that
+  rewrites such a property deletes it whole.
+
 v4.0.0rc3: November 23, 2026
 ----------------------------
 

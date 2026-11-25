@@ -27,7 +27,7 @@ offers it when a plan touches a capability with no spec.
 | Actor creation | [actor-creation.md](actor-creation.md) | ACR | partial | 2026-11-19 |
 | Property lists | [property-lists.md](property-lists.md) | PLS | partial | 2026-11-19 |
 | Trust establishment | [trust-establishment.md](trust-establishment.md) | TES | partial | 2026-11-21 |
-| Store faults | [store-faults.md](store-faults.md) | SFT | partial | 2026-11-23 |
+| Store faults | [store-faults.md](store-faults.md) | SFT | partial | 2026-11-25 |
 
 Until a capability has a spec, its behaviour is recorded where it was before:
 `docs/` (what a consumer is told), `docs/protocol/actingweb-spec.rst` (the

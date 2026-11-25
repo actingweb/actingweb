@@ -1679,17 +1679,32 @@ class DbAttributeProtocol(Protocol):
 
     @staticmethod
     def set_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str, data: Any
+        actor_id: str, bucket: str, name: str, expected: Any, data: Any
     ) -> bool:
-        """Replace the row's data when it equals ``expected`` exactly (as
-        read back)."""
+        """Replace the row's data when it equals ``expected`` by JSON value;
+        False when it differs, the row is absent, or another bucket owns the
+        key. A fault raises ``DbError``.
+
+        A backend **must** compare by JSON value, as PostgreSQL's ``jsonb``
+        does: key order and number spelling (``1.0``, ``1``) do not matter,
+        booleans, numbers, strings and null are distinct (``true`` is not
+        ``1``), and a null row matches ``None``. ``expected`` is first
+        compared as its JSON encoding (a tuple is a list, an int key its
+        string). A backend that compares stored text answers False to a dict
+        whose keys are in another order. ``expected`` that JSON cannot
+        encode (a non-finite number included) raises ``UnserialisableValue``
+        before the store is touched. List storage passes the string it
+        wrote; a string is compared as given.
+        """
         ...
 
     @staticmethod
     def delete_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str
+        actor_id: str, bucket: str, name: str, expected: Any
     ) -> bool:
-        """Delete the row when its data equals ``expected`` exactly."""
+        """Delete the row when its data equals ``expected`` by JSON value,
+        with the compare and refusals of ``set_attr_if_data_equals``. True
+        only when this call deleted the row."""
         ...
 
     @staticmethod

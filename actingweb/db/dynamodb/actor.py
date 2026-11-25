@@ -370,7 +370,7 @@ class DbActor:
         if not actor_id:
             raise ValueError("rename_creator needs an actor id")
         validate_rename_writes(internal, marker)
-        from actingweb.db.dynamodb.attribute import Attribute
+        from actingweb.db.dynamodb.attribute import Attribute, _serialised
         from actingweb.db.utils import sanitize_json_data
 
         new_creator = normalise_creator(creator)
@@ -439,7 +439,7 @@ class DbActor:
                 )
             elif w.when == "equals":
                 cond = (Attribute.bucket == INTERNAL_BUCKET) & (
-                    Attribute.data == w.expected
+                    Attribute.data == _serialised(w.expected)
                 )
             else:
                 cond = owned
@@ -471,7 +471,7 @@ class DbActor:
                         actor_id,
                         INTERNAL_BUCKET + ":" + MARKER_NAME,
                         condition=(Attribute.bucket == INTERNAL_BUCKET)
-                        & (Attribute.data == marker),
+                        & (Attribute.data == _serialised(marker)),
                     ),
                 )
             )

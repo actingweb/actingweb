@@ -641,9 +641,10 @@ class DbAttribute:
         if strict:
             # The caller's values are checked before the store is touched
             # (see the DynamoDB backend): sorted, as DynamoDB compares them,
-            # so both backends refuse the same values.
-            json.dumps(old_data, sort_keys=True)
-            json.dumps(new_data, sort_keys=True)
+            # so both backends refuse the same values (a non-finite number
+            # included: jsonb would reject it inside the try, as a fault).
+            json.dumps(old_data, sort_keys=True, allow_nan=False)
+            json.dumps(new_data, sort_keys=True, allow_nan=False)
 
         try:
             with get_connection() as conn:
@@ -947,11 +948,25 @@ class DbAttribute:
         return created
 
     @staticmethod
+    def _expected(expected: Any) -> Any:
+        """``expected`` as the compare takes it: refused before the store
+        when JSON cannot encode it, and sanitised unless it is a string
+        (list storage compares the string it wrote)."""
+        require_json(expected, "attribute data")
+        if isinstance(expected, str):
+            return expected
+        from actingweb.db.utils import sanitize_json_data
+
+        return sanitize_json_data(expected, log_source="attribute")
+
+    @staticmethod
     def set_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str, data: Any
+        actor_id: str, bucket: str, name: str, expected: Any, data: Any
     ) -> bool:
-        """Replace the row's data when it equals ``expected`` exactly."""
+        """Replace the row's data when it equals ``expected`` by JSON value
+        (``jsonb`` equality)."""
         require_json(data, "attribute data")
+        expected = DbAttribute._expected(expected)
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -977,9 +992,11 @@ class DbAttribute:
 
     @staticmethod
     def delete_attr_if_data_equals(
-        actor_id: str, bucket: str, name: str, expected: str
+        actor_id: str, bucket: str, name: str, expected: Any
     ) -> bool:
-        """Delete the row when its data equals ``expected`` exactly."""
+        """Delete the row when its data equals ``expected`` by JSON value
+        (``jsonb`` equality)."""
+        expected = DbAttribute._expected(expected)
         try:
             with get_connection() as conn:
                 with conn.cursor() as cur:

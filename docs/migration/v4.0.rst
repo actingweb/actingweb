@@ -682,6 +682,18 @@ The changes, one line each
 36. **Operator commands refuse to write on DynamoDB when ``AWS_DB_PREFIX``
     is unset** (see `The operator commands`_): a script that runs them on
     the default prefix sets it explicitly, even to ``demo_actingweb``.
+37. **Attribute compares are by JSON value on both backends, and a
+    non-finite number is refused.** On DynamoDB,
+    ``conditional_update_attr`` no longer matches a stored ``true`` against
+    an ``old_data`` of ``1``, as 3.15.1 did, and an ``old_data`` of ``None``
+    now matches a row that stores null. Every
+    attribute write whose data holds ``NaN`` or ``Infinity`` raises
+    ``UnserialisableValue`` (DynamoDB stored it; PostgreSQL raised
+    ``DbError``). A DynamoDB row that already holds one stays readable and
+    can be overwritten or deleted, but no compare matches it. A list item
+    is not covered: a list stores each item as a string. A subscription
+    replica deletes a key whose new value it cannot store (a peer's
+    non-finite value) and logs it at ERROR.
 
 
 .. _v40-every-application:
@@ -3619,12 +3631,18 @@ Attribute lists (4.0) need nine more ``DbAttribute`` methods,
 order of the UTF-8 name), ``create_attr_if_not_exists`` and
 ``create_attrs_if_not_exist`` (create only absent rows),
 ``set_attr_if_data_equals`` and ``delete_attr_if_data_equals`` (compare the
-stored data exactly), ``delete_attrs`` and ``put_attr``. Every attribute
+stored data with ``expected`` **by JSON value**, as PostgreSQL's ``jsonb``
+does: key order and number spelling do not matter, ``true`` is not ``1``, a
+null row matches ``None``, and ``expected`` is compared as its JSON
+encoding; list storage passes strings, but
+``Attributes.delete_attr_if_data_equals`` passes the application's value, so
+a backend that compares stored text answers ``False`` to a dict whose keys
+are in another order), ``delete_attrs`` and ``put_attr``. Every attribute
 write, ``set_attr`` included, is conditioned on its bucket: a write to a key
 another bucket holds raises ``AttributeKeyCollision``, and a value ``json``
-cannot encode raises ``UnserialisableValue`` before the store is called
-(``require_json`` in ``actingweb.db.exceptions`` does the check; a custom
-backend calls it too). The list format itself
+cannot encode, a non-finite number (``NaN``, ``Infinity``) included, raises
+``UnserialisableValue`` before the store is called (``require_json`` in
+``actingweb.db.exceptions`` does the check; a custom backend calls it too). The list format itself
 is ``actingweb.list_core.ListCore`` over a ``ListStorage``; a backend does not
 implement ``ListStorage``, the library adapts these methods to it.
 
@@ -3665,7 +3683,9 @@ module docstring of ``actingweb.db.protocols`` states:
   row) holds the name; ``True`` when a lost condition leaves a JSON-equal
   row (an SDK-retried create); ``ValueError`` for a missing
   ``actor_id``, ``bucket`` or ``name``; ``DbError`` on a fault. This is
-  the one conditional write that raises on a fault;
+  the one backend conditional write that always raises on a fault
+  (``Attributes.delete_attr_if_data_equals`` raises too, through
+  ``delete_attr_if_data_equals``, which raises on a fault already);
 - implement ``DbSubscription.increment_seq(actor_id=None, peerid=None,
   subid=None)`` as one atomic update that returns the new sequence number
   (None when the row is gone). The library no longer writes ``previous + 1``

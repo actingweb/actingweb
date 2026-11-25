@@ -110,19 +110,26 @@ requests might modify the same attribute simultaneously.
 
 **How It Works:**
 
-- **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data`` for atomic compare-and-swap
-- **DynamoDB**: Uses conditional update expressions with ``condition=(Attribute.data == old_data)``
-- Returns ``True`` only if the current database value exactly matches ``old_data``
+- **PostgreSQL**: Uses ``UPDATE ... WHERE data = old_data::jsonb`` for atomic compare-and-swap
+- **DynamoDB**: Reads the row consistently, compares, then updates on the condition
+  that the row still holds what was read
+- Returns ``True`` only if the current database value equals ``old_data`` **by JSON
+  value**, on both backends: key order and number spelling (``1.0``, ``1``) do not
+  matter, a stored ``true`` is not ``1``, a row that stores null matches ``None``,
+  and ``old_data`` is compared as its JSON encoding (a tuple is a list, an int key
+  its string)
 - Returns ``False`` if value was modified by another request (no update performed).
 - **By default it also returns** ``False`` **if the backend faulted.** Pass
   ``strict=True`` (v4.0+) to have a fault raise ``DbError`` instead, chained to the
   backend's exception (so a fault a retry cannot fix classifies as permanent). A
-  value JSON cannot order or encode raises ``TypeError`` or ``ValueError`` before
-  the store is touched.
+  value JSON cannot order or encode (a non-finite number such as ``NaN`` or
+  ``Infinity`` included) raises ``TypeError`` or ``ValueError`` before the store is
+  touched.
   ``False`` then means the condition did not hold: the row holds something other
   than ``old_data``, or there is no row. Unlike the reads, whose ``strict`` defaults
   to ``True``, the default here is ``False``: an existing caller keeps the answer it
-  had. (``create_attr_if_absent`` below always raises ``DbError`` on a fault.)
+  had. (``create_attr_if_absent`` and ``delete_attr_if_data_equals`` below always
+  raise ``DbError`` on a fault.)
 - **Neither a** ``DbError`` **nor a** ``False`` **proves the write did not land.** A
   write whose answer was lost can be retried by the database client, and the retry
   then meets its own ``new_data`` and fails the condition. A caller that must know
@@ -207,6 +214,53 @@ an idempotency key) where a read-then-write would let two requests both win.
 - Do not use it on names an untrusted party chooses, in a bucket where an expired row
   still carries meaning (a consumed marker kept for ``consumed_ttl``): it replaces an
   expired row.
+
+Deleting only what you read (v4.0+)
+------------------------------------
+
+``delete_attr_if_data_equals(name, expected)`` deletes an attribute only while it still
+holds the value the application read. A read-then-``delete_attr`` would delete a value
+another request wrote in between.
+
+.. code-block:: python
+
+   from actingweb import attribute
+
+   records = attribute.Attributes(actor_id=actor_id, bucket="shares", config=config)
+
+   # A sweep: delete each expired record, unless someone renewed it meanwhile.
+   # get_bucket() returns the instance's cache, which the deletes change:
+   # iterate over a copy.
+   for name, row in list((records.get_bucket() or {}).items()):
+       if row["data"]["expires_at"] < now:
+           records.delete_attr_if_data_equals(name, row["data"])
+
+**The rules:**
+
+- ``True`` means this call deleted the row.
+- ``False`` means the row holds something else, there is no row, or another bucket owns
+  the key. A later ``get_attr(name)`` on the same ``Attributes`` reads the store.
+- The compare is by JSON value, as for ``conditional_update_attr`` above: key order and
+  number spelling do not matter, a stored ``true`` is not ``1``, and a row that stores
+  null matches ``None``. A row past its TTL is compared and deleted like any other.
+- A fault raises ``DbError`` (the integrations answer 503), never ``False``. As with
+  ``conditional_update_attr``, a ``False`` does not prove the delete did not land: a
+  delete whose answer was lost can be retried by the database client. Re-read the row
+  (``get_attr``) before trying again: absent means the work is done.
+- On DynamoDB the compare re-encodes the stored data for its condition. A row the
+  library wrote always matches; a row another writer stored as different JSON text
+  (compact spacing, say) answers ``False`` and is never deleted by mistake.
+- A missing ``name`` raises ``ValueError``. An ``expected`` that JSON cannot encode (a
+  ``datetime``, a ``set``, ``NaN`` or ``Infinity``) raises ``UnserialisableValue``
+  before the store is touched.
+- On DynamoDB an ``expected`` that is not a string costs one consistent read before
+  the conditional delete; a string is compared in the delete's own condition.
+- A row that holds ``NaN`` or ``Infinity`` (possible only on DynamoDB, written before
+  4.0.0rc4) is not JSON: passing its data back as ``expected`` raises
+  ``UnserialisableValue``. A sweep that may meet such a row catches it and removes the
+  row with ``delete_attr``. A DynamoDB row an earlier release wrote that cannot be
+  read back at all (see the changelog for 4.0.0rc4) raises ``DbError`` from every
+  read, ``get_bucket`` included; ``delete_attr`` removes it.
 
 Writes are bound to their bucket (v4.0+)
 -----------------------------------------

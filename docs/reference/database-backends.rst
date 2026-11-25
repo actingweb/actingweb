@@ -572,11 +572,19 @@ Since 4.0 both backends answer a database fault the same way, and
   ``conditional_update_attr``, which raises ``DbError`` from the backend's
   exception; a backend's method is passed the keyword only by a caller that
   asks for it, so a custom backend without it keeps working for every other
-  caller and raises ``TypeError`` for that one). ``create_attr_if_absent`` is the one
-  conditional write that **raises** ``DbError`` on a fault, because a retried
-  create must tell a lost race from an outage. A custom ``DbAttribute`` backend
-  implements it (see :doc:`../migration/v4.0`); two callers writing identical
-  data both get True, so a caller that needs one winner stores a nonce.
+  caller and raises ``TypeError`` for that one). ``create_attr_if_absent`` and
+  ``Attributes.delete_attr_if_data_equals`` **raise** ``DbError`` on a fault,
+  because a retried create or a sweep must tell a lost race from an outage. A
+  custom ``DbAttribute`` backend implements ``create_attr_if_absent`` (see
+  :doc:`../migration/v4.0`); two callers writing identical data both get True,
+  so a caller that needs one winner stores a nonce.
+- **Conditional compares are by JSON value.** Every conditional attribute
+  compare (``conditional_update_attr``, ``create_attr_if_absent``'s
+  read-back, ``set_attr_if_data_equals`` and ``delete_attr_if_data_equals``)
+  uses JSON value equality on both backends: key order and number spelling
+  do not matter, and booleans, numbers, strings and null are distinct (a
+  stored ``true`` is not ``1``). A custom backend must compare the same way;
+  no parity test enforces it.
 - **Writes raise.** A ``create``, ``modify`` or ``set`` that faults raises;
   False is kept for the documented refusals (missing arguments or handle, an
   id that is taken).

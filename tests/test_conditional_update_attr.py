@@ -313,6 +313,120 @@ class TestConditionalUpdateAttrJSONComparison:
 
         assert result is True, "Should handle nested JSON structures correctly"
 
+    def test_true_is_not_one(self) -> None:
+        """AC-16 (plans/2026-11-25-attribute-compare-and-delete.md): JSON
+        value equality, as PostgreSQL's ``jsonb`` applies it. DynamoDB's
+        compare used to fold ``true`` into ``1``."""
+        db_attr = self.config.DbAttribute.DbAttribute()  # type: ignore
+        assert db_attr.set_attr(
+            actor_id=self.test_actor_id,
+            bucket="test_bucket",
+            name="flag",
+            data={"done": True},
+        )
+        assert (
+            db_attr.conditional_update_attr(
+                actor_id=self.test_actor_id,
+                bucket="test_bucket",
+                name="flag",
+                old_data={"done": 1},
+                new_data={"done": 2},
+            )
+            is False
+        )
+        row = db_attr.get_attr(
+            actor_id=self.test_actor_id, bucket="test_bucket", name="flag"
+        )
+        assert row["data"] == {"done": True}
+
+    def _null_row(self, db_attr: Any, form: str) -> None:
+        """A row that stores null, in each of DynamoDB's two forms: no
+        ``data`` attribute (``create_attr_if_absent``), or ``data: {NULL:
+        true}`` (``conditional_update_attr``)."""
+        if form == "absent_attribute":
+            assert db_attr.create_attr_if_absent(
+                actor_id=self.test_actor_id,
+                bucket="test_bucket",
+                name="nullrow",
+                data=None,
+            )
+        else:
+            assert db_attr.set_attr(
+                actor_id=self.test_actor_id,
+                bucket="test_bucket",
+                name="nullrow",
+                data={"v": 1},
+            )
+            assert db_attr.conditional_update_attr(
+                actor_id=self.test_actor_id,
+                bucket="test_bucket",
+                name="nullrow",
+                old_data={"v": 1},
+                new_data=None,
+            )
+        row = db_attr.get_attr(
+            actor_id=self.test_actor_id, bucket="test_bucket", name="nullrow"
+        )
+        assert row is not None and row["data"] is None
+
+    @pytest.mark.parametrize("form", ["absent_attribute", "null_value"])
+    def test_a_null_row_matches_none(self, form: str) -> None:
+        """AC-25: ``old_data=None`` on a null row replaces its data."""
+        db_attr = self.config.DbAttribute.DbAttribute()  # type: ignore
+        self._null_row(db_attr, form)
+        assert (
+            db_attr.conditional_update_attr(
+                actor_id=self.test_actor_id,
+                bucket="test_bucket",
+                name="nullrow",
+                old_data=None,
+                new_data={"v": "after"},
+            )
+            is True
+        )
+        row = db_attr.get_attr(
+            actor_id=self.test_actor_id, bucket="test_bucket", name="nullrow"
+        )
+        assert row["data"] == {"v": "after"}
+
+    @pytest.mark.parametrize("form", ["absent_attribute", "null_value"])
+    def test_a_null_row_deleted_before_the_write_stays_gone(self, form: str) -> None:
+        """AC-28: "no ``data``" also holds for a missing row, and an update
+        of a missing key creates the item; the condition requires the row
+        and its bucket too."""
+        if self.backend != "dynamodb":
+            pytest.skip("DynamoDB's read-then-write window")
+        from unittest.mock import patch
+
+        from pynamodb.exceptions import DoesNotExist
+
+        from actingweb.db.dynamodb.attribute import Attribute
+
+        db_attr = self.config.DbAttribute.DbAttribute()  # type: ignore
+        self._null_row(db_attr, form)
+        real = Attribute.get
+
+        def get_then_delete(*a: Any, **k: Any) -> Any:
+            item = real(*a, **k)
+            real(self.test_actor_id, "test_bucket:nullrow").delete()
+            return item
+
+        with patch.object(Attribute, "get", get_then_delete):
+            assert (
+                db_attr.conditional_update_attr(
+                    actor_id=self.test_actor_id,
+                    bucket="test_bucket",
+                    name="nullrow",
+                    old_data=None,
+                    new_data={"v": "after"},
+                )
+                is False
+            )
+        with pytest.raises(DoesNotExist):
+            Attribute.get(
+                self.test_actor_id, "test_bucket:nullrow", consistent_read=True
+            )
+
 
 @pytest.mark.integration
 @pytest.mark.slow
@@ -874,6 +988,27 @@ class TestStrictConditionalUpdate:
             )
             is True
         )
+
+    def test_a_non_finite_old_value_is_not_an_outage(self) -> None:
+        """AC-27 (plans/2026-11-25-attribute-compare-and-delete.md): a
+        non-finite ``old_data`` is the caller's ``ValueError`` on both
+        backends (PostgreSQL's ``jsonb`` used to make it a ``DbError``).
+        Without ``strict`` the same call answers False."""
+        from actingweb.db.exceptions import DbError
+
+        for number in (float("nan"), float("inf")):
+            with pytest.raises(ValueError) as raised:
+                self.attrs.conditional_update_attr(
+                    name="row", old_data={"v": number}, new_data={"v": 2}, strict=True
+                )
+            assert not isinstance(raised.value, DbError)
+            assert (
+                self.attrs.conditional_update_attr(
+                    name="row", old_data={"v": number}, new_data={"v": 2}
+                )
+                is False
+            )
+        assert self._stored() == {"v": 1}
 
     @pytest.mark.parametrize("which", ["old_data", "new_data"])
     def test_a_value_that_cannot_be_compared_is_not_an_outage(self, which: str) -> None:

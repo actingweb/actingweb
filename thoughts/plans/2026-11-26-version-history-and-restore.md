@@ -1,9 +1,9 @@
 ---
 status: proposed
-approved: 2026-11-26 by Greger Wedel
+approved: 2026-11-27 by Greger Wedel
 ---
 
-# Implementation Plan: Version history and restore for properties, attributes and list elements
+# Implementation Plan: Version history for properties, attributes and list elements, restored by writing back
 
 **Date:** 2026-11-26
 **Feature:** thoughts/features/2026-11-26-version-history-and-restore.md
@@ -12,22 +12,35 @@ approved: 2026-11-26 by Greger Wedel
 starts on `release/4.1.0-version-history`, cut from `master` after the
 `v4.0.0` tag and rebased on any later 4.0 fix; one PR, one commit per phase.
 
+## Update Log
+
+- **2026-11-27**: After the consumer's review
+  (`thoughts/research/2026-11-27-emm-review-of-version-history-plan.md`).
+  The library restore of properties and attributes is removed: its only
+  known consumer keeps every versioned item as a list element, where the
+  plan already has the application write a version back. All three kinds
+  now restore the same way, and no backend protocol method is added
+  (Removed Phases). `delete_with_versions` moves to Phase 1. A take can
+  carry its own `max_versions` (AC-75). The guide gains the consumer's
+  patterns. Phases renumbered: 2 is list-element history, 3 is
+  documentation. Approval removed; the owner approves the updated plan.
+
 ## Overview
 
 An application can keep explicit snapshots of a property, an attribute or a
-list element, list and read them, and put a property or attribute back in
-one all-or-nothing step, without the history showing up in a listing, on the
+list element, list and read them, and write one back with the item's normal
+write, without the history showing up in a listing, on the
 wire, in a diff or in a reverse lookup. The library owns the store, the
-retention, the removal with the owner and the restore, so a consumer does
+retention and the removal with the owner, so a consumer does
 not hand-roll an audit list. Headline measures: ordinary reads do the same
 store work with 0 or 1000 versions (AC-16), and a deployment that does not
 opt in upgrades with no step (AC-1). Ships as 4.1.0.
 
 ## Decisions Made
 
-- **Release**: 4.1.0 minor with `docs/migration/v4.1.rst` - new
-  configuration and backend protocol methods; nothing changes without
-  opting in.
+- **Release** [Updated 2026-11-27]: 4.1.0 minor with
+  `docs/migration/v4.1.rst` - new configuration and a new public API, no
+  backend protocol method; nothing changes without opting in.
 - **Specs**: no `/create_spec` first; the Spec Delta starts a partial
   `version-history` spec at merge (owner).
 - **Storage**: a hidden partition `{actor_id}$ver` in the properties table
@@ -42,10 +55,15 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
   by default (properties and attributes).
 - **Automatic versioning**: not in this round - every write path would have
   to take a version first.
-- **Restore**: properties and attributes only, through one new backend call
-  per kind that writes the value and the pre-restore version together. A
-  property restore runs the hook and diff sequence of the Python property
-  write, including that write's treatment of a hook that returns nothing.
+- **Restore** [Updated 2026-11-27] (owner, after the consumer's review):
+  the library has no restore call for any kind. An application reads a
+  version and writes its content with the item's normal write, which runs
+  that write's hooks, diff and reverse-lookup maintenance; it takes a
+  version first when the current value is to be kept. The two steps are
+  not one transaction. A list element's write can be conditional
+  (`update_by_handle`); a property's and an attribute's public write is
+  not, so a writer landing between the take and the write is overwritten
+  as by any second write.
 - **List elements** (owner, after evaluation): history is filed under a key
   the application passes. A re-key call moves a history to a new key. The
   application writes a restored element back itself.
@@ -58,6 +76,12 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **Limit**: app-wide `max_versions`, unlimited unless set; every take
   removes all versions past it, never the one just written; a lowered limit
   takes effect at each item's next take.
+- **Limit per take** [Added 2026-11-27] (owner): `take(max_versions=N)`
+  replaces the app-wide value for that take, higher or lower, and uses the
+  same trim. Nothing is stored per item: a take without it trims to the
+  app-wide value again.
+- **Retention by age** [Added 2026-11-27] (owner): no library call. The
+  guide shows a sweep built on the key listing and `remove_all()`.
 - **Whole-list delete or clear**: element versions are kept.
 - **Replicas, library buckets, system actors**: a version call is refused.
 - **Turned off**: versions are kept and unreachable until versioning is on
@@ -66,18 +90,28 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **Erasure** (owner, after evaluation): a normal delete keeps history. An
   actor-wide purge works with versioning off, runs when an unvouched actor
   is cleaned on adoption, and has an operator command.
-- **Restoring a deleted item**: nothing is saved first.
+- **Writing back a deleted item** [Updated 2026-11-27]: an ordinary write;
+  there is no current value to take first.
 - **Remove one**: by id only.
 - **AC-16 proof**: exact call counts on DynamoDB, structural on PostgreSQL.
 - **Bounds**: key at most 512 characters; metadata a JSON object of at most
   4 KB; content at most `max_bytes` (2 MiB default) on both backends,
   independent of the list limits; each listed version reports its bytes.
-- **Falsy content** (plan): `0`, `False`, `""`, `[]`, `{}` and `null` are
-  refused for a property or attribute version, because both backends store
-  them as a delete.
+- **Falsy content** (plan) [Updated 2026-11-27, a correction]: content a
+  write would store as a delete is refused. For an attribute that is any
+  falsy value (`attribute.py:446-452`). For a property it is `None` and
+  `""` only: a property write encodes `0`, `False`, `[]` and `{}` to JSON
+  text before its empty check (`db/dynamodb/property.py:235-248`, the same
+  in PostgreSQL) and stores them.
+- **What a property version holds** [Added 2026-11-27]: a default take
+  holds the stored string, which for a value written as an object is its
+  JSON text. Written back as it is, the store holds the same string, but
+  the put hook receives a string and the diff carries a JSON string where
+  the original write carried an object. An application that writes objects
+  decodes the content before writing it back.
 - **Attributes** (plan): a version holds data only, not the row's timestamp
-  or TTL; a restore writes what `set_attr(name, data)` writes; an expired
-  row is absent.
+  or TTL; written back with `set_attr(name, data)` it has a TTL only if
+  the application passes one; an expired row is absent.
 - **Order** (plan): every id is minted above the item's newest stored id,
   so a version just written is always `-1`. Two hosts writing at once can
   still tie-break by the random part.
@@ -89,9 +123,19 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **Library-minted element keys and `move_to`**: deferred by the owner on
   2026-11-26. As drafted they did not fit the consumer's moves (a move
   changes the value; minting invalidates the caller's handle; Evaluation
-  Notes 12 to 15, 41, 42). Blocks nothing here. It is the next plan,
-  designed against the consumer's move code, before an application whose
-  elements have no id of their own can use element history.
+  Notes 12 to 15, 41, 42). Blocks nothing here. The consumer
+  it was drafted for has ids that are never reused and re-keys after a
+  move (triage of 2026-11-27), so no consumer waits for it. It is designed
+  against a consumer's move code when an application whose elements have
+  no id of their own asks for element history.
+- **A write together with a version of what it replaces, in one
+  transaction** (owner, 2026-11-27): deferred to
+  `thoughts/todo/write-with-a-version-in-one-transaction.md`, designed once
+  for all three kinds, starting from list elements. Blocks nothing here:
+  the two-call form works and its gap is stated in the guide.
+- **A batch take, and an export and import of an actor's versions**
+  (2026-11-27): `thoughts/todo/versions-batch-take.md` and
+  `thoughts/todo/versions-export-import.md`. Block nothing here.
 
 ## What We're NOT Doing
 
@@ -99,8 +143,14 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
   specification.
 - Diffs between versions - the application can compare two contents.
 - Whole-bucket or whole-actor snapshots - a different feature.
-- Per-item limits, time-based retention - the limit is app-wide and
-  count-based (owner).
+- Stored per-item or per-prefix limits - a take can carry its own limit
+  (AC-75), which needs no rule for which names a prefix matches.
+- Time-based retention - the library cannot tell a deleted item from a
+  live one, and any call would need the same per-actor caller as the sweep
+  the guide shows (owner, 2026-11-27).
+- A library restore call for a property or an attribute - no known caller;
+  it carried two backend protocol methods and a cross-table transaction to
+  close a gap any two writes have (owner, 2026-11-27; Removed Phases).
 - Automatic versioning (AC-41, AC-42) - see Decisions.
 - A library restore into a list (AC-30, AC-31) - placement after a move is
   the application's knowledge.
@@ -134,16 +184,13 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - `db/postgresql/schema.py:237` `ix_attributes_list_rows` and
   `_check_attribute_schema_ready` (`interface/app.py:2050`) - the pattern
   for an index a start-up gate requires.
-- `db/dynamodb/property.py:393` `_write_indexed`,
-  `db/postgresql/property.py:285` `_set_indexed`, `DbActor._run_transaction`
-  - the indexed write and the atomicity the restore calls extend.
-- `interface/property_store.py:136` `__setitem__` - hook, previous value,
-  write, diff; restore runs the same sequence.
+- `interface/property_store.py:136` `__setitem__` and `:149` `__delitem__`
+  - the normal write an application restores with (hook, previous value,
+  write, diff) and the delete `delete_with_versions` calls.
 - `maintenance/verify_orphans.py:210`, `maintenance/deletions.py`,
   `maintenance/check_ready.py` - operator tooling the plan extends.
-- `tests/_read_counters.py`, `tests/_adoption_helpers.make_config(database=)`,
-  `tests/test_property_lookup_sync.py:82-181` (transaction fault and
-  collision baseline) - reused.
+- `tests/_read_counters.py`, `tests/_adoption_helpers.make_config(database=)`
+  - reused.
 
 ## Acceptance Criteria
 
@@ -192,25 +239,12 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **AC-20** — An id that does not exist raises `VersionNotFound` and
   changes nothing.
 - **AC-21** — A `-x` past the history raises `VersionNotFound`.
-- **AC-22** — An item with no versions lists empty; reading or restoring
-  one raises `VersionNotFound`.
+- **AC-22** (reworded 2026-11-27: no restore) — An item with no versions
+  lists empty; reading one raises `VersionNotFound`.
 
 *Restore*
-- **AC-23** (reworded in plan) — A restore makes the current value what a
-  normal write of the version's content would store, after saving the
-  previous current value as a new version, which is then `-1`.
-- **AC-24** — The restored version stays in the history under the same id.
-- **AC-25** — A restore with `keep_current=False` replaces the current
-  value and creates no version.
-- **AC-26** — A property restore fires the same hooks and diff as a normal
-  write of that value.
-- **AC-27** — Restoring an indexed property leaves the property and its
-  lookup rows as a normal write of that value would, including when another
-  actor holds the value.
-- **AC-28** (reworded in plan: properties and attributes) — When the store
-  faults during a restore, the error is raised and the current value is the
-  old one or the restored one, never partial; the pre-restore version
-  exists if and only if the restore's write committed.
+- ~~**AC-23**~~ to ~~**AC-28**~~ — dropped 2026-11-27: no library restore
+  call (owner). AC-76 states what a write-back gives.
 
 *List elements*
 - **AC-29** (reworded in plan) — A version of a list element records the
@@ -225,7 +259,8 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **AC-33** — After a normal delete of an item, after
   `delete_properties()`, `clear()` and an HTTP delete, its versions are
   still listed.
-- **AC-34** — Restoring a version of a deleted item brings it back.
+- ~~**AC-34**~~ — dropped 2026-11-27: with AC-23; a deleted item is
+  written back as any version is (AC-76).
 - **AC-35** — Removing one version by id removes only that one, and `-x`
   closes the gap.
 - **AC-36** — `remove_all()` removes every version of the item and leaves
@@ -259,25 +294,24 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **AC-51** (added in plan: turned off) — With versioning turned off after
   use, version calls raise `VersioningNotConfigured`; on again, the earlier
   versions are listed.
-- **AC-52** (added in plan: limit) — After the limit is lowered, an item
-  keeps its surplus until its next take and has exactly the limit after it.
+- **AC-52** (added in plan: limit; reworded 2026-11-27) — After the limit
+  is lowered, an item keeps its surplus until its next take and has exactly
+  the limit that take applies after it.
 - **AC-53** (added in plan: bounds) — Each listed version reports the bytes
   of its content.
-- **AC-54** (added in plan: custom backend) — With versioning on and a
-  backend lacking a restore call, start-up is refused with
-  `VersioningNotReady` naming the methods; with versioning off it starts.
+- ~~**AC-54**~~ — dropped 2026-11-27: no backend method is added, so no
+  backend is refused for lacking one.
 - **AC-55** (added in plan: list delete) — After a list is deleted or
   cleared, its elements' versions are still listed under their keys.
 - **AC-56** (added in plan) — `remove` with `-x`, or with an id that does
   not exist, changes nothing and raises `ValueError` or `VersionNotFound`.
-- **AC-57** (added in plan) — Restoring a version of a deleted item creates
-  no version.
+- ~~**AC-57**~~ — dropped 2026-11-27: with AC-23.
 - **AC-58** (added in plan: operator) — `actingweb-verify-orphans` reports
   the version rows of a gone actor and not those of a live one.
 - ~~**AC-59**~~ — dropped: deferred with AC-46.
 - **AC-60** (added in plan: evaluation) — A property or attribute version
   whose content the item's row cannot hold on this backend is refused at
-  the take, and again at a restore, with `VersionTooLarge`.
+  the take with `VersionTooLarge` (reworded 2026-11-27: no restore).
 - **AC-61** (added in plan: L2 restore path) — Reading a list-element
   version returns content that, written back with the list's own calls,
   equals the element as passed to the take.
@@ -294,10 +328,12 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **AC-66** (added in plan: owner, index) — On PostgreSQL with versioning
   on and the index missing, start-up is refused with `VersioningNotReady`
   naming `alembic upgrade head`; with versioning off it starts.
-- **AC-67** (added in plan: evaluation) — After a restore, a read of the
-  item on the same store object returns the restored value.
-- **AC-68** (added in plan: evaluation) — Falsy content for a property or
-  attribute version raises `ValueError` and stores nothing.
+- ~~**AC-67**~~ — dropped 2026-11-27: with AC-23; a write-back is the
+  store's own write and updates its cache as any write does.
+- **AC-68** (added in plan: evaluation; reworded 2026-11-27, a correction) —
+  Falsy content for an attribute version, and `None` or `""` for a property
+  version, raises `ValueError` and stores nothing; `0`, `False`, `[]` and
+  `{}` are stored for a property and read back as passed.
 - **AC-69** (added in plan: evaluation) — A listing of names or keys
   returns each with its newest version's id, timestamp and metadata, takes
   a prefix, and reads no version row; the buckets that have versions are
@@ -306,8 +342,8 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
   prefix removes exactly the histories whose key starts with it.
 - **AC-71** (added in plan: owner, erasure) — When an unvouched actor is
   cleaned on adoption, its versions are gone.
-- **AC-72** (added in plan: evaluation) — At the limit, a restore keeps the
-  version it restored, and a take never removes the version it wrote.
+- **AC-72** (added in plan: evaluation; reworded 2026-11-27: no restore) —
+  At the limit, a take never removes the version it wrote.
 - **AC-73** (added in plan: evaluation) — Creating an actor with a
   caller-supplied id that is free leaves it with no versions, whatever an
   earlier actor of that id left; creating an id that exists removes
@@ -315,20 +351,31 @@ opt in upgrades with no step (AC-1). Ships as 4.1.0.
 - **AC-74** (added in plan: evaluation) — The names and keys listed are
   exactly those with at least one version, after any order of concurrent
   takes and removals has finished.
+- **AC-75** (added 2026-11-27: owner, limit per take) — A take with
+  `max_versions=N` leaves that item with at most N versions, whatever the
+  app-wide limit and with none set, and never removes the version it
+  wrote; N below 1 raises `ValueError` and stores nothing; a later take
+  without it trims to the app-wide limit.
+- **AC-76** (added 2026-11-27: owner, write-back) — With no put hook that
+  changes the value: the content of a default take of a property, written
+  with the property's normal write, leaves the stored value equal to the
+  one taken; the content of an attribute version, written with
+  `set_attr`, leaves the data equal to the data taken; both hold for an
+  item that was deleted since. A property written back fires the hooks
+  and diff of that write.
 
 ## Traceability
 
 `C` `tests/test_versions_config.py`, `S` `tests/test_versions_store.py`,
 `I` `tests/test_versions_invisibility.py`, `X`
-`tests/test_versions_removal.py`, `R` `tests/test_versions_restore.py`, `B`
-`tests/test_versions_restore_backend.py`, `E`
+`tests/test_versions_removal.py`, `E`
 `tests/test_versions_elements.py`, `O` `tests/test_versions_command.py`,
 `H` `tests/integration/test_versions_http.py`. All but `H` build their
 config with `versions_config`, which follows `DATABASE_BACKEND`.
 
 | AC | Phase | Test | Status |
 | --- | --- | --- | --- |
-| AC-1 | 1, 2 | `C::test_the_versioning_gate_is_not_run_when_off`; `C::test_a_backend_without_restore_starts_with_versioning_off` (Phase 2) | Not run |
+| AC-1 | 1 | `C::test_the_versioning_gate_is_not_run_when_off` | Not run |
 | AC-2 | 1 | `C::test_no_version_partition_row_without_versioning` (control: a row exists once on) | Not run |
 | AC-3 | 1 | `C::test_every_version_call_is_refused_when_off` (one table, extended per phase) | Not run |
 | AC-4 | 1 | `S::test_take_holds_passed_or_current_value` | Not run |
@@ -349,50 +396,42 @@ config with `versions_config`, which follows `DATABASE_BACKEND`.
 | AC-19 | 1 | `S::test_iter_returns_every_version_one_content_at_a_time` | Not run |
 | AC-20 | 1 | `S::test_an_unknown_id_is_refused` | Not run |
 | AC-21 | 1 | `S::test_an_index_past_the_history_is_refused` | Not run |
-| AC-22 | 1, 2 | `S::test_an_item_without_versions_lists_empty`; `R::test_restore_without_versions_is_refused` | Not run |
-| AC-23 | 2 | `R::test_restore_writes_the_content_and_saves_the_previous_value`; `R::test_the_pre_restore_version_is_newest_despite_a_later_clock` | Not run |
-| AC-24 | 2 | `R::test_the_restored_version_keeps_its_id` | Not run |
-| AC-25 | 2 | `R::test_restore_without_keep_current_creates_no_version` | Not run |
-| AC-26 | 2 | `R::test_restore_fires_the_hooks_and_diff_of_a_write`; `R::test_a_hook_returning_nothing_is_treated_as_a_write_treats_it` | Not run |
-| AC-27 | 2 | `R::test_an_indexed_restore_matches_a_normal_write`; `R::test_an_indexed_restore_of_a_held_value_matches_the_collision_baseline` | Not run |
-| AC-28 | 2 | `B::test_a_failed_head_write_rolls_back_the_value`; `R::test_a_fault_at_each_step_leaves_old_or_restored` | Not run |
-| AC-29 | 3 | `E::test_a_version_records_position_and_list_name` | Not run |
-| AC-32 | 3 | `E::test_list_changes_do_not_touch_a_history` | Not run |
+| AC-22 | 1 | `S::test_an_item_without_versions_lists_empty` | Not run |
+| AC-29 | 2 | `E::test_a_version_records_position_and_list_name` | Not run |
+| AC-32 | 2 | `E::test_list_changes_do_not_touch_a_history` | Not run |
 | AC-33 | 1 | `X::test_versions_survive_a_normal_delete`; `X::test_versions_survive_delete_properties_and_clear`; `H::test_an_http_delete_keeps_history` | Not run |
-| AC-34 | 2 | `R::test_restore_brings_back_a_deleted_item` | Not run |
 | AC-35 | 1 | `S::test_remove_one_closes_the_gap` | Not run |
 | AC-36 | 1 | `S::test_remove_all_leaves_the_value` | Not run |
-| AC-37 | 2 | `R::test_delete_with_versions_removes_both` | Not run |
+| AC-37 | 1 | `X::test_delete_with_versions_removes_both` | Not run |
 | AC-38 | 1 | `X::test_actor_delete_removes_versions_on_and_off` | Not run |
-| AC-39 | 1, 3 | `X::test_bucket_delete_removes_attribute_versions`; `X::test_buckets_delete_removes_all_bucket_versions`; `E::test_bucket_delete_removes_element_versions` | Not run |
+| AC-39 | 1, 2 | `X::test_bucket_delete_removes_attribute_versions`; `X::test_buckets_delete_removes_all_bucket_versions`; `E::test_bucket_delete_removes_element_versions` | Not run |
 | AC-40 | 1 | `X::test_replica_library_and_system_scopes_are_refused`; `X::test_every_bucket_literal_in_the_package_is_refused` | Not run |
 | AC-43 | 1 | `I::test_ordinary_writes_create_no_version` (control: a take creates one) | Not run |
 | AC-44 | all | `C::test_the_suite_runs_on_the_configured_backend`; every row above under the Full tier's two backend runs | Not run |
-| AC-45 | 1, 3 | `S::test_names_include_deleted_items`; `E::test_keys_include_deleted_elements` | Not run |
+| AC-45 | 1, 2 | `S::test_names_include_deleted_items`; `E::test_keys_include_deleted_elements` | Not run |
 | AC-49 | 1 | `S::test_a_large_version_reads_back_intact`; `S::test_a_version_over_max_bytes_is_refused` | Not run |
 | AC-50 | 1 | `S::test_key_and_metadata_bounds`; `S::test_a_long_non_ascii_key_works` | Not run |
 | AC-51 | 1 | `C::test_off_then_on_again_shows_the_earlier_versions` | Not run |
 | AC-52 | 1 | `S::test_a_lowered_limit_trims_at_the_next_take` | Not run |
 | AC-53 | 1 | `S::test_all_reports_content_bytes` | Not run |
-| AC-54 | 2 | `C::test_a_backend_without_restore_is_refused_at_start` (a real class lacking the methods); `tests/test_check_ready_command.py::test_the_versioning_gate` | Not run |
-| AC-55 | 3 | `E::test_list_delete_and_clear_keep_element_versions` | Not run |
+| AC-55 | 2 | `E::test_list_delete_and_clear_keep_element_versions` | Not run |
 | AC-56 | 1 | `S::test_remove_by_negative_index_is_refused`; `S::test_remove_of_an_unknown_id_raises_version_not_found` | Not run |
-| AC-57 | 2 | `R::test_restoring_a_deleted_item_creates_no_version` | Not run |
 | AC-58 | 1 | `tests/test_verify_orphans.py::test_version_rows_of_a_gone_actor_are_orphans`; `::test_version_rows_of_a_live_actor_are_not_orphans` | Not run |
-| AC-60 | 1, 2 | `S::test_content_the_row_cannot_hold_is_refused_at_take`; `R::test_a_version_the_row_cannot_hold_is_refused` | Not run |
-| AC-61 | 3 | `E::test_a_version_written_back_equals_the_element` | Not run |
-| AC-63 | 3 | `E::test_rename_moves_a_history`; `E::test_a_rename_fault_loses_nothing_and_a_repeat_finishes`; `E::test_rename_onto_a_used_key_is_refused` | Not run |
+| AC-60 | 1 | `S::test_content_the_row_cannot_hold_is_refused_at_take` | Not run |
+| AC-61 | 2 | `E::test_a_version_written_back_equals_the_element` | Not run |
+| AC-63 | 2 | `E::test_rename_moves_a_history`; `E::test_a_rename_fault_loses_nothing_and_a_repeat_finishes`; `E::test_rename_onto_a_used_key_is_refused` | Not run |
 | AC-64 | 1 | `X::test_purge_removes_everything_on_and_off` | Not run |
 | AC-65 | 1 | `O::test_report_prints_items_versions_and_bytes`; `O::test_purge_writes_only_with_apply`; `O::test_purge_of_a_live_actor_needs_the_live_flag`; `tests/test_operator_command_store.py` (the command joins its store-first and no-prefix cases) | Not run |
 | AC-66 | 1 | `tests/test_versions_pg_index.py::test_start_is_refused_without_the_index`; `::test_an_invalid_index_is_refused`; `::test_start_without_versioning_ignores_the_index`; `::test_check_ready_reports_the_index_gate` (PostgreSQL only) | Not run |
-| AC-67 | 2 | `R::test_the_same_store_object_reads_the_restored_value` | Not run |
-| AC-68 | 1 | `S::test_falsy_content_is_refused` | Not run |
-| AC-69 | 1, 3 | `S::test_names_carry_the_newest_version_and_read_no_version_row`; `S::test_buckets_with_versions_are_listed`; `E::test_keys_by_prefix` (a key long enough to be filed under its digest included) | Not run |
-| AC-70 | 3 | `E::test_remove_by_prefix_removes_only_matching_histories` (long keys included); `E::test_an_empty_prefix_is_refused` | Not run |
+| AC-68 | 1 | `S::test_content_a_write_would_delete_is_refused` (per kind); `S::test_zero_false_and_empty_containers_are_kept_for_a_property` | Not run |
+| AC-69 | 1, 2 | `S::test_names_carry_the_newest_version_and_read_no_version_row`; `S::test_buckets_with_versions_are_listed`; `E::test_keys_by_prefix` (a key long enough to be filed under its digest included) | Not run |
+| AC-70 | 2 | `E::test_remove_by_prefix_removes_only_matching_histories` (long keys included); `E::test_an_empty_prefix_is_refused` | Not run |
 | AC-71 | 1 | `X::test_an_adoption_clean_purges_versions` | Not run |
-| AC-72 | 1, 2 | `S::test_a_take_never_trims_itself`; `R::test_restoring_the_oldest_at_the_limit_keeps_it` | Not run |
+| AC-72 | 1 | `S::test_a_take_never_trims_itself` | Not run |
 | AC-73 | 1 | `X::test_a_recreated_actor_id_has_no_history`; `X::test_creating_an_existing_id_purges_nothing` | Not run |
 | AC-74 | 1 | `S::test_a_take_racing_remove_all_stays_listed`; `S::test_concurrent_takes_leave_the_newest_in_the_listing`; `S::test_removing_the_only_version_unlists_the_item` | Not run |
+| AC-75 | 1, 2 | `S::test_a_take_can_carry_its_own_limit` (below and above the app-wide limit, and with none); `S::test_a_per_take_limit_below_one_is_refused`; `S::test_a_take_without_its_limit_falls_back_to_the_app_wide_one`; `E::test_an_element_take_can_carry_its_own_limit` | Not run |
+| AC-76 | 1 | `S::test_a_property_default_take_written_back_stores_the_same_string` (control: the hook and diff of a write fire); `S::test_an_attribute_version_written_back_equals_the_data_taken`; `S::test_a_deleted_item_is_written_back` | Not run |
 
 The dropped criteria have no row. No criterion is manual-only.
 
@@ -408,23 +447,24 @@ The dropped criteria have no row. No criterion is manual-only.
   current value of a property or attribute read from the store, with an id
   above every stored one, a timestamp, metadata and its bytes. (AC-4, AC-5,
   AC-8, AC-9, AC-53)
-- **ADDED** (Bounds) — Keys, metadata and content are bounded; falsy
-  content and content the item's row cannot hold are refused for a property
-  or attribute. (AC-49, AC-50, AC-60, AC-68)
-- **ADDED** (Retention) — With `max_versions=N`, a take removes all
-  versions past N except the one it wrote; nothing else trims. (AC-6, AC-7,
-  AC-52, AC-72)
+- **ADDED** (Bounds) — Keys, metadata and content are bounded; content
+  a write would store as a delete (any falsy value for an attribute, `None`
+  and `""` for a property) and content the item's row cannot hold are
+  refused. (AC-49, AC-50, AC-60, AC-68)
+- **ADDED** (Retention) — With `max_versions=N`, app-wide or passed to the
+  take, a take removes all versions past N except the one it wrote; the
+  take's own value wins; nothing else trims. (AC-6, AC-7, AC-52, AC-72,
+  AC-75)
 - **ADDED** (Invisibility) — Versions appear in no listing, HTTP answer,
   peer answer, diff or reverse lookup, fire no hook, and cost a read of
   current values nothing. (AC-10 to AC-16, AC-43)
 - **ADDED** (Reading) — `all()` is newest first without content; `get`
   takes an id or `-x`; iteration yields content; names and keys are listed
   with their newest version. (AC-17 to AC-22, AC-45, AC-69, AC-74)
-- **ADDED** (Restore) — A restore of a property or attribute writes the
-  content as a normal write would and stores the previous value as the
-  newest version in one store transaction; a fault leaves the old state or
-  the new one; a property restore fires the write's hooks and diff.
-  (AC-23 to AC-28, AC-34, AC-57, AC-67)
+- **ADDED** (Writing back) — There is no restore call. The content read
+  from a version, written with the item's normal write, makes the current
+  value what it was at the take; that write fires its own hooks and diff.
+  (AC-61, AC-76)
 - **ADDED** (Removal) — Versions survive a normal delete; they go with
   `remove`, `remove_all`, `delete_with_versions`, `purge`, the bucket, the
   actor and an adoption clean. (AC-33, AC-35 to AC-39, AC-56, AC-64, AC-71)
@@ -433,11 +473,13 @@ The dropped criteria have no row. No criterion is manual-only.
 - **DECISION** — Versions live in the `{actor_id}$ver` partition of the
   properties table, for attributes too; a release that moves them migrates
   them.
-- **DECISION** — An attribute version holds data only; a restore brings
-  back no TTL.
-- **DECISION** — A write racing a restore of a deleted item, or a take
-  racing an actor delete, is not prevented: the first is last-writer-wins,
-  the second can leave rows that `actingweb-versions purge` removes.
+- **DECISION** — An attribute version holds data only; written back, it
+  has a TTL only if the application passes one.
+- **DECISION** — A take and the write that follows it are two store
+  calls. Only a list element's write can be conditional; a property's or
+  attribute's write overwrites a value written in between.
+- **DECISION** — A take racing an actor delete is not prevented: it can
+  leave rows that `actingweb-versions purge` removes.
 - **DECISION** — A process on 4.0.x does not know `$ver`: versioning is
   turned on only when every process, operator commands included, runs 4.1.
 - **DECISION** — No automatic versioning and no wire surface; a later plan
@@ -465,14 +507,14 @@ The dropped criteria have no row. No criterion is manual-only.
 ### `thoughts/specs/startup-readiness.md`
 
 - **ADDED** (Versioning) — With versioning on, `check_ready()` refuses a
-  backend lacking a restore call, and a PostgreSQL store lacking the
-  `properties` name index, with `VersioningNotReady`. (AC-54, AC-66)
+  PostgreSQL store lacking the `properties` name index, with
+  `VersioningNotReady`. (AC-66)
 
 ### `thoughts/specs/operator-commands.md`
 
 - **MODIFIED OPC-9** — "it reports each start-up gate as ready, ready at
   first start, or REFUSED" → the same, with a versioning gate reported only
-  when `--versioning` is passed (OPC-D3). (AC-54, AC-66)
+  when `--versioning` is passed (OPC-D3). (AC-66)
 - **ADDED** (Versions) — `actingweb-versions report [--actor ID]` and
   `purge (--actor ID | --ids-file F) [--live] [--apply]`; a dry run writes
   nothing; each id is printed as live or gone, and a live actor is purged
@@ -490,21 +532,22 @@ ActingWebApp.with_versioning(*, max_versions: int | None = None,
                              max_bytes: int = 2 * 1024 * 1024) -> ActingWebApp
 
 actor.versions -> VersionStore   # also VersionStore(actor_id, config, *, property_store=None)
+                                 # property_store: only delete_with_versions uses it
   .property(name) -> ItemVersions
   .attribute(bucket, name) -> ItemVersions
-  .list_element(key) -> ElementVersions                    # Phase 3
-  .attribute_list_element(bucket, key) -> ElementVersions  # Phase 3
+  .list_element(key) -> ElementVersions                    # Phase 2
+  .attribute_list_element(bucket, key) -> ElementVersions  # Phase 2
   .properties(prefix="") -> list[VersionedItem]            # name, newest VersionInfo, renaming_to
   .attributes(bucket, prefix="") -> list[VersionedItem]
   .buckets() -> list[str]
-  .list_elements(prefix="") / .attribute_list_elements(bucket, prefix="")   # Phase 3
+  .list_elements(prefix="") / .attribute_list_elements(bucket, prefix="")   # Phase 2
   .remove_list_elements(prefix) / .remove_attribute_list_elements(bucket, prefix) -> int
   .purge() -> int                                          # works with versioning off
 
-ItemVersions:    take(content=CURRENT, *, metadata=None) -> VersionInfo
-                 restore(ref, *, keep_current=True) -> VersionInfo | None   # Phase 2; the saved version
-                 delete_with_versions() -> None                             # Phase 2
-ElementVersions: take(content, *, metadata=None, position=None, list_name=None) -> VersionInfo
+ItemVersions:    take(content=CURRENT, *, metadata=None, max_versions=None) -> VersionInfo
+                 delete_with_versions() -> None
+ElementVersions: take(content, *, metadata=None, position=None, list_name=None,
+                      max_versions=None) -> VersionInfo
                  rename(new_key) -> int
 both:            all() -> list[VersionInfo]; get(ref: str | int) -> Version
                  __iter__ -> Iterator[Version]; remove(version_id) -> None; remove_all() -> int
@@ -518,8 +561,6 @@ the item and reference: `VersioningError(Exception)`;
 `VersionNotFound(VersioningError, LookupError)`;
 `VersionTooLarge(VersioningError, ValueError)`; `NotVersionable`;
 `VersionKeyExists`; `VersionRenamePending` (carries the pending new key);
-`VersionConflict` (a restore lost its compare three times; nothing was
-written, a retry is safe);
 `VersioningNotReady(VersioningError)`, which `interface/app.py` subclasses
 with `StoreNotReady` for the gate. Bounds and bad references are
 `ValueError`.
@@ -551,21 +592,16 @@ removal only if unchanged since it was read. A lost compare re-reads and
 tries again; `all()` and the next take repair a marker that lags. A marker
 with no newest version is not listed.
 
-Backend additions (Phase 2), probed as `VERSION_RESTORE_PRIMITIVES`:
+No backend protocol method is added. The store uses `set`, `get`,
+`get_range`, `get_last_in_range`, `batch_delete` and the three conditional
+writes, which every backend has.
 
-```python
-# DbPropertyProtocol
-def set_with_version_rows(self, actor_id: str, name: str, value: str, *, expected: str,
-                          version_partition: str, version_rows: dict[str, str]) -> bool
-# DbAttributeProtocol; writes rows of the properties table in the same transaction
-def set_attr_with_version_rows(self, actor_id: str, bucket: str, name: str, data: Any, *, expected: Any,
-                               version_partition: str, version_rows: dict[str, str]) -> bool
-```
-
-`version_rows` is the head and the marker. True: value and rows were
-written together. False: the current value is not `expected` (attributes:
-by JSON value, SFT-8) or the row is absent or expired. A fault raises
-`DbError`; a deadlock or serialization failure is retried inside the call.
+Writing back: `Version.content` is what the item's normal write takes
+(`actor.properties[name] = content`, `set_attr(name, content)`, a list's
+own calls). A property's default take holds the stored string (Decisions).
+`take(max_versions=N)`: N is an `int` of at least 1, not a `bool`; `None`
+means the app-wide value. A take cannot ask for "unlimited" when an
+app-wide limit is set.
 
 ## Phase 1: Index, version store, removal and operator tooling
 
@@ -577,14 +613,14 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
   revision was.
 - `actingweb/versions.py` (new) - `ver_partition()` (refuses an id with `$`
   and a partition that is a live actor's own id), row names, ids, the
-  encoding, `VersionStore`, `ItemVersions` without `restore`, markers,
+  encoding, `VersionStore`, `ItemVersions`, markers,
   retention, bounds, name guards (`list:` prefix, control characters), the
   scope rule, errors, and `purge` at item, bucket and actor level.
   - Take: read current from the backend (an expired attribute is absent),
     create the marker if absent, read the newest id, write bodies, then the
     head, then advance the marker. A fault after the head is logged, not
     raised: the version is stored and listed. With
-    a limit: one range read of the item's head names, then for each surplus
+    a limit (the take's `max_versions`, else the app-wide one): one range read of the item's head names, then for each surplus
     version a point read of its head, delete the head, delete its bodies.
     A trim fault is logged, not raised; the next take trims again.
   - Removal order is head, then bodies; `remove` of the newest re-points
@@ -593,6 +629,15 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
     conditionally, so a take that landed meanwhile stays listed.
   - A read joins bodies through the shared helper; a wrong length or digest
     raises `VersionNotFound`.
+    - `delete_with_versions`: the item's delete, only if the store holds a
+    current value, then `remove_all`; so a repeat after a fault finishes
+    and sends no second delete diff. The delete is not a version call
+    (AC-15 covers the removal half only). A property is deleted through
+    `property_store` when the store has one, so it registers its diff as
+    `del actor.properties[name]` does; a core-level `VersionStore` deletes
+    as the core store does. An attribute is deleted with `delete_attr` on
+    an `Attributes` object of its own; one the application already loaded
+    keeps its cached value, as after a delete by any other object.
   - Purge walks marker names (keys only), purges item by item, then
     sweeps what is left under its scope (`v/` and `vn/` for an actor,
     `v/b/<bucket>/` and `vn/b/<bucket>/` for a bucket), so an interrupted
@@ -605,9 +650,10 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
   `oauth_session.py` take their bucket names from it.
 - `actingweb/config.py`, `actingweb/interface/app.py` - `with_versioning`;
   `max_versions` below 1 is a `ValueError`; `_check_versioning_ready` as a
-  gate run only with versioning on (Phase 1: the PostgreSQL index);
+  gate run only with versioning on (the PostgreSQL index);
   `VersioningNotReady`.
-- `actingweb/interface/actor_interface.py` - the `versions` property.
+- `actingweb/interface/actor_interface.py` - the `versions` property, which
+  passes `property_store=`.
 - `actingweb/actor.py` - `Actor.delete` purges once, directly before the
   actor row goes (`:1716`), with `step()` around it, on or off. A create
   with a caller-supplied id reads whether `{id}$ver` holds a row, after a
@@ -676,6 +722,18 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
 - `C::test_properties_table_empty_ignores_version_rows` (DynamoDB, and
   PostgreSQL in an isolated schema).
 - `tests/test_actingweb_app.py::TestWithVersioning`.
+- `X::test_delete_with_versions_finishes_after_a_fault`;
+  `X::test_delete_with_versions_of_a_property_registers_the_delete_diff`;
+  `X::test_a_repeated_delete_with_versions_registers_no_second_diff`;
+  `X::test_delete_with_versions_of_an_attribute_deletes_the_row`.
+- `S::test_a_written_back_default_take_registers_the_stored_string` (the
+  diff blob and the hook's argument are the string; decoded first, they
+  are the object).
+- `S::test_a_per_take_limit_that_is_a_bool_is_refused`;
+  `S::test_a_per_take_limit_trims_no_other_item`.
+- `S::test_an_attribute_written_back_carries_no_ttl`;
+  `S::test_a_write_back_onto_a_name_a_list_took_raises_list_name_taken`
+  (the write's own refusal, pinned here because the guide relies on it).
 
 ### Failure Scenarios
 
@@ -691,6 +749,15 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
 - A 4.0.x process deletes an actor - its versions stay; the migration guide
   says when to turn versioning on.
 - Purge interrupted - progress kept; a repeat finishes - tested.
+- Takes of one item with different per-take limits, or one take without
+  its limit - each trims to the limit it carries, so the smallest one seen
+  decides what is left; stated in the guide (pass it at every take of that
+  kind).
+- A write between a take and the write-back of a property or attribute -
+  overwritten, as by any second write; its value is in no version unless
+  its writer took one; stated in the guide.
+- `delete_with_versions` faults after the delete - the versions stay, as
+  after a normal delete; a repeat removes them - tested.
 
 ### Verification
 
@@ -704,113 +771,12 @@ by JSON value, SFT-8) or the row is absent or expired. A fault raises
 
 ---
 
-## Phase 2: Restore and destructive delete
-
-```mermaid
-sequenceDiagram
-    participant A as Application
-    participant V as ItemVersions.restore
-    participant B as Backend
-    A->>V: restore(ref, keep_current=True)
-    V->>B: read version (head, bodies)
-    V->>V: name guards, size check, put hook (property)
-    V->>B: read current value
-    alt no current value, or keep_current=False
-        V->>B: ordinary write
-    else current value exists
-        V->>B: read newest id, write pre-restore bodies once
-        V->>B: set_with_version_rows(value, expected=current, head + marker)
-        B-->>V: True, or False (re-read current; three compares, then VersionConflict)
-    end
-    V->>V: update the store object's cache
-    V->>A: register diff (property), trim except the restored id, return
-```
+## Phase 2: List-element history by key
 
 ### Changes
 
-- `actingweb/db/protocols.py` - the two methods, their docstrings (an
-  attribute backend writes property rows here; a custom backend with two
-  stores must make that atomic or not offer restore), and
-  `VERSION_RESTORE_PRIMITIVES`.
-- `actingweb/db/dynamodb/property.py` - one transaction: the value
-  conditioned on `expected`, the lookup items of `_write_indexed`, then the
-  version rows as unconditional puts placed last in the main, takeover and
-  collision-fallback shapes, so the positional cancellation codes
-  (`:460-464`) keep their meaning.
-- `actingweb/db/dynamodb/attribute.py` - a consistent read, the JSON-value
-  compare in Python, then one transaction pinned to the stored data as read
-  (`:511-529`), with the version rows; `ensure_table(Property)`.
-- `actingweb/db/postgresql/property.py`, `db/postgresql/attribute.py` - one
-  connection: `SELECT … FOR UPDATE`, compare, write, lookup maintenance as
-  `_set_indexed`, insert of the version rows; the deadlock retry of
-  `_set_indexed`.
-- `actingweb/versions.py` - `restore` as in the diagram. The pre-restore
-  bodies are written once and reused across compares, and deleted when the
-  call gives up or raises. A name a list has taken raises
-  `ListNameTakenError` as a write does. A core-level `VersionStore` (no
-  `ActorInterface`) restores without hooks or diff, as the core property
-  store writes. `delete_with_versions`: the item's normal delete, then
-  `remove_all`; a repeat after a fault finishes.
-- `actingweb/interface/actor_interface.py` - passes `property_store=`, so
-  a property restore runs `_execute_property_hook`, `_previous` and
-  `_register_diff`.
-- `actingweb/property.py`, `actingweb/attribute.py` - a way for restore to
-  set the instance cache.
-- `actingweb/interface/app.py`, `maintenance/check_ready.py` - the gate
-  also probes the restore primitives on both backends' classes.
-
-### New Tests (written first)
-
-- Every Phase 2 row of the Traceability table.
-- `B` per backend: commit; lost compare (nothing written); indexed name;
-  held value (the baseline of `tests/test_property_lookup_sync.py:124-181`);
-  `::test_an_indexed_restore_takes_over_a_stale_lookup_row`;
-  `::test_an_indexed_restore_of_the_current_value_heals_the_lookup_row`;
-  `::test_a_past_collision_is_retried_without_the_delete`;
-  `::test_the_dynamodb_property_restore_is_one_transaction`;
-  `::test_the_dynamodb_attribute_restore_is_one_read_and_one_transaction`;
-  `::test_the_postgresql_restore_takes_one_connection`;
-  `::test_a_deadlock_is_retried_inside_the_call`;
-  `::test_an_expired_attribute_answers_false`.
-- `tests/test_db_protocols.py::test_the_restore_primitives_have_the_protocol_signature`.
-- `R::test_a_lost_compare_retries_then_raises_version_conflict`;
-  `R::test_the_pre_restore_bodies_are_written_once`;
-  `R::test_bodies_of_a_failed_pre_restore_version_are_removed`.
-- `R::test_a_diff_fault_after_restore_is_db_error_after_write`.
-- `R::test_restore_onto_a_name_a_list_took_raises_list_name_taken`.
-- `R::test_restore_of_a_default_take_registers_the_stored_string`.
-- `R::test_an_attribute_restore_writes_no_ttl`.
-- `R::test_restore_reads_current_from_the_store_not_the_instance`.
-- `R::test_restore_without_check_ready_on_a_bare_backend_raises_versioning_not_ready`.
-- `R::test_delete_with_versions_finishes_after_a_fault`.
-
-### Failure Scenarios
-
-- A write between the read and the restore - the compare fails; re-read;
-  `VersionConflict` after three - tested.
-- Fault inside the transaction - nothing written - `B`.
-- Fault after commit, before the diff - `DbErrorAfterWrite`, as a write -
-  tested.
-- A write racing the restore of a deleted item - last writer wins, as for
-  two writes; stated in the guide.
-- A put hook that transforms values runs again on stored content - stated
-  in the guide; a hook must be idempotent to be restored through.
-
-### Verification
-
-- [ ] Fast tier; `R` and `B` with `DATABASE_BACKEND=postgresql`
-- [ ] Full tier before the phase commit
-
-### Implementation Status: Not Started
-
----
-
-## Phase 3: List-element history by key
-
-### Changes
-
-- `actingweb/versions.py` - the element scopes, `ElementVersions`,
-  `rename`, the key listings with a prefix, removal by prefix. No change to
+- `actingweb/versions.py` - the element scopes, `ElementVersions` (its
+  `take` carries `max_versions` as the item one does), `rename`, the key listings with a prefix, removal by prefix. No change to
   `list_core.py`, `property_list.py` or `attribute_list.py`.
   - `rename` first records the new key in the old key's marker, then
     copies each version to the new key, oldest first (bodies, head), writes
@@ -830,7 +796,7 @@ sequenceDiagram
 
 ### New Tests (written first)
 
-- Every Phase 3 row of the Traceability table, on the real backends.
+- Every Phase 2 row of the Traceability table, on the real backends.
 - `E::test_two_elements_filed_under_one_key_share_a_history`.
 - `E::test_property_and_attribute_element_keys_are_separate_scopes`.
 - `E::test_rename_to_the_same_key_is_refused`.
@@ -864,39 +830,63 @@ sequenceDiagram
 
 ---
 
-## Phase 4: Documentation
+## Phase 3: Documentation
 
-No acceptance criterion: this phase tells consumers what Phases 1 to 3
+No acceptance criterion: this phase tells consumers what Phases 1 and 2
 built. `docs/` and the changelog name no consumer.
 
 ### Changes
 
-- `docs/guides/version-history.rst` (new, in `docs/guides/index.rst`) -
-  turning it on; explicit snapshots, not an automatic audit; take, list,
-  read, restore, remove; the limit, its lazy lowering and the unlimited
-  default's storage risk; what is atomic; attributes and TTL; hooks run on
-  restore; a delete keeps history and `purge` erases; turned off means
-  kept; rolling deploys; list elements: choosing a key that is never reused, namespacing it,
-  re-keying on a move, writing an element back, removing a deleted list's
-  histories by prefix.
+- `docs/guides/version-history.rst` (new, in `docs/guides/index.rst`):
+  - turning it on; explicit snapshots, not an automatic audit; take, list,
+    read, remove;
+  - restoring: read a version and write it back with the item's own write,
+    after a take when the current value is to be kept; what that write
+    fires; that the two calls are not one transaction, and that a property
+    or attribute write is not conditional, so a writer in between is
+    overwritten; a put hook that transforms values runs again on stored
+    content; a property's default take is the stored string, to be decoded
+    first by an application that writes objects (what the hook and the
+    subscribers get otherwise); an attribute comes back without its TTL;
+  - the limit, its lazy lowering, the limit a take carries (pass it at
+    every take of that kind) and the unlimited default's storage risk;
+  - what one take costs: the store calls `S::test_take_cost_per_kind` pins,
+    per kind, and one body row per 350,000 bytes of content over 4 KB;
+  - a delete keeps history and `purge` erases; turned off means kept;
+    rolling deploys;
+  - list elements: choosing a key that is never reused and namespacing it;
+    editing with history (take the value the handle read, write with
+    `update_by_handle`, remove the version by its id when the write
+    returns `False`, and what a duplicate costs at the limit); re-keying on
+    a move, in an order that needs no record of a rename owed, and that a
+    started rename is listed and finished by a repeat; passing what a
+    restore needs, not derived fields; writing an element back; removing a
+    deleted list's histories by prefix; what versioning a bulk delete
+    costs per element;
+  - keeping deleted items for a period: mark the take before a delete in
+    its metadata, list keys with their newest version, `remove_all()` the
+    ones past the period; the listing can lag a take whose marker write
+    faulted, so call `all()` after a take that precedes a delete.
 - `docs/guides/property-lists.rst`, `docs/sdk/actor-interface.rst`,
   `docs/sdk/attributes-buckets.rst`, `docs/reference/interface-api.rst`,
   `docs/reference/hooks-reference.rst`, `docs/reference/actor-deletion.rst`
   - the new names; a delete leaves history; versions go with the actor and
-  the bucket.
+  the bucket; version calls fire no hook.
 - `docs/quickstart/configuration.rst` - `with_versioning`.
-- `docs/reference/database-backends.rst` - the two methods a custom
-  backend adds, their cross-table write, the index, the start-up refusal;
+- `docs/reference/database-backends.rst` - the `$ver` partition, the
+  index, the start-up refusal; a custom backend needs no new method;
   line 180 corrected to 100 items and 4 MB per transaction.
 - `docs/guides/database-maintenance.rst` - `actingweb-versions`,
-  `verify-orphans` and `$ver`, `check-ready --versioning`, and that table
-  scans grow with history.
+  `verify-orphans` and `$ver`, `check-ready --versioning`, that table
+  scans grow with history, and that a backup or copy of one actor includes
+  the partitions `{id}$ver` and `{id}$aux`, with version rows written after
+  the actor is created (a create with that id clears them).
 - `docs/guides/postgresql-migration.rst` - the new revision.
 - `docs/migration/v4.1.rst` (new) with its `docs/migration/index.rst` row -
   nothing to do unless opting in; on PostgreSQL `alembic upgrade head`
   builds the index for every deployment that runs it, and it must be there
   before versioning is turned on; turn it on only when every process runs 4.1;
-  custom backends; after a downgrade, 4.0.x leaves versions behind and
+  a custom backend needs no new method; after a downgrade, 4.0.x leaves versions behind and
   reports them as orphans, and `actingweb-versions purge` from 4.1 removes
   them.
 - `CHANGELOG.rst` - `ADDED` under `Unreleased`, with a **Behavior change:**
@@ -911,7 +901,7 @@ built. `docs/` and the changelog name no consumer.
 ### Failure Scenarios
 
 - A guide example drifts from the API - the examples are copied from the
-  passing tests of Phases 1 to 3.
+  passing tests of Phases 1 and 2.
 
 ### Verification
 
@@ -919,6 +909,137 @@ built. `docs/` and the changelog name no consumer.
 - [ ] Fast tier (docstrings)
 
 ### Implementation Status: Not Started
+
+---
+
+## Removed Phases
+
+### Restore and destructive delete (was Phase 2; removed 2026-11-27)
+
+**Why:** the consumer the feature names keeps memories, documents and
+instructions as list elements
+(`thoughts/research/2026-11-27-emm-review-of-version-history-plan.md`,
+finding 1), where this plan already leaves the write-back to the
+application. The phase gave the simpler kinds a guarantee the valuable
+kind did not get, for the cost of two backend protocol methods, a
+cross-table transaction on both backends and a start-up refusal for custom
+backends. What it closed is the gap between a take and a write, which any
+two property writes have. `delete_with_versions` moved to Phase 1. The
+design below is kept for
+`thoughts/todo/write-with-a-version-in-one-transaction.md`.
+
+**Its criteria:** AC-23 to AC-28, AC-34, AC-54, AC-57, AC-67, and the
+restore halves of AC-22, AC-60 and AC-72. **Its error:** `VersionConflict`.
+**Its test files:** `tests/test_versions_restore.py`,
+`tests/test_versions_restore_backend.py`.
+
+```mermaid
+sequenceDiagram
+    participant A as Application
+    participant V as ItemVersions.restore
+    participant B as Backend
+    A->>V: restore(ref, keep_current=True)
+    V->>B: read version (head, bodies)
+    V->>V: name guards, size check, put hook (property)
+    V->>B: read current value
+    alt no current value, or keep_current=False
+        V->>B: ordinary write
+    else current value exists
+        V->>B: read newest id, write pre-restore bodies once
+        V->>B: set_with_version_rows(value, expected=current, head + marker)
+        B-->>V: True, or False (re-read current; three compares, then VersionConflict)
+    end
+    V->>V: update the store object's cache
+    V->>A: register diff (property), trim except the restored id, return
+```
+
+#### Changes
+
+- `actingweb/db/protocols.py` - the two methods, their docstrings (an
+  attribute backend writes property rows here; a custom backend with two
+  stores must make that atomic or not offer restore), and
+  `VERSION_RESTORE_PRIMITIVES`.
+- `actingweb/db/dynamodb/property.py` - one transaction: the value
+  conditioned on `expected`, the lookup items of `_write_indexed`, then the
+  version rows as unconditional puts placed last in the main, takeover and
+  collision-fallback shapes, so the positional cancellation codes
+  (`:460-464`) keep their meaning.
+- `actingweb/db/dynamodb/attribute.py` - a consistent read, the JSON-value
+  compare in Python, then one transaction pinned to the stored data as read
+  (`:511-529`), with the version rows; `ensure_table(Property)`.
+- `actingweb/db/postgresql/property.py`, `db/postgresql/attribute.py` - one
+  connection: `SELECT … FOR UPDATE`, compare, write, lookup maintenance as
+  `_set_indexed`, insert of the version rows; the deadlock retry of
+  `_set_indexed`.
+- `actingweb/versions.py` - `restore` as in the diagram. The pre-restore
+  bodies are written once and reused across compares, and deleted when the
+  call gives up or raises. A name a list has taken raises
+  `ListNameTakenError` as a write does. A core-level `VersionStore` (no
+  `ActorInterface`) restores without hooks or diff, as the core property
+  store writes. `delete_with_versions`: the item's normal delete, then
+  `remove_all`; a repeat after a fault finishes.
+- `actingweb/interface/actor_interface.py` - passes `property_store=`, so
+  a property restore runs `_execute_property_hook`, `_previous` and
+  `_register_diff`.
+- `actingweb/property.py`, `actingweb/attribute.py` - a way for restore to
+  set the instance cache.
+- `actingweb/interface/app.py`, `maintenance/check_ready.py` - the gate
+  also probes the restore primitives on both backends' classes.
+
+#### New Tests (written first)
+
+- Every Phase 2 row of the Traceability table.
+- `B` per backend: commit; lost compare (nothing written); indexed name;
+  held value (the baseline of `tests/test_property_lookup_sync.py:124-181`);
+  `::test_an_indexed_restore_takes_over_a_stale_lookup_row`;
+  `::test_an_indexed_restore_of_the_current_value_heals_the_lookup_row`;
+  `::test_a_past_collision_is_retried_without_the_delete`;
+  `::test_the_dynamodb_property_restore_is_one_transaction`;
+  `::test_the_dynamodb_attribute_restore_is_one_read_and_one_transaction`;
+  `::test_the_postgresql_restore_takes_one_connection`;
+  `::test_a_deadlock_is_retried_inside_the_call`;
+  `::test_an_expired_attribute_answers_false`.
+- `tests/test_db_protocols.py::test_the_restore_primitives_have_the_protocol_signature`.
+- `R::test_a_lost_compare_retries_then_raises_version_conflict`;
+  `R::test_the_pre_restore_bodies_are_written_once`;
+  `R::test_bodies_of_a_failed_pre_restore_version_are_removed`.
+- `R::test_a_diff_fault_after_restore_is_db_error_after_write`.
+- `R::test_restore_onto_a_name_a_list_took_raises_list_name_taken`.
+- `R::test_restore_of_a_default_take_registers_the_stored_string`.
+- `R::test_an_attribute_restore_writes_no_ttl`.
+- `R::test_restore_reads_current_from_the_store_not_the_instance`.
+- `R::test_restore_without_check_ready_on_a_bare_backend_raises_versioning_not_ready`.
+- `R::test_delete_with_versions_finishes_after_a_fault`.
+
+#### Failure Scenarios
+
+- A write between the read and the restore - the compare fails; re-read;
+  `VersionConflict` after three - tested.
+- Fault inside the transaction - nothing written - `B`.
+- Fault after commit, before the diff - `DbErrorAfterWrite`, as a write -
+  tested.
+- A write racing the restore of a deleted item - last writer wins, as for
+  two writes; stated in the guide.
+- A put hook that transforms values runs again on stored content - stated
+  in the guide; a hook must be idempotent to be restored through.
+
+#### Backend additions
+
+Probed as `VERSION_RESTORE_PRIMITIVES`:
+
+```python
+# DbPropertyProtocol
+def set_with_version_rows(self, actor_id: str, name: str, value: str, *, expected: str,
+                          version_partition: str, version_rows: dict[str, str]) -> bool
+# DbAttributeProtocol; writes rows of the properties table in the same transaction
+def set_attr_with_version_rows(self, actor_id: str, bucket: str, name: str, data: Any, *, expected: Any,
+                               version_partition: str, version_rows: dict[str, str]) -> bool
+```
+
+`version_rows` is the head and the marker. True: value and rows were
+written together. False: the current value is not `expected` (attributes:
+by JSON value, SFT-8) or the row is absent or expired. A fault raises
+`DbError`; a deadlock or serialization failure is retried inside the call.
 
 ---
 
@@ -1022,6 +1143,25 @@ Pass 2 findings (rows 1 to 62, deduplicated), Pass 3 findings (63 to 77), and a 
 | 90 | Delta review (fresh context) | `remote_storage.py:439` `db.delete_bucket()` — replica bucket deletes paid a version read. | Folded: skipped without a read |
 | 91 | Delta review (fresh context) | plan AC-1 row against "Phase 1: the PostgreSQL index"; OPC-9 cited AC-54 only. | Folded |
 | 92 | Delta review (codex) | "content body, 350,000 bytes each" against `MAX_ROW_BYTES` 409,600. | Rejected: `db/dynamodb/property.py:240-243` stores a string unchanged; the large-version test pins it |
+| 93 | Consumer review (2026-11-27) | `actingweb_mcp repositories/instruction_repository.py:75` "Document-style CRUD over instruction_* and template_* property lists." — all three item kinds of the named consumer are list elements; the restore phase has no caller. | User decided: phase removed, one write-back story (AC-76) |
+| 94 | Consumer review (2026-11-27) | `list_core.py:3801-3803` `self._storage.set_if_value_equals,` … `expected=handle.raw_value,` — the report's lost version in a two-call element edit does not occur: a writer in between fails the swap. What is left is a duplicate version, which at the limit has trimmed an older one. | Folded: guide pattern; the one-transaction write is a todo |
+| 95 | Consumer review (2026-11-27) | `actingweb_mcp helpers/output_limits.py:9` `MAX_STORED_BYTES = 380_000` against memories under 2 KB — one app-wide count fits one kind. | User decided: a limit a take carries (AC-75); `max_bytes` is a ceiling and needs none |
+| 96 | Consumer review, triage (2026-11-27) | plan Phase 1 "A fault after the head is logged, not raised" with Interfaces "A marker with no newest version is not listed" — a sweep of deleted items by the key listing misses a take whose marker write faulted; a deleted item never takes again. | Folded: guide (`all()` after a take that precedes a delete) |
+| 97 | Consumer review, triage (2026-11-27) | `db/dynamodb/property.py:910` `for d in Property.query(actor_id):` — a per-actor export reads the actor's own partition; `{id}$ver` and `{id}$aux` are missed, and AC-73 clears `$ver` at a create with that id. | Folded: maintenance guide; export and import is a todo |
+| 98 | Consumer review (2026-11-27) | plan Phase 1 take sequence (marker, newest id, head, marker, trim read) — a bulk delete of 500 elements that versions each is about 2,500 store calls. | Folded: guide states the cost; a batch take is a todo |
+| 99 | Consumer review (2026-11-27) | Interfaces `.list_elements(prefix="")` — a limit and cursor on the key listing, for "the newest N". | Rejected: markers are keyed by name, so the newest N reads every marker with or without a cursor; a prefix narrows the read |
+
+Rows 10, 11, 19, 33, 43, 44, 57, 58, 62, 75 and 77 were folded into
+the restore phase and went with it (Removed Phases). Row 20's falsy-content rule (narrowed by row 102), row 28's stored string
+(row 101) and row 34's name guards stay for the take.
+
+| # | From | Finding (`file:line` quoted) | Disposition |
+| --- | --- | --- | --- |
+| 100 | Update review (codex, fresh context) | plan AC-76 "makes the current value what it was at the take"; `db/dynamodb/property.py:239` `value = json.dumps(sanitized_value)`; `interface/property_store.py:139` `transformed = self._execute_property_hook(key, "put", value, [key])` — not true for a passed non-string value or under a transforming hook. | Folded: AC-76 scoped to a default take with no transforming hook |
+| 101 | Update review (fresh context) | `interface/property_store.py:111` `blob = json.dumps(value if value is not None else "")` — a written-back default take sends subscribers a JSON string where the original write sent an object; row 28's test went with the restore phase. | Folded: decision, guide line, `S::test_a_written_back_default_take_registers_the_stored_string` |
+| 102 | Update review (fresh context) | `db/dynamodb/property.py:235-248` `json.dumps` runs before `if not value` — `0`, `False`, `[]`, `{}` are stored for a property; the plan refused them. | Folded: AC-68 and the decision narrowed for properties (a correction of row 20) |
+| 103 | Update review (codex, fresh context) | `interface/property_store.py:149-153` `__delitem__` registers a diff with no existence check; plan `delete_with_versions` named no attribute call. | Folded: delete only a current value; the attribute call and its cache rule named |
+| 104 | Update review (fresh context) | plan AC-52 "exactly the limit after it" against a take that carries its own limit; "`None` means the app-wide value" against "higher or lower". | Folded: AC-52 reworded; no per-take "unlimited" |
 
 **Unverified notes** (concerns that could not cite a line):
 - PostgreSQL may use the primary key for `starts_with` only under C collation; no `EXPLAIN` was run.
@@ -1030,3 +1170,6 @@ Pass 2 findings (rows 1 to 62, deduplicated), Pass 3 findings (63 to 77), and a 
 - Whether a purge of a very large history inside one `step()` can outlast the 120-second deletion lease was not measured.
 - `DbProperty.set` sanitises strings (`db/dynamodb/property.py:245`); a head holding a lone surrogate was not traced. `S::test_content_with_a_lone_surrogate_reads_back_as_a_write_stores_it` pins it.
 - `delete_with_versions` racing a `take` that already read the value can leave that value in a new version.
+- A default take of an attribute whose stored data is falsy (`attribute.py:394-396` suggests a null row can exist): treated as absent, not traced.
+- Whether two concurrent takes that each carry `max_versions=1` can each spare their own version and leave two was not traced; `S::test_concurrent_takes_at_the_limit_end_at_the_limit` covers the app-wide case.
+- What one version of several megabytes costs in DynamoDB write capacity, and whether a burst of takes on one actor throttles on the shared `$ver` partition key, were not measured (consumer review, 2026-11-27).
